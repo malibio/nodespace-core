@@ -85,6 +85,29 @@ describe('ChatMessage clarify options', () => {
     expect(container.querySelector('.clarify-options')).toBeNull();
   });
 
+  it('renders both chips distinctly when two options share the same label', () => {
+    // Stage-2 route_clarify (core#2149) disambiguates specific records, which
+    // can genuinely share a display label (e.g. two same-titled tickets) —
+    // the id that would make them unique is intentionally not sent to the
+    // frontend (matching Stage 1's existing label-only contract), so the
+    // each-block must key on something other than the label's own text or a
+    // duplicate label collides.
+    const onSelectOption = vi.fn();
+    const { container } = render(ChatMessage, {
+      message: makeMessage({
+        question: 'Which one did you mean?',
+        options: ['Rotate signing keys', 'Rotate signing keys'],
+      }),
+      isLatest: true,
+      onSelectOption,
+    });
+
+    const buttons = container.querySelectorAll('button.clarify-option');
+    expect(buttons.length).toBe(2);
+    expect(buttons[0].textContent?.trim()).toBe('Rotate signing keys');
+    expect(buttons[1].textContent?.trim()).toBe('Rotate signing keys');
+  });
+
   it('disables option buttons once the turn is no longer the latest message', () => {
     const { container } = render(ChatMessage, {
       message: makeMessage({

@@ -1258,6 +1258,7 @@ fn def_route_clarify() -> ToolDefinition {
 /// [`def_route_clarify`] for why this differs from Stage 1's bare-string
 /// options.
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClarifyOption {
     pub id: String,
     pub label: String,

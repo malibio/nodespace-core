@@ -1723,18 +1723,39 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
             // Execute each tool call
             let mut tool_results_for_span: Vec<serde_json::Value> = Vec::new();
-            // Set when this iteration's calls include a well-formed Stage-2
-            // `route_clarify` (see the guard branch below). Checked once the
-            // whole iteration's calls are recorded, the same way Stage 1's
-            // clarify path ends the turn — surface the question, execute
-            // nothing further. Declared outside the loop, not returned
-            // immediately from inside it, so any OTHER call the model made in
-            // the same iteration still gets a matching tool result and the
-            // assistant tool-calls message pushed above stays well-formed.
-            let mut stage2_clarify: Option<(
-                String,
-                Vec<crate::local_agent::tools::ClarifyOption>,
-            )> = None;
+            // Pre-scanned BEFORE any call in this iteration executes, not
+            // discovered mid-loop: nothing here can prevent a write this
+            // iteration's OWN loop already ran for real, so "does this batch
+            // contain a clarify" has to be known up front. A well-formed
+            // Stage-2 route_clarify supersedes every other call the model
+            // made in the SAME iteration — asking "which one?" while also
+            // taking an action in the same breath is a contradiction
+            // `route_clarify`'s own description only discourages in prose
+            // ("do not call another tool in the same turn"), not something
+            // structurally prevented. Without this, a batched write
+            // (`update_node` alongside `route_clarify`) would execute for
+            // real while only the clarifying question reaches the user —
+            // exactly the kind of silent side effect this turn is trying to
+            // avoid by asking in the first place.
+            let stage2_clarify: Option<(String, Vec<crate::local_agent::tools::ClarifyOption>)> =
+                tool_calls.iter().find_map(|tc| {
+                    if tc.function_name != routing::ROUTE_CLARIFY_TOOL {
+                        return None;
+                    }
+                    let mut args_value: serde_json::Value = if tc.arguments_json.trim().is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        serde_json::from_str(&tc.arguments_json).ok()?
+                    };
+                    // Mirrors the repair pass the per-call loop below applies
+                    // before its own parse, so this scan cannot disagree with
+                    // what that loop decides for the same call — a mismatch
+                    // here would mean a well-formed clarify goes undetected,
+                    // which is exactly the silent-write gap this scan exists
+                    // to close.
+                    repair_parsed_tool_arguments(&mut args_value);
+                    crate::local_agent::tools::parse_route_clarify_args(&args_value)
+                });
             for tc in &tool_calls {
                 if cancel.is_cancelled() {
                     return Err(InferenceError::Engine("cancelled".into()));
@@ -1779,141 +1800,156 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         // through the same helper, so the set of malformations
                         // handled cannot drift apart as new ones are found.
                         repair_parsed_tool_arguments(&mut args);
-                        // Cross-turn duplicate guard. The per-turn `seen_calls`
-                        // set above cannot see this: the session is rebuilt from
-                        // persisted messages every turn, so a repeat of a write
-                        // that landed in an *earlier* turn arrives here looking
-                        // brand new. Comparison is on the same canonical form
-                        // `seen_calls` uses, against writes replayed from the
-                        // conversation record.
-                        let already_written = if is_cross_turn_guarded_tool(&tc.function_name) {
-                            // Canonicalised from the *parsed* arguments, not the
-                            // raw text, so this derives from exactly what the
-                            // record side stores (`ToolExecutionRecord.args`).
-                            // Canonicalising the raw string instead would differ
-                            // wherever the two are not textually identical — most
-                            // concretely when empty arguments are read as `{}`
-                            // above, which yields "" here against a stored "{}"
-                            // and a write that could never match itself.
-                            //
-                            // Reduced to an identity by the same function the
-                            // record side uses, so an oversized call compares
-                            // digest-against-digest. Comparing raw canonical args
-                            // here against a stored digest would never match, and
-                            // would silently unguard exactly the largest writes.
-                            let incoming =
-                                canonical_args_identity(&canonical_args(&args.to_string()));
-                            session.prior_writes.iter().find(|w| {
-                                w.tool == tc.function_name && w.canonical_args == incoming
-                            })
-                        } else {
-                            None
-                        };
-                        if let Some(prior) = already_written {
-                            tracing::warn!(
-                                session_id = %session.id,
-                                tool = %tc.function_name,
-                                iteration = iteration,
-                                "Cross-turn duplicate write refused — identical call already completed in an earlier turn"
-                            );
-                            // An informative result, not a silent block. A user
-                            // genuinely re-asking for the same node is rare but
-                            // real, so the model needs to be able to tell them it
-                            // already exists — or, if the repeat is deliberate,
-                            // proceed by varying the call.
-                            (
-                                args,
-                                Some(Ok(crate::agent_types::ToolResult {
-                                    tool_call_id: tc.id.clone(),
-                                    name: tc.function_name.clone(),
-                                    result: duplicate_write_result(prior),
-                                    // Not an error: nothing went wrong, and the
-                                    // requested state already holds. Flagging it
-                                    // as a failure would invite a repair retry —
-                                    // the exact loop this guard exists to stop.
-                                    is_error: false,
-                                })),
-                            )
-                        } else if tc.function_name == "create_schema"
-                            && schema_already_created_this_turn(&all_tool_executions)
-                        {
-                            // Structural backstop for ONE_SCHEMA_PER_REQUEST
-                            // (see #1905): the prose rule already says "create
-                            // exactly the type asked for", but nothing stops a
-                            // second create_schema call within the same skill
-                            // invocation from actually executing — Schema
-                            // Creation's max_iterations permits up to three
-                            // create_schema calls per turn. Refuse the second
-                            // one outright rather than letting the model split
-                            // a request across two types and silently leave
-                            // one half-populated.
-                            tracing::warn!(
-                                session_id = %session.id,
-                                iteration = iteration,
-                                "Second create_schema call in one skill invocation refused"
-                            );
-                            (
-                                args,
-                                Some(Ok(crate::agent_types::ToolResult {
-                                    tool_call_id: tc.id.clone(),
-                                    name: tc.function_name.clone(),
-                                    result: second_schema_refused_result(),
-                                    is_error: true,
-                                })),
-                            )
-                        } else if tc.function_name == routing::ROUTE_CLARIFY_TOOL {
-                            // Stage-2 counterpart to Stage 1's clarify handling
-                            // (see `route` above): a whitelisted skill called
-                            // route_clarify instead of answering in prose.
-                            // Parsed via `tools::parse_route_clarify_args`, NOT
-                            // `routing::parse_route_decision` — same tool name,
-                            // deliberately different argument shape (see
-                            // `tools::def_route_clarify`'s doc comment: Stage-2
-                            // options carry `{id, label}` pairs, not bare
-                            // strings). Handled here, before the generic
-                            // executor, because surfacing a question and
-                            // ending the turn is an agent-loop concern the
-                            // executor has no way to do: it can only return a
-                            // tool result, not stop the loop or address the
-                            // user.
-                            match crate::local_agent::tools::parse_route_clarify_args(&args) {
-                                Some((question, options)) => {
-                                    stage2_clarify = Some((question.clone(), options.clone()));
-                                    (
-                                        args,
-                                        Some(Ok(crate::agent_types::ToolResult {
-                                            tool_call_id: tc.id.clone(),
-                                            name: tc.function_name.clone(),
-                                            result: serde_json::json!({
-                                                "acknowledged": true,
-                                                "question": question,
-                                                "options": options,
-                                            }),
-                                            is_error: false,
-                                        })),
-                                    )
-                                }
-                                // Malformed (e.g. a blank question, or options
-                                // missing an id/label) — not a decision to act
-                                // on specially. Falls through to the normal
-                                // executor so the model gets the same
-                                // invalid-arguments error `exec_route_clarify`
-                                // would report on direct dispatch, rather than
-                                // a second, differently-worded validation path.
-                                None => {
-                                    let result = self
-                                        .tool_executor
-                                        .execute(&tc.function_name, args.clone())
-                                        .await;
-                                    (args, Some(result))
-                                }
+
+                        if let Some((question, options)) = &stage2_clarify {
+                            // A well-formed route_clarify call is present
+                            // SOMEWHERE in this iteration's calls (see the
+                            // pre-scan above) — supersedes every OTHER call in
+                            // the same batch, including the guards below,
+                            // which would otherwise apply: refusing a call for
+                            // being a duplicate write is moot when nothing in
+                            // this batch is going to execute for real anyway.
+                            if tc.function_name == routing::ROUTE_CLARIFY_TOOL {
+                                (
+                                    args,
+                                    Some(Ok(crate::agent_types::ToolResult {
+                                        tool_call_id: tc.id.clone(),
+                                        name: tc.function_name.clone(),
+                                        result: serde_json::json!({
+                                            "acknowledged": true,
+                                            "question": question,
+                                            "options": options,
+                                        }),
+                                        is_error: false,
+                                    })),
+                                )
+                            } else {
+                                tracing::warn!(
+                                    session_id = %session.id,
+                                    tool = %tc.function_name,
+                                    iteration = iteration,
+                                    "Tool call skipped — superseded by a route_clarify call in \
+                                     the same iteration"
+                                );
+                                (
+                                    args,
+                                    Some(Ok(crate::agent_types::ToolResult {
+                                        tool_call_id: tc.id.clone(),
+                                        name: tc.function_name.clone(),
+                                        result: serde_json::json!({
+                                            "skipped": "superseded_by_clarification",
+                                            "message": "Not executed: this response also asked \
+                                                the user a clarifying question, so nothing else \
+                                                in it was carried out. Wait for the user's \
+                                                answer, then act on it in a follow-up call.",
+                                        }),
+                                        is_error: false,
+                                    })),
+                                )
                             }
                         } else {
-                            let result = self
-                                .tool_executor
-                                .execute(&tc.function_name, args.clone())
-                                .await;
-                            (args, Some(result))
+                            // Cross-turn duplicate guard. The per-turn `seen_calls`
+                            // set above cannot see this: the session is rebuilt from
+                            // persisted messages every turn, so a repeat of a write
+                            // that landed in an *earlier* turn arrives here looking
+                            // brand new. Comparison is on the same canonical form
+                            // `seen_calls` uses, against writes replayed from the
+                            // conversation record.
+                            let already_written = if is_cross_turn_guarded_tool(&tc.function_name) {
+                                // Canonicalised from the *parsed* arguments, not the
+                                // raw text, so this derives from exactly what the
+                                // record side stores (`ToolExecutionRecord.args`).
+                                // Canonicalising the raw string instead would differ
+                                // wherever the two are not textually identical — most
+                                // concretely when empty arguments are read as `{}`
+                                // above, which yields "" here against a stored "{}"
+                                // and a write that could never match itself.
+                                //
+                                // Reduced to an identity by the same function the
+                                // record side uses, so an oversized call compares
+                                // digest-against-digest. Comparing raw canonical args
+                                // here against a stored digest would never match, and
+                                // would silently unguard exactly the largest writes.
+                                let incoming =
+                                    canonical_args_identity(&canonical_args(&args.to_string()));
+                                session.prior_writes.iter().find(|w| {
+                                    w.tool == tc.function_name && w.canonical_args == incoming
+                                })
+                            } else {
+                                None
+                            };
+                            if let Some(prior) = already_written {
+                                tracing::warn!(
+                                    session_id = %session.id,
+                                    tool = %tc.function_name,
+                                    iteration = iteration,
+                                    "Cross-turn duplicate write refused — identical call already completed in an earlier turn"
+                                );
+                                // An informative result, not a silent block. A user
+                                // genuinely re-asking for the same node is rare but
+                                // real, so the model needs to be able to tell them it
+                                // already exists — or, if the repeat is deliberate,
+                                // proceed by varying the call.
+                                (
+                                    args,
+                                    Some(Ok(crate::agent_types::ToolResult {
+                                        tool_call_id: tc.id.clone(),
+                                        name: tc.function_name.clone(),
+                                        result: duplicate_write_result(prior),
+                                        // Not an error: nothing went wrong, and the
+                                        // requested state already holds. Flagging it
+                                        // as a failure would invite a repair retry —
+                                        // the exact loop this guard exists to stop.
+                                        is_error: false,
+                                    })),
+                                )
+                            } else if tc.function_name == "create_schema"
+                                && schema_already_created_this_turn(&all_tool_executions)
+                            {
+                                // Structural backstop for ONE_SCHEMA_PER_REQUEST
+                                // (see #1905): the prose rule already says "create
+                                // exactly the type asked for", but nothing stops a
+                                // second create_schema call within the same skill
+                                // invocation from actually executing — Schema
+                                // Creation's max_iterations permits up to three
+                                // create_schema calls per turn. Refuse the second
+                                // one outright rather than letting the model split
+                                // a request across two types and silently leave
+                                // one half-populated.
+                                tracing::warn!(
+                                    session_id = %session.id,
+                                    iteration = iteration,
+                                    "Second create_schema call in one skill invocation refused"
+                                );
+                                (
+                                    args,
+                                    Some(Ok(crate::agent_types::ToolResult {
+                                        tool_call_id: tc.id.clone(),
+                                        name: tc.function_name.clone(),
+                                        result: second_schema_refused_result(),
+                                        is_error: true,
+                                    })),
+                                )
+                            } else {
+                                // Note on `tc.function_name == routing::ROUTE_CLARIFY_TOOL`
+                                // reaching here rather than a dedicated branch: it
+                                // can only mean this call's own arguments did NOT
+                                // parse via `tools::parse_route_clarify_args` (the
+                                // pre-scan above uses the same repair-then-parse
+                                // logic over every call in this iteration, so if
+                                // this call HAD parsed, `stage2_clarify` would be
+                                // `Some` and we would not be in this `else`).
+                                // Falling through to the normal executor reports
+                                // the same invalid-arguments error
+                                // `exec_route_clarify` gives on direct dispatch,
+                                // rather than a second, differently-worded
+                                // validation path here.
+                                let result = self
+                                    .tool_executor
+                                    .execute(&tc.function_name, args.clone())
+                                    .await;
+                                (args, Some(result))
+                            }
                         }
                     }
                     Err(parse_err) => {
@@ -8389,6 +8425,142 @@ mod tests {
         );
     }
 
+    /// core#2149 (review follow-up): the model can structurally batch a real
+    /// write tool call alongside `route_clarify` in the SAME iteration —
+    /// nothing prevents it beyond `route_clarify`'s own description
+    /// ("do not call another tool in the same turn"), which is a soft prompt
+    /// instruction, not an enforced constraint. If that happened and the
+    /// write executed for real, the user would see only the clarifying
+    /// question with no indication a change had already landed. The
+    /// pre-scan in `run_turn` must supersede the whole batch instead: the
+    /// write is reported as skipped, not executed.
+    #[tokio::test]
+    async fn stage2_route_clarify_supersedes_a_batched_write_in_the_same_iteration() {
+        let engine = MockEngine::new(vec![
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "r1".into(),
+                    name: routing::ROUTE_QUERY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "r1".into(),
+                    args_json: json!({ "query": "update the ticket" }).to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 8,
+                        completion_tokens: 4,
+                    },
+                },
+            ],
+            // Stage 2: the model calls BOTH update_node and route_clarify in
+            // the same iteration — the exact batching this guard exists for.
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "t1".into(),
+                    name: "update_node".into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t1".into(),
+                    args_json: json!({
+                        "id": "abc-1",
+                        "field_values": { "status": "done" }
+                    })
+                    .to_string(),
+                },
+                StreamingChunk::ToolCallStart {
+                    id: "t2".into(),
+                    name: routing::ROUTE_CLARIFY_TOOL.into(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "t2".into(),
+                    args_json: json!({
+                        "question": "Which ticket did you mean?",
+                        "options": [
+                            {"id": "abc-1", "label": "First ticket"},
+                            {"id": "abc-2", "label": "Second ticket"}
+                        ]
+                    })
+                    .to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 20,
+                        completion_tokens: 10,
+                    },
+                },
+            ],
+        ]);
+
+        let candidates = vec![skill_candidate(
+            "Graph Editing",
+            0.9,
+            &["update_node", "route_clarify"],
+        )];
+        let exec = RoutingToolExecutor::new(
+            MockToolExecutor::new()
+                .with_tool(
+                    "update_node",
+                    json!({"type": "object", "properties": {"id": {"type": "string"}}}),
+                    json!({"ok": true, "updated": ["status"]}),
+                )
+                .with_tool(
+                    "route_clarify",
+                    json!({"type": "object", "properties": {
+                        "question": {"type": "string"},
+                        "options": {"type": "array"}
+                    }}),
+                    json!({}),
+                ),
+            candidates,
+        );
+        let loop_ = LocalAgentLoop::new(Arc::new(engine), Arc::new(exec));
+        let mut session = new_session();
+        let result = loop_
+            .run_turn(
+                &mut session,
+                "update the ticket",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        // Both calls are recorded (so the model's own record of what it
+        // asked for is preserved), but update_node's result must show it was
+        // skipped, NOT the mock's canned "ok: true, updated: [...]" —
+        // proving the real executor was never invoked for it.
+        assert_eq!(result.tool_calls_made.len(), 2);
+        let update_record = result
+            .tool_calls_made
+            .iter()
+            .find(|r| r.name == "update_node")
+            .expect("update_node call must still be recorded");
+        assert!(!update_record.is_error);
+        assert_eq!(
+            update_record.result["skipped"],
+            "superseded_by_clarification"
+        );
+        assert_ne!(
+            update_record.result.get("updated"),
+            Some(&json!(["status"])),
+            "the mock's canned write result must never appear — the write must not have executed"
+        );
+
+        let clarify_record = result
+            .tool_calls_made
+            .iter()
+            .find(|r| r.name == "route_clarify")
+            .expect("route_clarify call must be recorded");
+        assert!(!clarify_record.is_error);
+
+        let clarify = result
+            .clarify
+            .expect("the turn must still end as a clarification");
+        assert_eq!(clarify.question, "Which ticket did you mean?");
+    }
+
     /// core#2149: a Stage-2 skill whose whitelist includes `route_clarify`
     /// calls it instead of guessing or answering in prose — this must end the
     /// turn the same way Stage 1's clarify does, without any further tool
@@ -8506,6 +8678,14 @@ mod tests {
         );
         assert!(result.response.contains("Rotate signing keys"));
         assert!(result.response.contains("Backfill audit log retention"));
+        // Direct evidence the third batch was never consumed, not just an
+        // inference from the response matching the clarify text: if a third
+        // `engine.generate()` round had run, MockEngine would have played it
+        // back and this text would appear somewhere in the response.
+        assert!(
+            !result.response.contains("should never run"),
+            "a third inference round ran when the turn should have ended after route_clarify"
+        );
 
         // The conversation stays well-formed: the assistant's tool-calls
         // message and its matching tool result are both present, followed by
@@ -8516,11 +8696,15 @@ mod tests {
     }
 
     /// A route_clarify call with a blank question is not a decision to act
-    /// on — it must fall through to the normal executor's own validation
-    /// error rather than silently ending the turn as if it were a real
-    /// clarification.
+    /// on — it must fall through to the normal executor path rather than
+    /// silently ending the turn as if it were a real clarification. (This
+    /// test's mock executor does not itself validate the blank question the
+    /// way the real `GraphToolExecutor::exec_route_clarify` does — see that
+    /// function's own unit tests for the validation-error behavior. What
+    /// this test proves is narrower and still real: the turn is NOT treated
+    /// as a clarification and continues normally.)
     #[tokio::test]
-    async fn stage2_route_clarify_with_blank_question_falls_through_to_executor_error() {
+    async fn stage2_route_clarify_with_blank_question_falls_through_to_normal_execution() {
         let engine = MockEngine::new(vec![
             vec![
                 StreamingChunk::ToolCallStart {
