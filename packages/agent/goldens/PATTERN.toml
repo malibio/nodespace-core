@@ -135,9 +135,15 @@
 # carry them. The block was the only carrier present, not uniquely
 # load-bearing.
 #
-# Open and NOT run: declaring enums on a read tool's filter parameter. If that
-# works, the node-types block may be redundant for writes AND reads, which
-# would be a materially larger context saving than this corpus has measured.
+# NOW RUN (core#2147, ablation/filters-enum.toml and filters-enum-flat.toml):
+# declaring enums on a read tool's filter parameter does NOT recover cleanly.
+# A oneOf-paired encoding got the correct value but broke the wire format
+# (the model echoed the schema's own `oneOf`-branch `properties` keyword into
+# the instance); a flat enum/anyOf encoding kept the wire format but failed
+# to convey the value (nothing flat ties `value`'s enum to `property` being
+# "status"). Neither satisfies both at once, so the node-types block is NOT
+# redundant for reads the way it is for writes — see filters-enum-flat.toml
+# for the full result.
 #
 # ---------------------------------------------------------------------------
 # THE TWO-SITE NODE-TYPES SHAPE — UNIFORM, AND DELIBERATELY REDUNDANT

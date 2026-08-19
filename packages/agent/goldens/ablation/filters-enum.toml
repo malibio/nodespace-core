@@ -1,0 +1,310 @@
+name = "filters-enum"
+# derived-from: no-schemas-block.toml — differs by exactly one change: turn
+# 1's search_nodes.filters.items schema declares the ticket type's
+# filterable fields (oneOf branches keyed on `property`, each pinning
+# `value`'s type — enum for `status`, plain string for `assignee`/`sprint`)
+# instead of the bare, undeclared `property`/`value` strings. Everything
+# else — including the still-absent EXISTING SCHEMAS block, both turns'
+# system prompts, and turn 2 unchanged — is identical to no-schemas-block.toml,
+# so this arm isolates one question: core#2147's open one.
+reps = 5
+
+notes = """
+ABLATION ARM. Built by adding exactly one declaration to no-schemas-block.toml.
+
+core#2147: does declaring a read tool's `filters` parameter with the target
+type's fields (enums included) recover the value no-schemas-block.toml
+measured wrong on turn 1 — the status filter sent as "dev" instead of the
+exact enum member "in_dev" — the same way declaring `field_values` on the
+WRITE tool recovered turn 2 in the same file?
+
+no-schemas-block.toml already answered half of this: with the EXISTING
+SCHEMAS block gone, turn 2 (the write) still recovered, because the enum
+also reaches the model through `update_node`'s own schema. Turn 1 (the read)
+did not, because `search_nodes`'s `filters` declared no enum anywhere — this
+arm is the first to test whether the write tool's fix ALSO works applied to
+the read tool, or whether a filter's `property`/`value` pair resists the
+same treatment (e.g. because `oneOf`-keyed-on-a-sibling-const is a harder
+JSON Schema shape than a flat sub-property, or because a filter item is
+inside an array rather than the top-level object).
+
+HOW TO READ IT
+
+Compare turn 1 only against no-schemas-block.toml's own re-measured result
+(status filter "dev", still wrong). Turn 2 is deliberately unchanged from
+that file — it is not this arm's question, and re-measuring it here would
+just reproduce the earlier "recovered via update_node's own schema" finding
+with no new information.
+
+RESULT, measured via `./target/release/golden_runner --reps 5` (5/5 identical
+each rep):
+
+  turn 1   search_nodes({"filters":[{"properties":{"property":"status",
+           "value":"in_dev"},"operator":"equals"}],"node_type":"ticket"})
+
+The VALUE is correct — "in_dev", the exact enum member, not "dev". The enum
+DID reach the model through this declaration. But the STRUCTURE is wrong:
+`property`/`value` arrived nested under a spurious `"properties"` key, and
+the required `"type": "property"` key is missing entirely — the model
+echoed the schema's OWN `oneOf`-branch `properties` keyword into the
+instance it produced, rather than emitting a flat filter-item object. This
+violates the "wire format unchanged" acceptance criterion: production's
+`exec_search_nodes` parses a flat `{type, operator, property, value}` object
+per filter item and would not recognize this shape.
+
+This is a MIXED result, not a clean recovery: the information reached the
+model, but the specific JSON Schema encoding used to declare it
+(`oneOf` branches each carrying their own `properties` sub-object, mirroring
+`declare_write_tool_fields`'s pattern for `field_values` as literally as
+possible) is not safely representable through this model's structured
+tool-calling — see filters-enum-flat.toml for the follow-up arm testing
+whether a flatter encoding recovers the value WITHOUT the wire-format
+regression.
+
+ROOT CAUSE, confirmed via the POST-TEMPLATE prompt (NODESPACE_PROMPT_DUMP):
+the Gemma-4 function-declaration template has bespoke rendering for a
+schema's real, top-level `properties` key — it prints as an unquoted
+template token (`parameters:{properties:{filters:{...`). Inside a `oneOf`
+array, though, the template does not recognise the composition at all: each
+branch renders as an opaque, LITERALLY-quoted JSON fragment, including its
+own nested `properties` key spelled out as quoted text
+(`oneOf:[{<|"|>properties<|"|>:{<|"|>property<|"|>:{...`). The model is
+almost certainly pattern-matching "a quoted `properties` key sits next to
+quoted `property`/`value` keys" from what it has seen elsewhere in the same
+prompt (the real, specially-rendered `properties` object one level up) and
+reproducing that shape literally, rather than recognising `oneOf` as
+"choose one branch's shape as the instance." This is a template-composition
+gap specific to `oneOf` (and, by the same reasoning, `if`/`then`/`anyOf`
+wrapping a `properties` sub-object) — not evidence that enums generally
+cannot reach a read tool's schema.
+
+Per-arm results also recorded on core#2147.
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — find the ticket. THE ARM'S QUESTION. Only this turn's tool schema
+# differs from no-schemas-block.toml.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-find-ticket"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Search
+Purpose: Find, list, or filter existing records by title, type, or stored \
+field value.
+
+CALL search_nodes NOW: your next action is the tool call, not planning text.
+
+LISTING BY TYPE: to list every node of a type, use an empty query with \
+node_type set.
+
+FILTERING BY FIELD: to narrow by a stored value, pass filters. Copy the type \
+id and the field name exactly as they appear below.
+"""
+user = "Which tickets are still in dev?"
+expect = """
+search_nodes(node_type="ticket", ...) filtering status to the exact enum \
+member "in_dev" — not "in dev", not "In Dev". This arm additionally declares \
+`filters.items`'s property/value shape per-field (oneOf, enum on status), so \
+the specific thing being measured is whether that declaration alone — with \
+no EXISTING SCHEMAS block anywhere in the prompt — is enough.
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", "title": "Token refresh returns 401 after idle", "node_type": "ticket", "properties": {"status": "in_dev", "assignee": "dana", "sprint": "S-24"}}], "count": 1}
+  """
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields. Use when the node you need is not already \
+  identified in this conversation.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      # The type id is the unquoted token, not the quoted display name beside
+      # it. Naming both halves of the line is what makes the distinction
+      # actionable — "copied exactly" alone left the model sending "Ticket".
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+
+      # THE ARM'S ONE CHANGE, relative to no-schemas-block.toml: `property`
+      # and `value` are no longer bare, undeclared strings. Each of the
+      # `ticket` type's filterable fields gets its own oneOf branch pinning
+      # `property` to that field's exact name (const) and constraining
+      # `value` the same way declare_write_tool_fields already constrains a
+      # write tool's field_values sub-properties — enum for `status`, plain
+      # string for fields with no enum. Mirrors turn 2's own field_values
+      # declaration (same three fields, same enum) so this arm asks whether
+      # the identical information, reshaped for an array-of-filter-objects
+      # instead of a flat object, still reaches the model.
+      [turn.tool.parameters_schema.properties.filters]
+      type = "array"
+      description = "Field filters. Use the field name and value exactly as listed for the type."
+
+        [turn.tool.parameters_schema.properties.filters.items]
+        type = "object"
+        required = ["type", "operator", "property", "value"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.type]
+          type = "string"
+          enum = ["property"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.operator]
+          type = "string"
+          enum = ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"]
+
+          [[turn.tool.parameters_schema.properties.filters.items.oneOf]]
+
+            [turn.tool.parameters_schema.properties.filters.items.oneOf.properties.property]
+            type = "string"
+            const = "status"
+            description = "The ticket's workflow state."
+
+            [turn.tool.parameters_schema.properties.filters.items.oneOf.properties.value]
+            type = "string"
+            enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+
+          [[turn.tool.parameters_schema.properties.filters.items.oneOf]]
+
+            [turn.tool.parameters_schema.properties.filters.items.oneOf.properties.property]
+            type = "string"
+            const = "assignee"
+            description = "Who the work is assigned to."
+
+            [turn.tool.parameters_schema.properties.filters.items.oneOf.properties.value]
+            type = "string"
+
+          [[turn.tool.parameters_schema.properties.filters.items.oneOf]]
+
+            [turn.tool.parameters_schema.properties.filters.items.oneOf.properties.property]
+            type = "string"
+            const = "sprint"
+            description = "The sprint identifier."
+
+            [turn.tool.parameters_schema.properties.filters.items.oneOf.properties.value]
+            type = "string"
+
+# ---------------------------------------------------------------------------
+# Turn 2 — the write. UNCHANGED from no-schemas-block.toml — not this arm's
+# question. Kept only so turn 1 is measured inside the same two-turn shape
+# production actually produces, and so a reader can confirm nothing else
+# drifted.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-status-to-ready-for-review"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Update
+Purpose: Change a field on an existing record — status, assignee, dates, or \
+any stored value — when the user describes a new state for something that \
+already exists.
+
+CALL update_node NOW: your next action is the tool call, not planning text.
+
+THE ID: use the id from the tool result above, copied exactly. It is already \
+in this conversation — do not ask the user for it.
+
+THE CHANGE: express the new state in `field_values`. Use a field the type \
+defines, copied character for character. When a field lists allowed values, \
+use one of those values exactly — never a paraphrase of the user's wording, \
+never a capitalised or spaced form of the value.
+
+AN ID ALONE CHANGES NOTHING: a call carrying only an id is a no-op that \
+reports success.
+"""
+user = "I've pushed the branch for that one — it's ready for review now"
+expect = """
+update_node carrying BOTH the id from turn 1's real tool result \
+("7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", not the ticket's title) AND \
+field_values={"status": "ready_for_review"} — the exact enum member, not \
+"review" / "In Review" / "ready for review". Not this arm's question — see
+no-schemas-block.toml, unchanged here.
+"""
+
+  [turn.tool_results]
+  update_node = '{"ok": true, "updated": ["status"]}'
+
+  [[turn.tool]]
+  name = "update_node"
+  description = """
+  Update an existing node's fields immediately — call this directly with the \
+  node id you already have from a previous tool result. Do not ask the user \
+  to confirm or supply the id. An id on its own changes nothing: every call \
+  must also carry the change itself in field_values.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+
+      [turn.tool.parameters_schema.properties.id]
+      type = "string"
+      description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
+
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "New title text. Only when the user is renaming the node."
+
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The change itself: field keys to new values, e.g. {\"status\": \"done\"}. Required whenever the request changes the node's state rather than its title. Use a field the type defines, copied exactly. When a field lists allowed values, use one of those values exactly. Send only the keys that change."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+        description = "The ticket's workflow state."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+        type = "string"
+        description = "Who the work is assigned to."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.sprint]
+        type = "string"
+        description = "The sprint identifier."
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields. Use when the node you need is not already \
+  identified in this conversation.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id, copied exactly from EXISTING SCHEMAS."
