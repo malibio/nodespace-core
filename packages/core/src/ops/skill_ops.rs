@@ -134,19 +134,26 @@ impl SkillProperties {
 /// Whether `phrase` (already lowercased) appears in `haystack` (already
 /// lowercased) at word boundaries — not as a substring of a longer word.
 ///
-/// Single-word phrases (the common case: a type id like `ticket`) are
-/// checked by exact token match. Multi-word phrases (a display name like
-/// `Pull Request`) are checked as a contiguous run of exact tokens, so
-/// `pull` alone does not count as a match.
+/// Both `phrase` and `haystack` are tokenized identically, splitting on any
+/// non-alphanumeric character (not only whitespace) — a schema id like
+/// `release_plan` or `pull-request` must match a query that spells it with
+/// spaces, and vice versa, since ids and queries are not guaranteed to use
+/// the same separator. Single-token phrases (the common case: a type id
+/// like `ticket`) are checked by exact token match. Multi-token phrases (an
+/// id or display name like `release_plan` / `Pull Request`) are checked as
+/// a contiguous run of exact tokens, so `release` alone does not count as a
+/// match.
 fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
-    let words: Vec<&str> = phrase.split_whitespace().collect();
+    fn tokenize(s: &str) -> Vec<&str> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+    let words = tokenize(phrase);
     if words.is_empty() {
         return false;
     }
-    let tokens: Vec<&str> = haystack
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .collect();
+    let tokens = tokenize(haystack);
     if words.len() == 1 {
         tokens.iter().any(|t| *t == words[0])
     } else {
@@ -179,6 +186,18 @@ fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
 /// their purpose. This mechanism narrows per query instead, so a generic
 /// skill still contributes a scoped `schema_metadata` when the query itself
 /// determines the type.
+///
+/// **Known, accepted tradeoff** (core#2158 tracks it): a lexical match can
+/// be a false positive if a user-defined schema's id or display name
+/// happens to also be a common word or phrase (e.g. a schema literally
+/// named `Note`), narrowing to a confidently WRONG type rather than the old
+/// broad-but-safe top-N fallback. Bounded blast radius — this only affects
+/// one prompt-assist channel's precision (`schema_metadata`, which shapes a
+/// write tool's declared fields), never write validation itself, which
+/// still enforces the real schema at the write boundary regardless of what
+/// this function returns. Not guarded against here: doing so needs its own
+/// measurement (a stopword list or length floor could as easily suppress
+/// true positives as false ones), which core#2158 is the place for.
 fn schema_named_in_query<'a>(
     query: &str,
     all_schemas: &'a [crate::models::SchemaNode],
@@ -364,6 +383,30 @@ mod tests {
     }
 
     #[test]
+    fn mentions_phrase_matches_a_snake_case_id_against_a_space_separated_query() {
+        // A multi-word type id like `release_plan` has no whitespace of its
+        // own, so it must be tokenized the same way the query is — on any
+        // non-alphanumeric separator, not only whitespace — or it can never
+        // match a query that spells the same words with spaces.
+        assert!(mentions_phrase(
+            "create a release plan for q3",
+            "release_plan"
+        ));
+        assert!(!mentions_phrase(
+            "create a release for the plan later",
+            "release_plan"
+        ));
+    }
+
+    #[test]
+    fn mentions_phrase_matches_a_kebab_case_id_against_a_space_separated_query() {
+        assert!(mentions_phrase(
+            "open a pull request for this",
+            "pull-request"
+        ));
+    }
+
+    #[test]
     fn schema_named_in_query_scopes_to_the_single_named_non_core_type() {
         let schemas = vec![
             make_schema("ticket", "Ticket", false),
@@ -371,6 +414,19 @@ mod tests {
         ];
         let found = schema_named_in_query("create a ticket for the login bug", &schemas);
         assert_eq!(found.map(|s| s.id.as_str()), Some("ticket"));
+    }
+
+    #[test]
+    fn schema_named_in_query_matches_a_snake_case_id_by_id_alone() {
+        // Regression: the id-path must work even when the display name
+        // (content) doesn't share the same words as the id, so this only
+        // passes via `id` matching, not `content`.
+        let schemas = vec![
+            make_schema("release_plan", "Q3 Rollout", false),
+            make_schema("adr", "ADR", false),
+        ];
+        let found = schema_named_in_query("create a release plan for q3", &schemas);
+        assert_eq!(found.map(|s| s.id.as_str()), Some("release_plan"));
     }
 
     #[test]
