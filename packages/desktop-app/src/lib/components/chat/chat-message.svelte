@@ -63,7 +63,7 @@
 
     {#if isAssistant && message.options && message.options.length > 0}
       <div class="clarify-options" role="group" aria-label="Choose one">
-        {#each message.options as option (option)}
+        {#each message.options as option, optionIndex (optionIndex)}
           <button
             class="clarify-option"
             type="button"

@@ -1190,6 +1190,103 @@ fn def_update_task_status() -> ToolDefinition {
     }
 }
 
+/// Stage-2-callable counterpart to Stage 1's `route_clarify` (see
+/// `routing::stage1_tool_definitions`) — same tool NAME
+/// (`routing::ROUTE_CLARIFY_TOOL`), a deliberately different ARGUMENT shape.
+/// core#2149 measured that calling a clarify tool is more reliable than
+/// answering in prose, but Stage 1 only ever asks "which capability" (no
+/// natural id — a query phrase is the whole candidate), while Stage 2's
+/// clarification is almost always "which of these SPECIFIC RECORDS a prior
+/// tool result already named" — search_nodes/resolve_query returning more
+/// than one plausible match, or the request's wording fitting more than one
+/// of them. `options` therefore carries `{id, label}` pairs, not bare
+/// strings, so the model names the exact id a picked candidate resolves to
+/// rather than only a human description of it — the shape
+/// `dev-ambiguous-clarify.toml` measured. Reusing Stage 1's flat
+/// `Vec<String>` here would drop that id on the floor for no reason: the
+/// two clarify tools solve different-shaped problems, so "reuse if
+/// structurally sound" (core#2149) comes out as "don't" for the argument
+/// shape, even though the tool NAME and the surface-then-end-turn handling
+/// in `agent_loop.rs` are shared.
+///
+/// Handled in `agent_loop.rs` before reaching `GraphToolExecutor::execute` —
+/// see the interception there for why a normal dispatch would be the wrong
+/// place to surface the question. `exec_route_clarify` below still exists so
+/// dispatch stays exhaustive over `Tool::ALL` and a caller that reaches the
+/// executor directly (a test, or an external agent) gets a defined, harmless
+/// result rather than `UnknownTool`.
+fn def_route_clarify() -> ToolDefinition {
+    ToolDefinition {
+        name: super::routing::ROUTE_CLARIFY_TOOL.into(),
+        description: "Ask the user one specific clarifying question when a request can't be \
+             completed as understood — e.g. a search matched more than one plausible record and \
+             nothing said so far picks one, or the request's wording could mean more than one \
+             thing. Ends the turn with the question; do not call another tool in the same turn."
+            .into(),
+        parameters_schema: json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to put to the user, one sentence."
+                },
+                "options": {
+                    "type": "array",
+                    "description": "The concrete candidates the request could mean, one entry each.",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "label"],
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "The candidate's id, copied exactly from a prior tool result."
+                            },
+                            "label": {
+                                "type": "string",
+                                "description": "How to describe this candidate to the user."
+                            }
+                        }
+                    }
+                }
+            },
+            "required": ["question", "options"]
+        }),
+    }
+}
+
+/// One candidate a Stage-2 `route_clarify` call offers the user — see
+/// [`def_route_clarify`] for why this differs from Stage 1's bare-string
+/// options.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClarifyOption {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteClarifyArgs {
+    question: String,
+    options: Vec<ClarifyOption>,
+}
+
+/// Parse a Stage-2 `route_clarify` call's arguments.
+///
+/// `None` on malformed input or a blank question — mirrors
+/// `routing::parse_route_decision`'s leniency (a routing step that cannot
+/// decide must not cost the user their turn) but for this tool's own
+/// (richer) shape. Public so `agent_loop.rs`'s interception and this
+/// module's own `exec_route_clarify` share one parse rather than drifting.
+pub fn parse_route_clarify_args(args: &Value) -> Option<(String, Vec<ClarifyOption>)> {
+    let parsed: RouteClarifyArgs = serde_json::from_value(args.clone()).ok()?;
+    let question = parsed.question.trim();
+    if question.is_empty() {
+        return None;
+    }
+    Some((question.to_string(), parsed.options))
+}
+
 // ---------------------------------------------------------------------------
 // Tool registry — single source of truth
 // ---------------------------------------------------------------------------
@@ -1220,6 +1317,7 @@ pub enum Tool {
     SearchSkills,
     DeleteNode,
     CreateNodesFromMarkdown,
+    RouteClarify,
 }
 
 impl Tool {
@@ -1246,6 +1344,7 @@ impl Tool {
         Tool::SearchSkills,
         Tool::DeleteNode,
         Tool::CreateNodesFromMarkdown,
+        Tool::RouteClarify,
     ];
 
     /// The number of variants, counted by walking every one of them.
@@ -1276,7 +1375,8 @@ impl Tool {
                 Tool::GetRelatedNodes => Tool::SearchSkills,
                 Tool::SearchSkills => Tool::DeleteNode,
                 Tool::DeleteNode => Tool::CreateNodesFromMarkdown,
-                Tool::CreateNodesFromMarkdown => break,
+                Tool::CreateNodesFromMarkdown => Tool::RouteClarify,
+                Tool::RouteClarify => break,
             };
         }
         n
@@ -1317,6 +1417,7 @@ impl Tool {
                 Tool::SearchSkills => 11,
                 Tool::DeleteNode => 12,
                 Tool::CreateNodesFromMarkdown => 13,
+                Tool::RouteClarify => 14,
             };
             assert!(expected == i, "Tool::ALL lists a variant out of order");
             i += 1;
@@ -1344,6 +1445,7 @@ impl Tool {
             Tool::SearchSkills => "search_skills",
             Tool::DeleteNode => "delete_node",
             Tool::CreateNodesFromMarkdown => "create_nodes_from_markdown",
+            Tool::RouteClarify => super::routing::ROUTE_CLARIFY_TOOL,
         }
     }
 
@@ -1371,6 +1473,7 @@ impl Tool {
             Tool::SearchSkills => def_search_skills(),
             Tool::DeleteNode => def_delete_node(),
             Tool::CreateNodesFromMarkdown => def_create_nodes_from_markdown(),
+            Tool::RouteClarify => def_route_clarify(),
         }
     }
 
@@ -1395,6 +1498,7 @@ impl Tool {
             Tool::SearchSkills => "skill search",
             Tool::DeleteNode => "node deletion",
             Tool::CreateNodesFromMarkdown => "markdown import",
+            Tool::RouteClarify => "clarifying question",
         }
     }
 
@@ -1412,7 +1516,8 @@ impl Tool {
             | Tool::SearchSemantic
             | Tool::GetNode
             | Tool::GetRelatedNodes
-            | Tool::SearchSkills => WriteSemantics::Read,
+            | Tool::SearchSkills
+            | Tool::RouteClarify => WriteSemantics::Read,
 
             // Idempotent writes. Setting a node to the same content, or a task
             // to the same status, twice is a no-op — the second call is not a
@@ -1485,7 +1590,8 @@ impl Tool {
             | Tool::GetRelatedNodes
             | Tool::SearchSkills
             | Tool::DeleteNode
-            | Tool::CreateNodesFromMarkdown => false,
+            | Tool::CreateNodesFromMarkdown
+            | Tool::RouteClarify => false,
         }
     }
 }
@@ -2791,6 +2897,32 @@ impl GraphToolExecutor {
         ))
     }
 
+    /// Reached only when a `route_clarify` call is executed directly rather
+    /// than through the local agent loop's turn-ending interception (see
+    /// `agent_loop.rs`, which handles the normal Stage-2 path before any call
+    /// reaches this executor). No graph side effect either way: this arm
+    /// exists so `Tool::ALL` dispatch stays exhaustive and total, not to
+    /// surface the question — an executor returns a tool result, it cannot
+    /// end a turn or address the user directly.
+    async fn exec_route_clarify(
+        &self,
+        tool_call_id: &str,
+        args: Value,
+    ) -> Result<ToolResult, ToolError> {
+        let (question, options) =
+            parse_route_clarify_args(&args).ok_or_else(|| ToolError::InvalidArguments {
+                tool: super::routing::ROUTE_CLARIFY_TOOL.to_string(),
+                reason: "missing or blank required field: question (or malformed options)"
+                    .to_string(),
+            })?;
+
+        Ok(ok_result(
+            tool_call_id,
+            super::routing::ROUTE_CLARIFY_TOOL,
+            json!({ "acknowledged": true, "question": question, "options": options }),
+        ))
+    }
+
     // -- Service accessors --
 
     fn node_service(&self) -> Result<Arc<NodeService>, ToolError> {
@@ -2981,6 +3113,7 @@ impl AgentToolExecutor for GraphToolExecutor {
                 self.exec_create_nodes_from_markdown(&tool_call_id, args)
                     .await
             }
+            Tool::RouteClarify => self.exec_route_clarify(&tool_call_id, args).await,
         }
     }
 
@@ -3371,7 +3504,110 @@ mod tests {
     fn definitions_count() {
         // Derived from the registry: one definition per `Tool::ALL` entry.
         assert_eq!(all_tool_definitions().len(), Tool::ALL.len());
-        assert_eq!(all_tool_definitions().len(), 14);
+        assert_eq!(all_tool_definitions().len(), 15);
+    }
+
+    #[test]
+    fn route_clarify_is_registered_and_named_like_stage1s() {
+        assert_eq!(
+            Tool::RouteClarify.name(),
+            crate::local_agent::routing::ROUTE_CLARIFY_TOOL
+        );
+        assert_eq!(
+            Tool::from_name(crate::local_agent::routing::ROUTE_CLARIFY_TOOL),
+            Some(Tool::RouteClarify)
+        );
+        assert!(!Tool::RouteClarify.is_write());
+        assert!(!Tool::RouteClarify.requires_routed_guidance());
+    }
+
+    #[test]
+    fn route_clarify_schema_requires_question_and_options_with_id_and_label() {
+        let def = def_route_clarify();
+        let schema = &def.parameters_schema;
+        assert_eq!(schema["required"], json!(["question", "options"]));
+        assert_eq!(schema["properties"]["question"]["type"], "string");
+        let item = &schema["properties"]["options"]["items"];
+        assert_eq!(item["required"], json!(["id", "label"]));
+        assert_eq!(item["properties"]["id"]["type"], "string");
+        assert_eq!(item["properties"]["label"]["type"], "string");
+    }
+
+    #[test]
+    fn parse_route_clarify_args_reads_question_and_options() {
+        let (question, options) = parse_route_clarify_args(&json!({
+            "question": "Which ticket?",
+            "options": [
+                {"id": "1", "label": "First"},
+                {"id": "2", "label": "Second"},
+            ]
+        }))
+        .expect("well-formed args must parse");
+        assert_eq!(question, "Which ticket?");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].id, "1");
+        assert_eq!(options[0].label, "First");
+    }
+
+    #[test]
+    fn parse_route_clarify_args_trims_and_rejects_a_blank_question() {
+        assert!(parse_route_clarify_args(&json!({
+            "question": "   ",
+            "options": []
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn parse_route_clarify_args_rejects_missing_question() {
+        assert!(parse_route_clarify_args(&json!({ "options": [] })).is_none());
+    }
+
+    #[test]
+    fn parse_route_clarify_args_rejects_an_option_missing_id_or_label() {
+        assert!(parse_route_clarify_args(&json!({
+            "question": "Which one?",
+            "options": [{"label": "First"}]
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn parse_route_clarify_args_rejects_unknown_top_level_fields() {
+        // deny_unknown_fields: a model inventing an extra key must not
+        // silently succeed on the fields it recognises.
+        assert!(parse_route_clarify_args(&json!({
+            "question": "Which one?",
+            "options": [],
+            "extra": "field"
+        }))
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn exec_route_clarify_direct_dispatch_acknowledges_well_formed_args() {
+        let executor = test_executor();
+        let result = executor
+            .execute(
+                "route_clarify",
+                json!({
+                    "question": "Which ticket?",
+                    "options": [{"id": "1", "label": "First"}]
+                }),
+            )
+            .await
+            .expect("well-formed direct dispatch must succeed");
+        assert!(!result.is_error);
+        assert_eq!(result.result["question"], "Which ticket?");
+    }
+
+    #[tokio::test]
+    async fn exec_route_clarify_direct_dispatch_reports_invalid_arguments_on_blank_question() {
+        let executor = test_executor();
+        let result = executor
+            .execute("route_clarify", json!({ "question": "", "options": [] }))
+            .await;
+        assert!(matches!(result, Err(ToolError::InvalidArguments { .. })));
     }
 
     /// `node_type` argument-shape guidance (copy the id exactly from EXISTING

@@ -103,7 +103,7 @@ FIND THEN UPDATE: {find_then_act} Then call update_node with the ID and only the
 
 ALREADY IN THIS CONVERSATION: an indirect reference like "the auth one", "that one", or "the 2400 one" can still name a record already returned by a prior tool result in this conversation — match the description against those records and use that record's id, matching on what the description says, not on which record was discussed last. Never ask the user to supply an id that's already in the conversation.
 
-INDIRECT AND NOT YET FOUND: If the request identifies the target indirectly and no matching record has appeared in this conversation yet — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself. resolve_query performs the search itself: if it returns resolved:true, act on the returned id directly (e.g. pass it straight to update_node) — do not call search_nodes afterward. If it returns resolved:false with reason:"no_match", tell the user nothing matched. If it returns reason:"multiple_matches", ask the user which candidate they meant.
+INDIRECT AND NOT YET FOUND: If the request identifies the target indirectly and no matching record has appeared in this conversation yet — a bare value without naming its field (an amount, a code), a relative date or status word (a weekday, "overdue", "recent"), or a paraphrased description — call resolve_query(request=<the request verbatim>, node_type) FIRST instead of hand-writing a search_nodes query yourself. resolve_query performs the search itself: if it returns resolved:true, act on the returned id directly (e.g. pass it straight to update_node) — do not call search_nodes afterward. If it returns resolved:false with reason:"no_match", tell the user nothing matched. If it returns reason:"multiple_matches", call route_clarify with one specific question naming the candidates as options — do not ask which one in prose.
 
 AN ID ALONE CHANGES NOTHING: a call carrying only an id is a no-op that reports success — every call must also carry the change itself in `field_values`, using a field the type defines, copied character for character. When a field lists allowed values, use one of those values exactly — never a paraphrase of the user's wording, never a capitalised or spaced form of the value.
 
@@ -317,7 +317,7 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Modify existing nodes in the knowledge graph - update content, properties, titles, and metadata. For tasks, use update_task_status to change status.",
-                "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic", "resolve_query"],
+                "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic", "resolve_query", "route_clarify"],
                 "max_iterations": 3,
             }),
             child_node_type: None,

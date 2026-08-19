@@ -151,7 +151,14 @@ pub const FIND_THEN_ACT: InteractionRule = InteractionRule {
 
 pub const AMBIGUITY_CLARIFY: InteractionRule = InteractionRule {
     id: "ambiguity-clarify",
-    imperative: "AMBIGUITY: If search returns 0 results or multiple results that don't clearly match what the user described, ask one specific clarifying question rather than retrying.",
+    // Retargeted from prose ("ask one specific clarifying question") to
+    // calling route_clarify: the golden corpus measured calling the tool as
+    // more reliable than answering in prose, since prose is invisible to
+    // anything downstream that expects a tool call. `prose` and
+    // `skill_md_key_phrase` below are unchanged — they serve
+    // packages/skill/SKILL.md, a separate external-agent-facing document
+    // with no route_clarify tool of its own to point at.
+    imperative: "AMBIGUITY: If search returns 0 results or multiple results that don't clearly match what the user described, call route_clarify with one specific question and concrete options rather than retrying or answering in prose.",
     prose: "if the search comes back with zero matches or several equally plausible matches, ask the user one specific clarifying question rather than retrying.",
     skill_md_key_phrase: "ask the user one specific clarifying question rather than retrying",
 };
