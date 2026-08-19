@@ -74,8 +74,20 @@ only carrier present at the time.
 
 Practical consequence: declaring enums on the tool schema covers writes, but
 filters need the same treatment or the node-types block has to stay for
-reads. This corpus does not yet have an arm declaring enums on a read tool —
-recorded as not-run rather than assumed.
+reads.
+
+NOW MEASURED (core#2147, filters-enum.toml / filters-enum-flat.toml): the
+"same treatment" does not transplant cleanly. Pairing `property`+`value` in
+a `oneOf` (mirroring `field_values`'s declared-field pattern as literally as
+possible) got the model to the correct enum VALUE but broke the wire format
+— it echoed the schema's own `oneOf`-branch `properties` keyword into the
+instance. A flatter `enum`-on-`property` / `anyOf`-on-`value` encoding kept
+the wire format correct but failed to convey the value, since nothing in a
+flat schema ties `value`'s enum branch to `property` being `"status"`
+specifically. Neither encoding recovers the value without breaking the
+wire-format-unchanged requirement, so — unlike the write path — the
+node-types block stays required for reads. See filters-enum-flat.toml for
+the full result and root-cause detail.
 
 ORIGINAL MEASUREMENT, before the declared-field pattern (kept for the record):
 3/3 WRONG on BOTH turns — filter "dev" and write "ready for review", both
