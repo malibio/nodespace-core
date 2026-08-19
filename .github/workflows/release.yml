@@ -559,10 +559,48 @@ jobs:
           # loudly here and notify-failure below opens an issue.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+  sync-install-script:
+    name: Pin nodespace-website's install.sh to this release
+    runs-on: ubuntu-22.04
+    needs: build-headless
+    # A sibling of sync-homebrew-cask above, same reasoning: install.sh
+    # (nodespace-core#2146) deliberately pins to a specific, confirmed-built
+    # release rather than floating to "latest" (this repo's own
+    # `release: types: [created]` trigger fires before build-headless's
+    # binaries even start building, so "latest" can point at a release
+    # with no CLI assets yet). This job is what advances the pin once
+    # those binaries are confirmed uploaded -- without it, the pin would
+    # have to be hand-edited in nodespace-website after every release,
+    # exactly the kind of drift #2114 found in the Homebrew cask.
+    if: >-
+      always() &&
+      github.event_name == 'release' &&
+      needs.build-headless.result == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Pin install.sh
+        run: bun run scripts/publish-install-script.ts ${{ github.event.release.tag_name }} --push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT (or fine-grained token) with contents:write on
+          # NodeSpaceAI/nodespace-website -- secrets.GITHUB_TOKEN is scoped
+          # to this repo only and cannot push cross-repo. Must be added as
+          # a repo secret before this step can succeed; until then it
+          # fails loudly here and notify-failure below opens an issue.
+          WEBSITE_DEPLOY_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
+
   notify-failure:
     name: Notify on build failure
     runs-on: ubuntu-22.04
-    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless, sync-homebrew-cask]
+    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless, sync-homebrew-cask, sync-install-script]
     if: failure()
 
     steps:

@@ -62,7 +62,7 @@ Run this preflight once per session or task, not before every individual command
 
 | Symptom | Cause | Recovery |
 |---------|-------|----------|
-| `command not found: nodespace` | CLI not installed or not on `$PATH` | Tell the user: NodeSpace CLI is not installed. They need to install it (e.g. via the NodeSpace DMG or `cargo install nodespace-cli`). Do not proceed. |
+| `command not found: nodespace` | CLI not installed or not on `$PATH` | Tell the user NodeSpace CLI is not installed and propose installing it — never run the installer without their explicit confirmation. If they confirm, run `curl -fsSL https://nodespace.ai/install.sh \| sh -s -- --no-gui` (installs the CLI only, non-interactively — the same script the one-line install and `brew install --cask nodespace` both use). Then retry the original command. If they decline, stop. |
 | `Could not connect to nodespaced` | Daemon not running | Surface the CLI's own message to the user: start the daemon with `nodespaced`. Do not retry automatically — wait for confirmation. |
 | `diagnostics` shows entries in `errors` | Database issues | Report the specific error messages to the user before continuing. |
 
