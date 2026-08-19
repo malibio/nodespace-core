@@ -999,12 +999,12 @@ fn def_create_schema() -> ToolDefinition {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": { "type": "string", "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date') — the storage key: used in titleTemplate tokens, query filters, and every other call site that references this field. Not shown to the user; see 'friendlyName' for that." },
-                            "friendlyName": { "type": "string", "description": "The display label shown to the user in every UI surface (table/kanban headers, property forms). Optional — omit it and one is derived from 'name' automatically (e.g. 'due_date' -> 'Due Date'). Set it explicitly only when the derived label would read wrong, e.g. an abbreviation ('poc' -> 'Point of Contact') or a name that isn't just underscores-for-spaces." },
+                            "name": { "type": "string", "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date') — the storage key. Not shown to the user; see 'friendlyName' for that." },
+                            "friendlyName": { "type": "string", "description": "The display label shown to the user. Optional — omit it and one is derived from 'name' automatically (e.g. 'due_date' -> 'Due Date'). Set it explicitly only when the derived label would read wrong, e.g. an abbreviation ('poc' -> 'Point of Contact')." },
                             "type": { "type": "string", "description": "Field type: text, number, date, enum, array, object, boolean" },
                             "required": { "type": "boolean", "description": "Whether every record of this type must carry a value" },
                             "indexed": { "type": "boolean", "description": "Whether to index for search/filter" },
-                            "description": { "type": "string", "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example) for whoever later has to understand it, not a short label (that's 'friendlyName'). Prefer more detail over less — there is no cost to a longer description." },
+                            "description": { "type": "string", "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example), not a short label (that's 'friendlyName'). Prefer more detail over less." },
                             "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or a ticket key). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
                             "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field." },
                             "coreValues": {
@@ -1094,7 +1094,7 @@ fn def_update_schema() -> ToolDefinition {
                 },
                 "rename_fields": {
                     "type": "array",
-                    "description": "Two different operations share this list, told apart by whether 'from' and 'to' differ. RENAME THE FIELD ITSELF (identity rename): 'from' != 'to' — rekeys property data on ALL existing nodes of this schema type and updates the schema definition. Breaking for any title_template/query filter/other reference to the old name. RELABEL WITHOUT RENAMING (display-only): 'from' == 'to', with 'friendlyName' set — changes only the display label shown to the user; touches no node data and is not breaking. The two can combine in one entry (a rename that also sets a new label). Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
+                    "description": "Two operations, told apart by 'from'/'to': DIFFERENT values rename the field's storage key (rekeys all existing node data; breaking for title_template/query filters). SAME value + 'friendlyName' set relabels the display only (no data touched). The two can combine in one entry. Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -1225,9 +1225,9 @@ fn def_route_clarify() -> ToolDefinition {
     ToolDefinition {
         name: super::routing::ROUTE_CLARIFY_TOOL.into(),
         description: "Ask the user one specific clarifying question when a request can't be \
-             completed as understood — e.g. a search matched more than one plausible record and \
-             nothing said so far picks one, or the request's wording could mean more than one \
-             thing. Ends the turn with the question; do not call another tool in the same turn."
+             completed as understood — e.g. a search returned more than one plausible match, or \
+             the request's wording could mean more than one thing. Ends the turn with the \
+             question; do not call another tool in the same turn."
             .into(),
         parameters_schema: json!({
             "type": "object",
@@ -2910,11 +2910,7 @@ impl GraphToolExecutor {
     /// exists so `Tool::ALL` dispatch stays exhaustive and total, not to
     /// surface the question — an executor returns a tool result, it cannot
     /// end a turn or address the user directly.
-    async fn exec_route_clarify(
-        &self,
-        tool_call_id: &str,
-        args: Value,
-    ) -> Result<ToolResult, ToolError> {
+    fn exec_route_clarify(&self, tool_call_id: &str, args: Value) -> Result<ToolResult, ToolError> {
         let (question, options) =
             parse_route_clarify_args(&args).ok_or_else(|| ToolError::InvalidArguments {
                 tool: super::routing::ROUTE_CLARIFY_TOOL.to_string(),
@@ -3119,7 +3115,7 @@ impl AgentToolExecutor for GraphToolExecutor {
                 self.exec_create_nodes_from_markdown(&tool_call_id, args)
                     .await
             }
-            Tool::RouteClarify => self.exec_route_clarify(&tool_call_id, args).await,
+            Tool::RouteClarify => self.exec_route_clarify(&tool_call_id, args),
         }
     }
 

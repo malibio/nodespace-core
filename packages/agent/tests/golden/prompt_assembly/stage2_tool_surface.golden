@@ -294,11 +294,11 @@ parameters_schema:
             "type": "array"
           },
           "description": {
-            "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example) for whoever later has to understand it, not a short label (that's 'friendlyName'). Prefer more detail over less — there is no cost to a longer description.",
+            "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example), not a short label (that's 'friendlyName'). Prefer more detail over less.",
             "type": "string"
           },
           "friendlyName": {
-            "description": "The display label shown to the user in every UI surface (table/kanban headers, property forms). Optional — omit it and one is derived from 'name' automatically (e.g. 'due_date' -> 'Due Date'). Set it explicitly only when the derived label would read wrong, e.g. an abbreviation ('poc' -> 'Point of Contact') or a name that isn't just underscores-for-spaces.",
+            "description": "The display label shown to the user. Optional — omit it and one is derived from 'name' automatically (e.g. 'due_date' -> 'Due Date'). Set it explicitly only when the derived label would read wrong, e.g. an abbreviation ('poc' -> 'Point of Contact').",
             "type": "string"
           },
           "indexed": {
@@ -306,7 +306,7 @@ parameters_schema:
             "type": "boolean"
           },
           "name": {
-            "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date') — the storage key: used in titleTemplate tokens, query filters, and every other call site that references this field. Not shown to the user; see 'friendlyName' for that.",
+            "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date') — the storage key. Not shown to the user; see 'friendlyName' for that.",
             "type": "string"
           },
           "required": {
@@ -504,7 +504,7 @@ parameters_schema:
       "type": "array"
     },
     "rename_fields": {
-      "description": "Two different operations share this list, told apart by whether 'from' and 'to' differ. RENAME THE FIELD ITSELF (identity rename): 'from' != 'to' — rekeys property data on ALL existing nodes of this schema type and updates the schema definition. Breaking for any title_template/query filter/other reference to the old name. RELABEL WITHOUT RENAMING (display-only): 'from' == 'to', with 'friendlyName' set — changes only the display label shown to the user; touches no node data and is not breaking. The two can combine in one entry (a rename that also sets a new label). Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
+      "description": "Two operations, told apart by 'from'/'to': DIFFERENT values rename the field's storage key (rekeys all existing node data; breaking for title_template/query filters). SAME value + 'friendlyName' set relabels the display only (no data touched). The two can combine in one entry. Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
       "items": {
         "additionalProperties": false,
         "properties": {

@@ -651,6 +651,13 @@ impl LocalAgentServiceImpl {
         // so only cancelled/failed paths need an explicit reset.
         let needs_idle_reset;
 
+        // Captured only on the `Err` arm below so the post-select match can
+        // tell "inference failed" apart from "cancelled" — both collapse to
+        // `turn_result: None`, but only the former is a failure that must be
+        // surfaced on the node (a cancellation is an intentional user action,
+        // not an error worth a visible message).
+        let mut turn_error: Option<InferenceError> = None;
+
         let turn_result = tokio::select! {
             result = send_fut => {
                 match result {
@@ -663,6 +670,7 @@ impl LocalAgentServiceImpl {
                             node_id: Some(node_id.clone()),
                             ..Default::default()
                         });
+                        turn_error = Some(e);
                         None
                     }
                 }
@@ -717,8 +725,46 @@ impl LocalAgentServiceImpl {
                 }
             }
             None => {
-                // Cancelled — or inference error (send_message returned Err).
-                needs_idle_reset = true;
+                match turn_error {
+                    Some(e) => {
+                        // A turn whose inference call failed (context window
+                        // exceeded, engine error, ...) must fail *visibly* —
+                        // ADR-062's "refuse loudly, don't clamp silently"
+                        // principle, applied here at the per-turn level, not
+                        // just at model load. Recording nothing and quietly
+                        // resetting to "idle" is indistinguishable, to any
+                        // caller polling this node (or the frontend, which
+                        // only renders `user`/`assistant` messages), from a
+                        // turn that is still running — the exact opaque
+                        // failure ADR-062 says is worse than an actionable
+                        // one. Appending an assistant-role message reuses the
+                        // one existing "turn produced visible output"
+                        // convention (`assistant_count` polling,
+                        // frontend rendering) rather than inventing a second,
+                        // differently-handled channel for errors.
+                        let error_text = format!("This turn failed and could not complete: {e}");
+                        match self
+                            .append_assistant_message(&node_id, &error_text, None, Vec::new(), None)
+                            .await
+                        {
+                            Ok(()) => needs_idle_reset = false,
+                            Err(append_err) => {
+                                tracing::warn!(
+                                    node_id,
+                                    error = %append_err,
+                                    "failed to append error message after inference failure"
+                                );
+                                needs_idle_reset = true;
+                            }
+                        }
+                    }
+                    None => {
+                        // Cancelled — an intentional user action, not a
+                        // failure; no visible message, matching the
+                        // `"cancelled"` chunk already sent above.
+                        needs_idle_reset = true;
+                    }
+                }
             }
         }
 
@@ -2805,6 +2851,84 @@ mod tests {
         assert!(
             svc.inner.turn_tokens.lock().await.get(&node_id).is_none(),
             "no lingering turn token after completion"
+        );
+    }
+
+    /// Engine whose `generate` always fails with a given `InferenceError` —
+    /// stands in for the native engine rejecting a turn (context window
+    /// exceeded, or any other inference failure) so `run_ai_chat_turn`'s
+    /// failure path can be exercised without a real model.
+    struct FailingEngine {
+        make_error: fn() -> InferenceError,
+    }
+
+    #[async_trait]
+    impl ChatInferenceEngine for FailingEngine {
+        async fn generate(
+            &self,
+            _request: nodespace_agent::agent_types::InferenceRequest,
+            _on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
+        ) -> Result<InferenceUsage, InferenceError> {
+            Err((self.make_error)())
+        }
+
+        async fn model_info(
+            &self,
+        ) -> Result<Option<nodespace_agent::agent_types::ChatModelSpec>, InferenceError> {
+            Ok(None)
+        }
+
+        async fn token_count(&self, text: &str) -> Result<u32, InferenceError> {
+            Ok((text.len() as f32 / 4.0).ceil() as u32)
+        }
+    }
+
+    /// Regression guard for the silent-failure bug: a turn whose inference
+    /// call fails (e.g. `InferenceError::ContextOverflow`, the exact shape
+    /// the daemon's native engine returns when a system prompt no longer fits
+    /// the loaded context window) must reach `idle` WITH a new assistant
+    /// message describing the failure — not `idle` with `assistant_count`
+    /// unchanged, which is indistinguishable (to any caller polling this
+    /// node, and to the frontend, which only renders `user`/`assistant`
+    /// messages) from a turn that is still silently stuck. Before the fix,
+    /// this path only logged a WARN and reset status to idle.
+    #[tokio::test]
+    async fn failed_inference_turn_surfaces_a_visible_error_not_silent_idle() {
+        let (svc, node_service, _tempdir) = test_service().await;
+        svc.replace_engine(Arc::new(FailingEngine {
+            make_error: || {
+                InferenceError::ContextOverflow(
+                    "Prompt uses 6032 tokens but context window is 5120".to_string(),
+                )
+            },
+        }))
+        .await;
+
+        let node_id = create_processing_node_with_user_message(&node_service, "Hi there").await;
+
+        svc.maybe_handle_ai_chat_node(&node_id).await;
+
+        let ai_chat = get_ai_chat(&node_service, &node_id).await;
+        assert_eq!(
+            ai_chat.status, "idle",
+            "a failed turn must still terminate, never stuck processing"
+        );
+        let assistant = ai_chat
+            .messages
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect(
+                "a failed inference turn must append a visible assistant message, \
+                 not silently reset to idle with no new content",
+            );
+        assert!(
+            assistant.content.contains("context window"),
+            "the surfaced message should name the actual failure, got: {:?}",
+            assistant.content
+        );
+        assert!(
+            svc.inner.turn_tokens.lock().await.get(&node_id).is_none(),
+            "no lingering turn token after a failed turn"
         );
     }
 
