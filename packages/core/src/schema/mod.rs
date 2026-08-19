@@ -172,7 +172,13 @@ fn apply_friendly_name_defaults(existing: &[SchemaField], new_fields: &mut [Sche
 /// (`"Employee name" -> "Employee name (employeeName)"`). `name` is unique
 /// within a schema (a duplicate is rejected before this runs), so the result
 /// is guaranteed unique too.
-fn disambiguate_friendly_name(label: &str, name: &str) -> String {
+///
+/// `pub(crate)` rather than private: `NodeService::update_schema_field_friendly_name`
+/// (`services/node_service/schema.rs`) reuses this to apply the exact same
+/// derive-and-disambiguate treatment `apply_friendly_name_defaults` gives an
+/// omitted `friendly_name` on create/`add_fields`, so a blank value can never
+/// reach storage through either path.
+pub(crate) fn disambiguate_friendly_name(label: &str, name: &str) -> String {
     match name.split_once(':') {
         Some((prefix, _)) if !prefix.is_empty() => format!("{label} ({prefix})"),
         _ => format!("{label} ({name})"),
@@ -485,13 +491,30 @@ pub async fn handle_create_schema(
 }
 
 /// A single field rename operation within update_schema
+///
+/// Two conceptually different renames share this shape:
+/// - **identity rename** (`from` != `to`): rekeys `name`, migrates every
+///   existing node's property data, and is breaking for `titleTemplate`/CEL/
+///   query-filter references — unchanged from before `friendly_name` existed.
+/// - **display rename** (`from` == `to`, `friendly_name` set): updates only
+///   the display label, migrates nothing. Also legal combined with an
+///   identity rename in one entry (both `to` and `friendly_name` set) —
+///   applied atomically as one schema update rather than two round trips.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FieldRename {
     /// Current field name
     pub from: String,
-    /// New field name
+    /// New field name (pass the same value as `from` for a display-only
+    /// rename that changes `friendly_name` without migrating data)
     pub to: String,
+    /// New display label for this field. Optional — omit to leave
+    /// `friendly_name` exactly as stored (including when it was auto-derived
+    /// from the old `name` and is now stale; see
+    /// `NodeService::rename_schema_field`'s doc comment for why that is not
+    /// re-derived automatically).
+    #[serde(default)]
+    pub friendly_name: Option<String>,
 }
 
 /// Parameters for update_schema (batch operations)
@@ -604,9 +627,15 @@ pub async fn handle_update_schema(
                     "rename_fields entries must have non-empty 'from' and 'to'".to_string(),
                 ));
             }
-            if rename.from == rename.to {
+            // `from == to` is legal exactly when it carries a `friendly_name`
+            // — a display-only rename that changes the label without
+            // migrating data (see `FieldRename`'s doc comment). With no
+            // `friendly_name`, `from == to` changes nothing and is rejected
+            // as before.
+            if rename.from == rename.to && rename.friendly_name.is_none() {
                 return Err(MarkdownError::invalid_params(format!(
-                    "rename_fields: 'from' and 'to' are the same: '{}'",
+                    "rename_fields: 'from' and 'to' are the same with no 'friendly_name' \
+                     given, so this entry would change nothing: '{}'",
                     rename.from
                 )));
             }
@@ -693,16 +722,74 @@ pub async fn handle_update_schema(
         }
     }
 
-    // --- Phase 1: Process renames (each rename migrates data + updates schema definition) ---
+    // --- Phase 1: Process renames (identity renames migrate data; display-only renames do not) ---
     let mut fields_renamed = 0;
     if let Some(ref renames) = params.rename_fields {
         for rename in renames {
-            node_service
-                .rename_schema_field(&params.schema_id, &rename.from, &rename.to)
-                .await
-                .map_err(|e| {
-                    MarkdownError::invalid_params(format!("Field rename failed: {}", e))
-                })?;
+            if rename.from == rename.to {
+                // Display-only: `friendly_name` is guaranteed present here —
+                // the validation pass above rejects `from == to` with no
+                // `friendly_name`. No node property data is touched.
+                let friendly_name = rename.friendly_name.as_deref().unwrap_or_default();
+                node_service
+                    .update_schema_field_friendly_name(
+                        &params.schema_id,
+                        &rename.from,
+                        friendly_name,
+                    )
+                    .await
+                    .map_err(|e| {
+                        MarkdownError::invalid_params(format!(
+                            "Field friendly_name update failed: {}",
+                            e
+                        ))
+                    })?;
+            } else {
+                // Identity rename: rekeys `name` and migrates every existing
+                // node's property data. `rename_schema_field` deliberately
+                // leaves `friendly_name` untouched (see its own doc comment),
+                // so an entry that ALSO supplies `friendly_name` applies that
+                // as a second, immediately-following update — one logical
+                // change, two schema-definition writes rather than asking
+                // the caller to split it across two `rename_fields` entries.
+                node_service
+                    .rename_schema_field(&params.schema_id, &rename.from, &rename.to)
+                    .await
+                    .map_err(|e| {
+                        MarkdownError::invalid_params(format!("Field rename failed: {}", e))
+                    })?;
+                if let Some(ref friendly_name) = rename.friendly_name {
+                    // Not atomic with the rename above — they are two
+                    // separate schema-node writes (the data migration inside
+                    // `rename_schema_field` is itself a distinct step from
+                    // the schema-definition rewrite, so there is no single
+                    // write these two calls could be merged into that would
+                    // also cover it). If this second call fails, the rename
+                    // has ALREADY happened: the field now exists under `to`,
+                    // and a retry of this same `rename_fields` entry would
+                    // fail differently (`from` no longer exists). Say so
+                    // explicitly rather than returning an error that reads
+                    // like nothing happened — the caller (model, then user)
+                    // needs to know the storage key already changed.
+                    node_service
+                        .update_schema_field_friendly_name(
+                            &params.schema_id,
+                            &rename.to,
+                            friendly_name,
+                        )
+                        .await
+                        .map_err(|e| {
+                            MarkdownError::invalid_params(format!(
+                                "Field '{}' was successfully renamed to '{}' (and its node data \
+                                 migrated), but updating its display label failed: {}. Do NOT \
+                                 retry with the original 'from'/'to' pair — the field now exists \
+                                 as '{}'. To retry the label update alone, send \
+                                 {{\"from\": \"{}\", \"to\": \"{}\", \"friendlyName\": ...}}.",
+                                rename.from, rename.to, e, rename.to, rename.to, rename.to
+                            ))
+                        })?;
+                }
+            }
             fields_renamed += 1;
         }
     }

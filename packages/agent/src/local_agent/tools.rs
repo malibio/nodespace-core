@@ -783,7 +783,10 @@ fn declared_field_values_properties(
     > = std::collections::HashMap::new();
     for descriptor in descriptors {
         for field in &descriptor.fields {
-            occurrences.entry(field.name.as_str()).or_default().push(field);
+            occurrences
+                .entry(field.name.as_str())
+                .or_default()
+                .push(field);
         }
     }
 
@@ -996,11 +999,12 @@ fn def_create_schema() -> ToolDefinition {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": { "type": "string", "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date')" },
+                            "name": { "type": "string", "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date') — the storage key: used in titleTemplate tokens, query filters, and every other call site that references this field. Not shown to the user; see 'friendlyName' for that." },
+                            "friendlyName": { "type": "string", "description": "The display label shown to the user in every UI surface (table/kanban headers, property forms). Optional — omit it and one is derived from 'name' automatically (e.g. 'due_date' -> 'Due Date'). Set it explicitly only when the derived label would read wrong, e.g. an abbreviation ('poc' -> 'Point of Contact') or a name that isn't just underscores-for-spaces." },
                             "type": { "type": "string", "description": "Field type: text, number, date, enum, array, object, boolean" },
                             "required": { "type": "boolean", "description": "Whether every record of this type must carry a value" },
                             "indexed": { "type": "boolean", "description": "Whether to index for search/filter" },
-                            "description": { "type": "string", "description": "Field description" },
+                            "description": { "type": "string", "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example) for whoever later has to understand it, not a short label (that's 'friendlyName'). Prefer more detail over less — there is no cost to a longer description." },
                             "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or a ticket key). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
                             "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field." },
                             "coreValues": {
@@ -1046,7 +1050,7 @@ fn def_create_schema() -> ToolDefinition {
 fn def_update_schema() -> ToolDefinition {
     ToolDefinition {
         name: "update_schema".into(),
-        description: "Modify an existing schema type: add/remove/rename fields, add/remove relationships, update description or title_template. Use rename_fields to safely rename a field — it migrates all existing node property data to the new key and updates the schema definition.".into(),
+        description: "Modify an existing schema type: add/remove/rename fields, relabel a field's display name without renaming it, add/remove relationships, update description or title_template. Use rename_fields to rename a field's storage key — it migrates all existing node property data to the new key and updates the schema definition; the same rename_fields list also handles a display-only relabel (see its own description for the difference).".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -1056,7 +1060,7 @@ fn def_update_schema() -> ToolDefinition {
                 },
                 "description": {
                     "type": "string",
-                    "description": "New description (optional)"
+                    "description": "New description of the SCHEMA TYPE ITSELF, not of any one field — a summary of what this entity type represents. Optional."
                 },
                 "title_template": {
                     "type": "string",
@@ -1068,9 +1072,10 @@ fn def_update_schema() -> ToolDefinition {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": { "type": "string" },
+                            "name": { "type": "string", "description": "Field name, lowercase snake_case — the storage key. Not shown to the user; see 'friendlyName' for that." },
+                            "friendlyName": { "type": "string", "description": "The display label shown to the user. Optional — omit it and one is derived from 'name' automatically. Set it explicitly only when the derived label would read wrong." },
                             "type": { "type": "string", "description": "text, number, date, enum, boolean" },
-                            "description": { "type": "string" },
+                            "description": { "type": "string", "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example), not a short label (that's 'friendlyName'). Prefer more detail over less." },
                             "unique": { "type": "boolean", "description": "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides." },
                             "unique_case_insensitive": { "type": "boolean", "description": "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field." },
                             "coreValues": {
@@ -1089,12 +1094,13 @@ fn def_update_schema() -> ToolDefinition {
                 },
                 "rename_fields": {
                     "type": "array",
-                    "description": "Fields to rename. Each entry rekeys property data on ALL existing nodes of this schema type and updates the schema definition. Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
+                    "description": "Two different operations share this list, told apart by whether 'from' and 'to' differ. RENAME THE FIELD ITSELF (identity rename): 'from' != 'to' — rekeys property data on ALL existing nodes of this schema type and updates the schema definition. Breaking for any title_template/query filter/other reference to the old name. RELABEL WITHOUT RENAMING (display-only): 'from' == 'to', with 'friendlyName' set — changes only the display label shown to the user; touches no node data and is not breaking. The two can combine in one entry (a rename that also sets a new label). Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "from": { "type": "string", "description": "Current field name" },
-                            "to": { "type": "string", "description": "New field name" }
+                            "to": { "type": "string", "description": "New field name — pass the SAME value as 'from' for a display-only relabel that changes friendlyName without renaming anything or migrating data." },
+                            "friendlyName": { "type": "string", "description": "New display label for this field. Optional when 'from' != 'to' (an identity rename that also wants an updated label). REQUIRED when 'from' == 'to' — that combination with no friendlyName changes nothing and is rejected." }
                         },
                         "required": ["from", "to"],
                         "additionalProperties": false
@@ -5602,6 +5608,151 @@ mod tests {
         assert_eq!(core_values.len(), 2);
     }
 
+    /// core#2104: `friendlyName`, newly declared on `create_schema`'s field
+    /// items, must reach `handle_create_schema` unmangled through the real
+    /// `GraphToolExecutor` dispatch path — not just verified against the
+    /// core handler directly (see `schema::schema_test`'s own coverage).
+    #[tokio::test]
+    async fn create_schema_friendly_name_field_round_trips_end_to_end() {
+        use nodespace_core::db::SqliteStore;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+
+        let executor = GraphToolExecutor {
+            node_service: Some(svc),
+            embedding_service: Arc::new(RwLock::new(None)),
+            inference_engine: None,
+        };
+
+        let result = executor
+            .execute(
+                "create_schema",
+                json!({
+                    "name": "Ticket",
+                    "fields": [
+                        { "name": "poc", "type": "text", "friendlyName": "Point of Contact" }
+                    ]
+                }),
+            )
+            .await
+            .expect("execute should not return a ToolError");
+
+        assert!(!result.is_error, "got: {}", result.result);
+        assert_eq!(
+            result.result["fields"][0]["friendlyName"], "Point of Contact",
+            "an explicit friendlyName sent through the real tool-dispatch path must reach \
+             storage unchanged, not silently dropped or overridden by a derived label"
+        );
+
+        // friendlyName must be additive, not a substitute for the storage
+        // key — `name` must reach storage exactly as sent, unaffected by
+        // friendlyName being present alongside it. (The omitted-friendlyName
+        // derivation path is covered separately, by
+        // `create_schema_omitted_friendly_name_is_derived_end_to_end`.)
+        assert_eq!(
+            result.result["fields"][0]["name"], "poc",
+            "storage key must be unaffected by friendlyName"
+        );
+    }
+
+    /// The write-boundary default (derive from `name` when omitted) must
+    /// also work when reached through the real dispatch path, not only
+    /// against `handle_create_schema` directly.
+    #[tokio::test]
+    async fn create_schema_omitted_friendly_name_is_derived_end_to_end() {
+        use nodespace_core::db::SqliteStore;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+
+        let executor = GraphToolExecutor {
+            node_service: Some(svc),
+            embedding_service: Arc::new(RwLock::new(None)),
+            inference_engine: None,
+        };
+
+        let result = executor
+            .execute(
+                "create_schema",
+                json!({
+                    "name": "Ticket",
+                    "fields": [ { "name": "due_date", "type": "date" } ]
+                }),
+            )
+            .await
+            .expect("execute should not return a ToolError");
+
+        assert!(!result.is_error, "got: {}", result.result);
+        assert_eq!(
+            result.result["fields"][0]["friendlyName"], "Due date",
+            "an omitted friendlyName must still be derived when reached through the real \
+             tool-dispatch path"
+        );
+    }
+
+    /// core#2104: the new display-only relabel path (`rename_fields` with
+    /// `from == to` and `friendlyName` set) must work through the real
+    /// `update_schema` dispatch, not just `handle_update_schema` directly.
+    #[tokio::test]
+    async fn update_schema_rename_fields_friendly_name_only_relabel_end_to_end() {
+        use nodespace_core::db::SqliteStore;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let svc = Arc::new(NodeService::new(&mut store).await.unwrap());
+
+        let executor = GraphToolExecutor {
+            node_service: Some(svc),
+            embedding_service: Arc::new(RwLock::new(None)),
+            inference_engine: None,
+        };
+
+        let create = executor
+            .execute(
+                "create_schema",
+                json!({
+                    "name": "Ticket",
+                    "fields": [ { "name": "priority", "type": "text" } ]
+                }),
+            )
+            .await
+            .expect("execute should not return a ToolError");
+        assert!(!create.is_error, "got: {}", create.result);
+        let schema_id = create.result["schemaId"]
+            .as_str()
+            .expect("schemaId present")
+            .to_string();
+
+        let update = executor
+            .execute(
+                "update_schema",
+                json!({
+                    "schema_id": schema_id,
+                    "rename_fields": [
+                        { "from": "priority", "to": "priority", "friendlyName": "Urgency" }
+                    ]
+                }),
+            )
+            .await
+            .expect("execute should not return a ToolError");
+
+        assert!(
+            !update.is_error,
+            "a display-only relabel through the real dispatch path must succeed: {}",
+            update.result
+        );
+        assert_eq!(update.result["fieldsRenamed"], json!(1));
+    }
+
     // -- Scope passthrough test (acceptance criterion) --
 
     /// Verifies that scope="conversations" is correctly parsed from JSON params
@@ -5693,7 +5844,8 @@ mod tests {
     /// object plus prose.
     #[test]
     fn with_declared_field_values_declares_typed_sub_properties() {
-        let tool = with_declared_field_values(Tool::CreateNode.definition(), &[ticket_descriptor()]);
+        let tool =
+            with_declared_field_values(Tool::CreateNode.definition(), &[ticket_descriptor()]);
         let props = &tool.parameters_schema["properties"]["field_values"]["properties"];
         assert_eq!(props["status"]["type"], "string");
         assert_eq!(
@@ -5710,7 +5862,8 @@ mod tests {
     /// schema data itself.
     #[test]
     fn with_declared_field_values_generalises_to_an_unseen_type() {
-        let tool = with_declared_field_values(Tool::UpdateNode.definition(), &[release_descriptor()]);
+        let tool =
+            with_declared_field_values(Tool::UpdateNode.definition(), &[release_descriptor()]);
         let props = &tool.parameters_schema["properties"]["field_values"]["properties"];
         assert_eq!(props["status"]["enum"], json!(["cut", "shipped"]));
         assert_eq!(props["build"]["type"], "string");
@@ -5757,7 +5910,8 @@ mod tests {
     #[test]
     fn with_declared_field_values_ignores_a_tool_without_the_parameter() {
         let original = Tool::CreateSchema.definition();
-        let unchanged = with_declared_field_values(Tool::CreateSchema.definition(), &[ticket_descriptor()]);
+        let unchanged =
+            with_declared_field_values(Tool::CreateSchema.definition(), &[ticket_descriptor()]);
         assert_eq!(unchanged.parameters_schema, original.parameters_schema);
     }
 
@@ -5814,23 +5968,27 @@ mod tests {
         let numeric_amount = nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
             type_id: "a".to_string(),
             name: None,
-            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
-                name: "amount".to_string(),
-                field_type: "number".to_string(),
-                enum_values: vec![],
-                required: false,
-            }],
+            fields: vec![
+                nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                    name: "amount".to_string(),
+                    field_type: "number".to_string(),
+                    enum_values: vec![],
+                    required: false,
+                },
+            ],
             title_template: None,
         };
         let text_amount = nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
             type_id: "b".to_string(),
             name: None,
-            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
-                name: "amount".to_string(),
-                field_type: "text".to_string(),
-                enum_values: vec![],
-                required: false,
-            }],
+            fields: vec![
+                nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                    name: "amount".to_string(),
+                    field_type: "text".to_string(),
+                    enum_values: vec![],
+                    required: false,
+                },
+            ],
             title_template: None,
         };
         let properties = declared_field_values_properties(&[numeric_amount, text_amount]);
@@ -5852,28 +6010,38 @@ mod tests {
     /// union must not depend on which descriptor is processed first.
     #[test]
     fn declared_field_values_properties_clears_stale_enum_on_type_conflict() {
-        let enum_priority = |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
-            type_id: type_id.to_string(),
-            name: None,
-            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
-                name: "priority".to_string(),
-                field_type: "enum".to_string(),
-                enum_values: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
-                required: false,
-            }],
-            title_template: None,
-        };
-        let text_priority = |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
-            type_id: type_id.to_string(),
-            name: None,
-            fields: vec![nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
-                name: "priority".to_string(),
-                field_type: "text".to_string(),
-                enum_values: vec![],
-                required: false,
-            }],
-            title_template: None,
-        };
+        let enum_priority =
+            |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+                type_id: type_id.to_string(),
+                name: None,
+                fields: vec![
+                    nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                        name: "priority".to_string(),
+                        field_type: "enum".to_string(),
+                        enum_values: vec![
+                            "low".to_string(),
+                            "medium".to_string(),
+                            "high".to_string(),
+                        ],
+                        required: false,
+                    },
+                ],
+                title_template: None,
+            };
+        let text_priority =
+            |type_id: &str| nodespace_core::ops::entity_types_block::EntityTypeDescriptor {
+                type_id: type_id.to_string(),
+                name: None,
+                fields: vec![
+                    nodespace_core::ops::entity_types_block::EntityFieldDescriptor {
+                        name: "priority".to_string(),
+                        field_type: "text".to_string(),
+                        enum_values: vec![],
+                        required: false,
+                    },
+                ],
+                title_template: None,
+            };
 
         for descriptors in [
             vec![enum_priority("a"), text_priority("b")],

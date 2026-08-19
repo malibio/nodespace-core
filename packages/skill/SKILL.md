@@ -355,6 +355,8 @@ If `create` rejects the schema with a validation error (not "already exists") �
 
 **Editing:** to add, remove, or rename a field, or change a relationship on an existing schema, use `schema update` with only the fields that need changing (`add_fields`/`remove_fields`/`rename_fields`, or an updated `description`/`title_template`). Don't re-create the whole schema for a small change.
 
+**Rename vs. relabel:** `rename_fields` does two different things depending on whether `from`/`to` differ. To change a field's storage key (breaking for `title_template`/query filters, migrates all existing node data), set `from` and `to` to different values. To change only its display label (`friendlyName`) without touching storage or data, set `from` and `to` to the SAME value and pass `friendlyName`. A user asking to relabel what a field is called on screen almost always means the display label, not a storage rename.
+
 **Schema fields:** define only type-specific fields — don't add a `name` or `title` field; every node already has a built-in content/title field. Exception: if `title_template` uses a `{name}` placeholder, `name` must be defined as a field (any placeholder in `title_template` must have a matching field).
 
 **Field source:** derive every field from what the user's own request describes wanting to track — never from another schema shown in the entity-types context. That listing exists so you don't recreate a type that already exists; it is not a shape to copy fields from for a new, unrelated type.

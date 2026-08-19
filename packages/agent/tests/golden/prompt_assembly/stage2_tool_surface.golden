@@ -294,7 +294,11 @@ parameters_schema:
             "type": "array"
           },
           "description": {
-            "description": "Field description",
+            "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example) for whoever later has to understand it, not a short label (that's 'friendlyName'). Prefer more detail over less — there is no cost to a longer description.",
+            "type": "string"
+          },
+          "friendlyName": {
+            "description": "The display label shown to the user in every UI surface (table/kanban headers, property forms). Optional — omit it and one is derived from 'name' automatically (e.g. 'due_date' -> 'Due Date'). Set it explicitly only when the derived label would read wrong, e.g. an abbreviation ('poc' -> 'Point of Contact') or a name that isn't just underscores-for-spaces.",
             "type": "string"
           },
           "indexed": {
@@ -302,7 +306,7 @@ parameters_schema:
             "type": "boolean"
           },
           "name": {
-            "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date')",
+            "description": "Field name, lowercase snake_case (e.g. 'status', 'due_date') — the storage key: used in titleTemplate tokens, query filters, and every other call site that references this field. Not shown to the user; see 'friendlyName' for that.",
             "type": "string"
           },
           "required": {
@@ -390,7 +394,7 @@ parameters_schema:
 }
 
 ### update_schema
-description: Modify an existing schema type: add/remove/rename fields, add/remove relationships, update description or title_template. Use rename_fields to safely rename a field — it migrates all existing node property data to the new key and updates the schema definition.
+description: Modify an existing schema type: add/remove/rename fields, relabel a field's display name without renaming it, add/remove relationships, update description or title_template. Use rename_fields to rename a field's storage key — it migrates all existing node property data to the new key and updates the schema definition; the same rename_fields list also handles a display-only relabel (see its own description for the difference).
 parameters_schema:
 {
   "properties": {
@@ -414,9 +418,15 @@ parameters_schema:
             "type": "array"
           },
           "description": {
+            "description": "What this field means and how it's used — real semantic content (purpose, expected values, an example), not a short label (that's 'friendlyName'). Prefer more detail over less.",
+            "type": "string"
+          },
+          "friendlyName": {
+            "description": "The display label shown to the user. Optional — omit it and one is derived from 'name' automatically. Set it explicitly only when the derived label would read wrong.",
             "type": "string"
           },
           "name": {
+            "description": "Field name, lowercase snake_case — the storage key. Not shown to the user; see 'friendlyName' for that.",
             "type": "string"
           },
           "type": {
@@ -476,7 +486,7 @@ parameters_schema:
       "type": "array"
     },
     "description": {
-      "description": "New description (optional)",
+      "description": "New description of the SCHEMA TYPE ITSELF, not of any one field — a summary of what this entity type represents. Optional.",
       "type": "string"
     },
     "remove_fields": {
@@ -494,16 +504,20 @@ parameters_schema:
       "type": "array"
     },
     "rename_fields": {
-      "description": "Fields to rename. Each entry rekeys property data on ALL existing nodes of this schema type and updates the schema definition. Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
+      "description": "Two different operations share this list, told apart by whether 'from' and 'to' differ. RENAME THE FIELD ITSELF (identity rename): 'from' != 'to' — rekeys property data on ALL existing nodes of this schema type and updates the schema definition. Breaking for any title_template/query filter/other reference to the old name. RELABEL WITHOUT RENAMING (display-only): 'from' == 'to', with 'friendlyName' set — changes only the display label shown to the user; touches no node data and is not breaking. The two can combine in one entry (a rename that also sets a new label). Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.",
       "items": {
         "additionalProperties": false,
         "properties": {
+          "friendlyName": {
+            "description": "New display label for this field. Optional when 'from' != 'to' (an identity rename that also wants an updated label). REQUIRED when 'from' == 'to' — that combination with no friendlyName changes nothing and is rejected.",
+            "type": "string"
+          },
           "from": {
             "description": "Current field name",
             "type": "string"
           },
           "to": {
-            "description": "New field name",
+            "description": "New field name — pass the SAME value as 'from' for a display-only relabel that changes friendlyName without renaming anything or migrating data.",
             "type": "string"
           }
         },

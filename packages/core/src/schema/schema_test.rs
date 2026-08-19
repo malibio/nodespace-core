@@ -588,6 +588,400 @@ async fn test_rename_field_migrates_node_data() {
     );
 }
 
+#[tokio::test]
+async fn test_rename_field_friendly_name_only_updates_label_without_migrating_data() {
+    use crate::services::CreateNodeParams;
+
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "DisplayRenameTest",
+            "fields": [
+                { "name": "priority", "type": "string", "protection": "user", "indexed": false, "friendlyName": "Priority" }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing")
+        .to_string();
+
+    let node_params = CreateNodeParams {
+        id: None,
+        node_type: schema_id.clone(),
+        content: "test node".to_string(),
+        parent_id: None,
+        position: crate::services::InsertPositionOwned::End,
+        properties: serde_json::json!({
+            &schema_id: { "priority": "high" }
+        }),
+    };
+    let node_id = svc
+        .create_node_with_parent(node_params)
+        .await
+        .expect("create_node_with_parent failed");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "priority", "to": "priority", "friendlyName": "Urgency Level" }]
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "display-only rename should succeed: {:?}",
+        result
+    );
+    assert_eq!(result.unwrap()["fieldsRenamed"], serde_json::json!(1));
+
+    // The schema definition's label changed, but the storage key did not.
+    let schema = svc
+        .get_schema_node(&schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema not found");
+    let field = schema
+        .get_field("priority")
+        .expect("field 'priority' (the name) must still exist — only the label changed");
+    assert_eq!(field.friendly_name, "Urgency Level");
+    assert_eq!(field.name, "priority", "name must be unchanged");
+
+    // No node property data was touched.
+    let node = svc
+        .get_node(&node_id)
+        .await
+        .expect("get_node failed")
+        .expect("node not found");
+    let ns_props = node
+        .properties
+        .get(&schema_id)
+        .expect("namespaced properties should still exist");
+    assert_eq!(
+        ns_props.get("priority").and_then(|v| v.as_str()),
+        Some("high"),
+        "node property data must be completely untouched by a display-only rename"
+    );
+}
+
+/// `SchemaField::friendly_name` is documented as always populated in
+/// storage, with every reader assuming so unconditionally. An explicit
+/// empty-string `friendlyName` on a display-only rename must never persist
+/// blank — it must fall back to the same derived label
+/// `apply_friendly_name_defaults` would produce for an omitted value on
+/// create/`add_fields`, not skip validation just because it arrived through
+/// a different code path.
+#[tokio::test]
+async fn test_rename_field_friendly_name_empty_string_derives_a_label_instead_of_persisting_blank()
+{
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "BlankLabelTest",
+            "fields": [
+                { "name": "due_date", "type": "date", "protection": "user", "indexed": false, "friendlyName": "Original Label" }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "due_date", "to": "due_date", "friendlyName": "" }]
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "an empty-string friendlyName must not be rejected outright — it derives a label \
+         instead: {:?}",
+        result
+    );
+
+    let schema = svc
+        .get_schema_node(schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema not found");
+    let field = schema.get_field("due_date").expect("field must exist");
+    assert!(
+        !field.friendly_name.trim().is_empty(),
+        "friendly_name must never be persisted blank"
+    );
+    assert_eq!(
+        field.friendly_name, "Due date",
+        "an empty-string friendlyName derives the same label an omitted one would"
+    );
+}
+
+/// Same guard, exercised with a whitespace-only value — `"   "` is not
+/// caught by `Option::is_none()` any more than `""` is, and both must be
+/// treated identically (derive, don't persist).
+#[tokio::test]
+async fn test_rename_field_friendly_name_whitespace_only_derives_a_label_instead_of_persisting_blank(
+) {
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "WhitespaceLabelTest",
+            "fields": [
+                { "name": "due_date", "type": "date", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "due_date", "to": "due_date", "friendlyName": "   " }]
+        }),
+    )
+    .await;
+    assert!(result.is_ok(), "got: {:?}", result);
+
+    let schema = svc
+        .get_schema_node(schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema not found");
+    let field = schema.get_field("due_date").expect("field must exist");
+    assert!(
+        !field.friendly_name.trim().is_empty(),
+        "friendly_name must never be persisted as whitespace-only"
+    );
+}
+
+/// A derived label from an empty-string relabel must still disambiguate
+/// against a sibling field's existing label, exactly like
+/// `apply_friendly_name_defaults` does for an omitted value on create.
+#[tokio::test]
+async fn test_rename_field_friendly_name_empty_string_disambiguates_against_a_sibling_field() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // "due_date" derives to "Due date"; pre-seed a second field that already
+    // holds that exact label so the fallback must disambiguate, not collide.
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "CollidingLabelTest",
+            "fields": [
+                { "name": "due_date", "type": "date", "protection": "user", "indexed": false, "friendlyName": "Something Else" },
+                { "name": "custom:due_date", "type": "date", "protection": "user", "indexed": false, "friendlyName": "Due date" }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "due_date", "to": "due_date", "friendlyName": "" }]
+        }),
+    )
+    .await;
+    assert!(result.is_ok(), "got: {:?}", result);
+
+    let schema = svc
+        .get_schema_node(schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema not found");
+    let field = schema.get_field("due_date").expect("field must exist");
+    assert_ne!(
+        field.friendly_name, "Due date",
+        "the derived label collides with the sibling field's label and must be disambiguated"
+    );
+    assert!(
+        field.friendly_name.starts_with("Due date"),
+        "expected a disambiguated form of the derived label, got: {:?}",
+        field.friendly_name
+    );
+}
+
+#[tokio::test]
+async fn test_rename_field_from_equals_to_with_no_friendly_name_is_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "NoOpRenameTest",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "status", "to": "status" }]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "from == to with no friendly_name changes nothing and must be rejected"
+    );
+}
+
+#[tokio::test]
+async fn test_rename_field_friendly_name_only_field_not_found_returns_error() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "DisplayRenameMissingFieldTest",
+            "fields": [
+                { "name": "existing", "type": "string", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "does_not_exist", "to": "does_not_exist", "friendlyName": "Label" }]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "a display-only rename of a nonexistent field must fail"
+    );
+}
+
+#[tokio::test]
+async fn test_rename_field_combined_identity_and_friendly_name_rename() {
+    use crate::services::CreateNodeParams;
+
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "CombinedRenameTest",
+            "fields": [
+                { "name": "old_name", "type": "string", "protection": "user", "indexed": false, "friendlyName": "Old Name" }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing")
+        .to_string();
+
+    // A real node instance, so the combined path's data-migration half (not
+    // just the schema-definition half) is actually exercised.
+    let node_params = CreateNodeParams {
+        id: None,
+        node_type: schema_id.clone(),
+        content: "test node".to_string(),
+        parent_id: None,
+        position: crate::services::InsertPositionOwned::End,
+        properties: serde_json::json!({
+            &schema_id: { "old_name": "my_value" }
+        }),
+    };
+    let node_id = svc
+        .create_node_with_parent(node_params)
+        .await
+        .expect("create_node_with_parent failed");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "old_name", "to": "new_name", "friendlyName": "Brand New Label" }]
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "a combined identity + display rename should succeed in one entry: {:?}",
+        result
+    );
+
+    let schema = svc
+        .get_schema_node(&schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema not found");
+    let field = schema
+        .get_field("new_name")
+        .expect("field must exist under its new name");
+    assert_eq!(field.friendly_name, "Brand New Label");
+    assert!(
+        schema.get_field("old_name").is_none(),
+        "old_name must no longer exist"
+    );
+
+    // The identity-rename half of the combined path must migrate node data
+    // exactly like a plain rename does — the friendly_name update riding
+    // along in the same entry must not short-circuit it.
+    let node = svc
+        .get_node(&node_id)
+        .await
+        .expect("get_node failed")
+        .expect("node not found");
+    let ns_props = node
+        .properties
+        .get(&schema_id)
+        .expect("namespaced properties should exist after the combined rename");
+    assert_eq!(
+        ns_props.get("new_name").and_then(|v| v.as_str()),
+        Some("my_value"),
+        "node data must be migrated to the new key by the combined rename+relabel path"
+    );
+    assert!(
+        ns_props.get("old_name").is_none(),
+        "old_name must be removed from node properties after the combined rename"
+    );
+}
+
 // ============================================================================
 // Description subtree tests
 // ============================================================================
