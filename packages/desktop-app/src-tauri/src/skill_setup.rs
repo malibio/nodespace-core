@@ -27,6 +27,27 @@
 //! `error` on the returned `SkillSetupResult` is all they need — emitting the
 //! event there too would show the same failure twice (once inline, once as a
 //! toast).
+//!
+//! # Coexistence with the skill-triggered CLI/GUI install path
+//!
+//! `nodespace-website`'s `install.sh` (the `curl -fsSL https://nodespace.ai/
+//! install.sh | sh` one-liner, also invoked non-interactively via `--no-gui`
+//! from the skill's own failure-recovery guidance) installs the `nodespace`/
+//! `nodespaced` **binaries** — it never touches SKILL.md or an agent's skill
+//! directory, so it cannot race or clobber what this module installs. The
+//! two installers share exactly one piece of state end to end:
+//! `~/.nodespace/setup.json`'s `skill_installed` flag, read by
+//! [`install_skill`]'s idempotency guard above. `install.sh` does not write
+//! this file, so a machine that got its CLI via `install.sh` and later
+//! launches the GUI for the first time still gets exactly one real skill
+//! install here — not a second, silent one racing a manual edit the user
+//! made to their installed SKILL.md.
+//!
+//! If a future change has `install.sh`'s skill-triggered entry point also
+//! install skill files (today it does not), it must set `skill_installed:
+//! true` in this same file/schema on success so this module's early-return
+//! guard in [`install_skill`] correctly no-ops instead of re-running the
+//! bundled installer over a skill the user already set up manually.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -341,7 +362,8 @@ pub(crate) fn cli_warning(cli_on_path: bool) -> Option<String> {
     }
     Some(
         "The `nodespace` CLI was not found on $PATH. \
-         Install it via the NodeSpace DMG or `cargo install nodespace-cli`, \
+         Install it with `curl -fsSL https://nodespace.ai/install.sh | sh`, \
+         via the NodeSpace DMG, or `brew install --cask nodespaceai/nodespace/nodespace`, \
          then restart your terminal."
             .to_string(),
     )
@@ -350,6 +372,26 @@ pub(crate) fn cli_warning(cli_on_path: bool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI-missing warning must point at the actual current install
+    /// path (`install.sh`), not just the stale `cargo install`/DMG-only
+    /// guidance — this is the message a user sees in the GUI when the CLI
+    /// isn't on $PATH, and it must not drift from what `SKILL.md`'s
+    /// failure-recovery table and `packages/skill`'s installer warning tell
+    /// an agent to do for the exact same underlying problem.
+    #[test]
+    fn cli_warning_mentions_install_script() {
+        let warning = cli_warning(false).expect("cli_warning(false) must return Some");
+        assert!(
+            warning.contains("nodespace.ai/install.sh"),
+            "expected the install.sh one-liner in the warning, got: {warning}"
+        );
+    }
+
+    #[test]
+    fn cli_warning_is_none_when_cli_on_path() {
+        assert!(cli_warning(true).is_none());
+    }
 
     /// `resolve_installer_path` must never fall through to `npx`/`npm` (the
     /// bug this issue fixes) — it either finds the bundled Tauri resource or
