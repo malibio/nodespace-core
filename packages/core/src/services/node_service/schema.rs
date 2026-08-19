@@ -626,6 +626,77 @@ impl NodeService {
         Ok(affected)
     }
 
+    /// Update a field's `friendly_name` in place, without touching `name` or
+    /// any node's property data.
+    ///
+    /// The display-only counterpart to [`rename_schema_field`](Self::rename_schema_field),
+    /// whose own doc comment names this the path a caller reaches for when it
+    /// wants an updated label without renaming the storage key. No node
+    /// property values are read or written — `friendly_name` lives only in
+    /// the schema definition itself, so this is a single schema-node update
+    /// with no migration step.
+    pub async fn update_schema_field_friendly_name(
+        &self,
+        type_id: &str,
+        field_name: &str,
+        friendly_name: &str,
+    ) -> Result<(), NodeServiceError> {
+        let schema = self
+            .get_schema_node(type_id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(type_id))?;
+
+        if !schema.fields.iter().any(|f| f.name == field_name) {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Field '{}' not found in schema '{}'",
+                field_name, type_id
+            )));
+        }
+
+        let updated_fields: Vec<crate::models::schema::SchemaField> = schema
+            .fields
+            .into_iter()
+            .map(|mut f| {
+                if f.name == field_name {
+                    f.friendly_name = friendly_name.to_string();
+                }
+                f
+            })
+            .collect();
+
+        // Same persistence shape as `rename_schema_field`'s Step 2 — fields
+        // only, declarations live in the relationship table and are untouched.
+        let mut properties = serde_json::json!({
+            "isCore": schema.is_core,
+            "schemaVersion": schema.schema_version,
+            "fields": updated_fields,
+        });
+        if let Some(ref t) = schema.title_template {
+            properties["titleTemplate"] = serde_json::Value::String(t.clone());
+        }
+        if let Some(ref t) = schema.properties_header_summary_template {
+            properties["propertiesHeaderSummaryTemplate"] = serde_json::Value::String(t.clone());
+        }
+
+        let update = crate::models::NodeUpdate {
+            properties: Some(properties),
+            ..Default::default()
+        };
+
+        self.update_node_unchecked(type_id, update)
+            .await
+            .map_err(|e| {
+                NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                    context: format!(
+                        "Failed to update friendly_name for field '{}' on type '{}': {}",
+                        field_name, type_id, e
+                    ),
+                })
+            })?;
+
+        Ok(())
+    }
+
     /// Replace a schema's relationship declarations — the write path for
     /// declaration edges. `create_schema`/`update_schema` route through here;
     /// core-schema seeding (which runs before a `NodeService` exists) calls

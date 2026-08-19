@@ -588,6 +588,203 @@ async fn test_rename_field_migrates_node_data() {
     );
 }
 
+#[tokio::test]
+async fn test_rename_field_friendly_name_only_updates_label_without_migrating_data() {
+    use crate::services::CreateNodeParams;
+
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "DisplayRenameTest",
+            "fields": [
+                { "name": "priority", "type": "string", "protection": "user", "indexed": false, "friendlyName": "Priority" }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing")
+        .to_string();
+
+    let node_params = CreateNodeParams {
+        id: None,
+        node_type: schema_id.clone(),
+        content: "test node".to_string(),
+        parent_id: None,
+        position: crate::services::InsertPositionOwned::End,
+        properties: serde_json::json!({
+            &schema_id: { "priority": "high" }
+        }),
+    };
+    let node_id = svc
+        .create_node_with_parent(node_params)
+        .await
+        .expect("create_node_with_parent failed");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "priority", "to": "priority", "friendlyName": "Urgency Level" }]
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "display-only rename should succeed: {:?}",
+        result
+    );
+    assert_eq!(result.unwrap()["fieldsRenamed"], serde_json::json!(1));
+
+    // The schema definition's label changed, but the storage key did not.
+    let schema = svc
+        .get_schema_node(&schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema not found");
+    let field = schema
+        .get_field("priority")
+        .expect("field 'priority' (the name) must still exist — only the label changed");
+    assert_eq!(field.friendly_name, "Urgency Level");
+    assert_eq!(field.name, "priority", "name must be unchanged");
+
+    // No node property data was touched.
+    let node = svc
+        .get_node(&node_id)
+        .await
+        .expect("get_node failed")
+        .expect("node not found");
+    let ns_props = node
+        .properties
+        .get(&schema_id)
+        .expect("namespaced properties should still exist");
+    assert_eq!(
+        ns_props.get("priority").and_then(|v| v.as_str()),
+        Some("high"),
+        "node property data must be completely untouched by a display-only rename"
+    );
+}
+
+#[tokio::test]
+async fn test_rename_field_from_equals_to_with_no_friendly_name_is_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "NoOpRenameTest",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "status", "to": "status" }]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "from == to with no friendly_name changes nothing and must be rejected"
+    );
+}
+
+#[tokio::test]
+async fn test_rename_field_friendly_name_only_field_not_found_returns_error() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "DisplayRenameMissingFieldTest",
+            "fields": [
+                { "name": "existing", "type": "string", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "does_not_exist", "to": "does_not_exist", "friendlyName": "Label" }]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "a display-only rename of a nonexistent field must fail"
+    );
+}
+
+#[tokio::test]
+async fn test_rename_field_combined_identity_and_friendly_name_rename() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let create_result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "CombinedRenameTest",
+            "fields": [
+                { "name": "old_name", "type": "string", "protection": "user", "indexed": false, "friendlyName": "Old Name" }
+            ]
+        }),
+    )
+    .await
+    .expect("Schema creation failed");
+    let schema_id = create_result["schemaId"]
+        .as_str()
+        .expect("schemaId missing");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "rename_fields": [{ "from": "old_name", "to": "new_name", "friendlyName": "Brand New Label" }]
+        }),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "a combined identity + display rename should succeed in one entry: {:?}",
+        result
+    );
+
+    let schema = svc
+        .get_schema_node(schema_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema not found");
+    let field = schema
+        .get_field("new_name")
+        .expect("field must exist under its new name");
+    assert_eq!(field.friendly_name, "Brand New Label");
+    assert!(
+        schema.get_field("old_name").is_none(),
+        "old_name must no longer exist"
+    );
+}
+
 // ============================================================================
 // Description subtree tests
 // ============================================================================

@@ -69,6 +69,12 @@ pub const EDIT_DONT_RECREATE: SchemaRule = SchemaRule {
     prose: "**Editing:** to add, remove, or rename a field, or change a relationship on an existing schema, use `schema update` with only the fields that need changing (`add_fields`/`remove_fields`/`rename_fields`, or an updated `description`/`title_template`). Don't re-create the whole schema for a small change.",
 };
 
+pub const RENAME_VS_RELABEL: SchemaRule = SchemaRule {
+    id: "rename-vs-relabel",
+    imperative: "RENAME VS RELABEL: rename_fields does two different things depending on 'from'/'to'. To change what a field is called FOR STORAGE (its name — breaking for title_template/query filters, migrates all existing node data), set 'from' and 'to' to different values. To change only its DISPLAY LABEL (friendlyName) without touching storage or data, set 'from' and 'to' to the SAME value and pass 'friendlyName'. A user asking to call a field something else on screen almost always means the display label, not a storage rename — do not conflate the two.",
+    prose: "**Rename vs. relabel:** `rename_fields` does two different things depending on whether `from`/`to` differ. To change a field's storage key (breaking for `title_template`/query filters, migrates all existing node data), set `from` and `to` to different values. To change only its display label (`friendlyName`) without touching storage or data, set `from` and `to` to the SAME value and pass `friendlyName`. A user asking to relabel what a field is called on screen almost always means the display label, not a storage rename.",
+};
+
 pub const NO_NAME_TITLE_FIELD: SchemaRule = SchemaRule {
     id: "no-name-title-field",
     imperative: "Do NOT add a 'name' or 'title' field — every node already has a built-in content/title field.",
@@ -132,6 +138,7 @@ pub const SCHEMA_RULES: &[SchemaRule] = &[
     SCHEMA_ALREADY_EXISTS,
     SCHEMA_VALIDATION_ERROR_RETRY,
     EDIT_DONT_RECREATE,
+    RENAME_VS_RELABEL,
     NO_NAME_TITLE_FIELD,
     FIELDS_FROM_REQUEST_ONLY,
     NAME_PLACEHOLDER_EXCEPTION,

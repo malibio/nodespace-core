@@ -20,7 +20,7 @@
 use crate::skill_rules::{
     AMBIGUITY_CLARIFY, BULK_IMPORT_NO_FOLLOWUP_SEARCH, EDIT_DONT_RECREATE, FIND_THEN_ACT,
     ONE_SCHEMA_PER_REQUEST, ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD,
-    SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY, SINGLE_ITEM_PER_CALL,
+    RENAME_VS_RELABEL, SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY, SINGLE_ITEM_PER_CALL,
     SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
     TITLE_TEMPLATE_PLACEHOLDERS, UNIQUE_FIELD_FLAGS,
 };
@@ -63,6 +63,8 @@ CALL create_schema NOW: your next action is the tool call, not planning text.
 
 {edit_dont_recreate}
 
+{rename_vs_relabel}
+
 {relationship_vs_field} {target_type_must_exist}
 
 {title_template_placeholders}
@@ -72,6 +74,7 @@ CALL create_schema NOW: your next action is the tool call, not planning text.
         schema_already_exists = SCHEMA_ALREADY_EXISTS.imperative,
         schema_validation_error_retry = SCHEMA_VALIDATION_ERROR_RETRY.imperative,
         edit_dont_recreate = EDIT_DONT_RECREATE.imperative,
+        rename_vs_relabel = RENAME_VS_RELABEL.imperative,
         relationship_vs_field = RELATIONSHIP_VS_FIELD.imperative,
         target_type_must_exist = TARGET_TYPE_MUST_EXIST.imperative,
         title_template_placeholders = TITLE_TEMPLATE_PLACEHOLDERS.imperative,

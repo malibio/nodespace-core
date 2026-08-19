@@ -36,6 +36,8 @@ VALIDATION ERROR: If create_schema returns an error other than "already exists" 
 
 EDITING A SCHEMA — call update_schema: When the user wants to add a field, remove a field, rename a field, or change a relationship on an existing schema, call update_schema with the schema_id and only the fields that need changing. Do NOT re-create the whole schema. Use add_fields, remove_fields, rename_fields, or update the description/title_template as needed.
 
+RENAME VS RELABEL: rename_fields does two different things depending on 'from'/'to'. To change what a field is called FOR STORAGE (its name — breaking for title_template/query filters, migrates all existing node data), set 'from' and 'to' to different values. To change only its DISPLAY LABEL (friendlyName) without touching storage or data, set 'from' and 'to' to the SAME value and pass 'friendlyName'. A user asking to call a field something else on screen almost always means the display label, not a storage rename — do not conflate the two.
+
 RELATIONSHIPS: Use relationships (not fields) when a field references another node type. The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:
 
 ADR supersedes adr (one): `{"name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one"}`
