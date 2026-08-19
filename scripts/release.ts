@@ -86,8 +86,7 @@ function generateReleaseNotes(version: string): string {
 
 | Platform | File | Description |
 |----------|------|-------------|
-| macOS (Apple Silicon) | \`NodeSpace_${v}_aarch64.dmg\` | For M1/M2/M3 Macs |
-| macOS (Intel) | \`NodeSpace_${v}_x64.dmg\` | For Intel Macs |
+| macOS (Apple Silicon) | \`NodeSpace_${v}_aarch64.dmg\` | For M1/M2/M3 Macs -- the only supported macOS target |
 | Windows | \`NodeSpace_${v}_x64-setup.exe\` | Windows installer |
 | Windows | \`NodeSpace_${v}_x64.msi\` | Windows MSI package |
 
@@ -115,9 +114,6 @@ function generateReleaseNotes(version: string): string {
 - **SurrealDB 3.x upgrade**
 - Fixed Metal GPU crashes on app quit (macOS)
 - Fixed CREATE operation race condition on rapid typing
-
-#### Intel Mac Support
-- Release builds now include macOS x86_64 (Intel) DMG
 
 #### Backlinks
 - Immediate backlinks reactivity when creating @mentions
@@ -166,7 +162,7 @@ async function createRelease(config: ReleaseConfig): Promise<void> {
 
   if (!config.draft) {
     console.log("\n🔨 GitHub Actions workflow triggered!");
-    console.log("   Builds will run for: macOS (ARM + Intel), Windows, Linux");
+    console.log("   Builds will run for: macOS (Apple Silicon), Windows, Linux");
     console.log("\n📊 Watch progress:");
     console.log("   bun run release:watch");
     console.log(`   Or visit: https://github.com/${OWNER}/${REPO}/actions`);
