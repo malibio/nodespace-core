@@ -66,10 +66,12 @@ jobs:
         # and whoever triages the filed issue can't tell which happened
         # without opening the raw run log.
         #
-        # The pipe is only safe because Actions runs `run:` under
-        # `bash -e -o pipefail`: without pipefail, tee's exit code would win
-        # and a failing suite would report GREEN. Do not add a `shell:` here
-        # that drops pipefail.
+        # `shell: bash` is REQUIRED, not decoration. With no `shell:` key Actions
+        # runs `run:` as `bash -e {0}` — `-e` only. pipefail is opt-in, applied
+        # only when `shell: bash` is set explicitly. Without it tee's exit code
+        # wins, a failing suite reports GREEN, `if: failure()` never fires, and
+        # this workflow silently stops reporting the thing it exists to report.
+        shell: bash
         run: bun run test:webkit 2>&1 | tee webkit-output.txt
 
       # A nightly that fails silently is a nightly nobody reads: this suite was
@@ -92,7 +94,7 @@ jobs:
             echo
             echo "Output:"
             echo '```'
-            tail -n 40 webkit-output.txt 2>/dev/null || echo "(no output captured)"
+            tail -n 100 webkit-output.txt 2>/dev/null || echo "(no output captured)"
             echo '```'
             echo
             echo "A \"Failed Suites\" line above is a real test failure. Anything else"
