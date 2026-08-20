@@ -231,7 +231,7 @@ export function renderFormula(version: string, digests: FormulaDigests): string 
   # the release, never copied from SHA256SUMS.
   on_macos do
     on_arm do
-      url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/nodespace-aarch64-apple-darwin"
+      url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/${digests.macosArm.cli.fileName}"
       sha256 "${digests.macosArm.cli.sha256}"
     end
     on_intel do
@@ -243,11 +243,11 @@ export function renderFormula(version: string, digests: FormulaDigests): string 
 
   on_linux do
     on_arm do
-      url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/nodespace-aarch64-unknown-linux-gnu"
+      url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/${digests.linuxArm.cli.fileName}"
       sha256 "${digests.linuxArm.cli.sha256}"
     end
     on_intel do
-      url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/nodespace-x86_64-unknown-linux-gnu"
+      url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/${digests.linuxX86.cli.fileName}"
       sha256 "${digests.linuxX86.cli.sha256}"
     end
   end
@@ -283,17 +283,17 @@ export function renderFormula(version: string, digests: FormulaDigests): string 
   resource "nodespaced" do
     on_macos do
       on_arm do
-        url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/nodespaced-aarch64-apple-darwin"
+        url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/${digests.macosArm.daemon.fileName}"
         sha256 "${digests.macosArm.daemon.sha256}"
       end
     end
     on_linux do
       on_arm do
-        url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/nodespaced-aarch64-unknown-linux-gnu"
+        url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/${digests.linuxArm.daemon.fileName}"
         sha256 "${digests.linuxArm.daemon.sha256}"
       end
       on_intel do
-        url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/nodespaced-x86_64-unknown-linux-gnu"
+        url "https://github.com/NodeSpaceAI/nodespace-core/releases/download/v#{release_version}/${digests.linuxX86.daemon.fileName}"
         sha256 "${digests.linuxX86.daemon.sha256}"
       end
     end

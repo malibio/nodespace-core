@@ -573,7 +573,7 @@ jobs:
   sync-homebrew-formula:
     name: Sync Homebrew tap nodespace-cli formula
     runs-on: ubuntu-22.04
-    needs: build-headless
+    needs: [build-headless, sync-homebrew-cask]
     # A sibling of sync-homebrew-cask above, for the nodespace-cli formula
     # rather than the nodespace cask (see update-homebrew-formula.ts's own
     # header for why it's a separate script, not a branch inside
@@ -591,6 +591,19 @@ jobs:
     # missing optional architecture), every one of this formula's 3
     # targets is required, so it hard-fails (exit 1, feeding notify-failure
     # below) if any of its 6 assets is missing.
+    #
+    # sync-homebrew-cask is also in `needs` purely for SEQUENCING, the same
+    # way build-tauri is in that job's own `needs` for sequencing without
+    # gating on its result (see that job's comment): this job and
+    # sync-homebrew-cask both push to homebrew-nodespace's main branch, and
+    # before this job existed there was only ever one writer per release.
+    # Running them concurrently would let either `git push` lose a
+    # non-fast-forward race against the other with no retry (see
+    # homebrew-tap-push.ts) -- ordering this job after sync-homebrew-cask
+    # finishes (success OR failure, hence `always()` below rather than
+    # gating on its result) removes that race entirely: this job's own
+    # fresh `git clone` always sees whatever sync-homebrew-cask already
+    # pushed, if anything.
     if: >-
       always() &&
       github.event_name == 'release' &&
