@@ -467,10 +467,18 @@ export class PluginRegistry {
    *
    * `hasTitleTemplate` comes from `findSlashCommand`'s flag — the same one `node-row.svelte`
    * uses for the identical purpose when rendering a custom-entity node inline.
+   *
+   * @param formatContent - Optional reformatting (e.g. `stripMarkdown`) applied ONLY when the
+   * resolved value came from `content` — never on a title_template-computed title, which is a
+   * property value assembled by the template, not raw markdown/text to reformat. A caller
+   * that unconditionally wraps this method's return value in its own formatter instead would
+   * apply that formatting to a computed title too, corrupting property values containing
+   * formatting-significant characters (underscores, asterisks, backticks).
    */
-  resolveDisplayTitle(node: Node): string {
+  resolveDisplayTitle(node: Node, formatContent?: (content: string) => string): string {
     const hasTitleTemplate = !!this.findSlashCommand(node.nodeType)?.hasTitleTemplate;
-    return resolveTitleOrContent(node, hasTitleTemplate);
+    const value = resolveTitleOrContent(node, hasTitleTemplate);
+    return hasTitleTemplate || !formatContent ? value : formatContent(value);
   }
 
   /**

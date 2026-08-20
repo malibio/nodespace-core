@@ -22,15 +22,24 @@
  * `compute_title()` applies a title_template to any schema carrying one, core or not; they
  * agree only because no core type ships a template today).
  */
+/**
+ * Matches any Unicode letter or number. Used (not the ASCII-only `\w`) so a fully-resolved
+ * title in a non-Latin script (e.g. a `{first_name} {last_name}` template evaluating to a
+ * CJK or Arabic name) is correctly recognized as resolved, not misclassified as empty
+ * alongside a genuinely-unresolved separator-only value like `" — "` — see the guard below.
+ */
+const HAS_RESOLVED_CHARACTER_RE = /[\p{L}\p{N}]/u;
+
 export function resolveTitleOrContent(
   node: { title?: string | null; content?: string | null } | null | undefined,
   hasTitleTemplate: boolean
 ): string {
   if (hasTitleTemplate) {
     const title = node?.title ?? '';
-    // A title with no word characters (e.g. the `" "` left by a `"{first} {last}"`
-    // template with both fields empty) counts as unresolved.
-    return /\w/.test(title) ? title : '';
+    // A title with no letters or numbers in any script (e.g. the `" "` left by a
+    // `"{first} {last}"` template with both fields empty, or `" — "` left by a template
+    // whose only literal text is a separator) counts as unresolved.
+    return HAS_RESOLVED_CHARACTER_RE.test(title) ? title : '';
   }
   return node?.content ?? '';
 }

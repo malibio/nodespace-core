@@ -1721,6 +1721,55 @@ describe('PluginRegistry - Core Functionality', () => {
       expect(registry.resolveDisplayTitle(node)).toBe('2026-07-07');
       expect(registry.getNodeTitle(node)).toBe('Today');
     });
+
+    it('applies formatContent to a content-sourced value', () => {
+      const plugin: PluginDefinition = {
+        id: 'text',
+        name: 'Text',
+        description: 'Text plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] }
+      };
+      registry.register(plugin);
+
+      const node = createTestNode({ nodeType: 'text', content: '# Heading' });
+      const formatContent = vi.fn((c: string) => c.replace(/^#+\s*/, ''));
+
+      expect(registry.resolveDisplayTitle(node, formatContent)).toBe('Heading');
+      expect(formatContent).toHaveBeenCalledWith('# Heading');
+    });
+
+    it('does NOT apply formatContent to a title_template-computed title', () => {
+      // Regression: a caller that wraps the whole return value in a formatter (instead of
+      // passing it through this parameter) would run the formatter over a computed property
+      // value too — e.g. stripMarkdown mangling a name containing an underscore or asterisk.
+      const plugin: PluginDefinition = {
+        id: 'person',
+        name: 'Person',
+        description: 'Person plugin',
+        version: '1.0.0',
+        config: {
+          slashCommands: [
+            {
+              id: 'person',
+              name: 'Person',
+              description: 'Create Person',
+              contentTemplate: '',
+              nodeType: 'person',
+              hasTitleTemplate: true,
+              titleTemplate: '{first_name}_{last_name}'
+            }
+          ]
+        }
+      };
+      registry.register(plugin);
+
+      const node = { ...createTestNode({ nodeType: 'person', content: '' }), title: 'Jane_Doe' };
+      const formatContent = vi.fn((c: string) => c.replace(/_/g, ''));
+
+      expect(registry.resolveDisplayTitle(node, formatContent)).toBe('Jane_Doe');
+      expect(formatContent).not.toHaveBeenCalled();
+    });
   });
 
   describe('Content Merge Acceptance', () => {

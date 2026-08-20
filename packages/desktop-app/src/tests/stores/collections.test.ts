@@ -532,6 +532,57 @@ describe('Collections Store', () => {
         { id: 'node-1', name: 'Jane Doe', nodeType: 'widget-entity' }
       ]);
     });
+
+    it('does not run a template-computed title through markdown stripping', () => {
+      // Regression: stripMarkdown must apply only to a content-sourced value, never to a
+      // title_template-computed title — that's a property value, not markdown, and
+      // stripMarkdown's bold/italic/code regexes would otherwise mangle any paired `_`/`*`/
+      // backtick in it (e.g. a name or slug containing an underscore).
+      pluginRegistry.register({
+        id: 'widget-entity',
+        name: 'Widget',
+        description: 'Custom entity with a title template',
+        version: '1.0.0',
+        config: {
+          slashCommands: [
+            {
+              id: 'widget-entity',
+              name: 'Widget',
+              description: 'Create Widget',
+              contentTemplate: '',
+              nodeType: 'widget-entity',
+              hasTitleTemplate: true,
+              titleTemplate: '{first_name}_{last_name}'
+            }
+          ]
+        }
+      });
+
+      const members = new Map<string, Node[]>([
+        [
+          'col-1',
+          [
+            {
+              id: 'node-1',
+              content: 'raw',
+              title: 'Jane_Doe',
+              nodeType: 'widget-entity',
+              createdAt: new Date().toISOString(),
+              modifiedAt: new Date().toISOString(),
+              version: 1,
+              properties: {}
+            }
+          ]
+        ]
+      ]);
+      collectionsData._setTestData(flattenCollections(mockCollections), members);
+
+      collectionsState.selectCollection('col-1');
+
+      expect(collectionsState.selectedCollectionMembers).toEqual([
+        { id: 'node-1', name: 'Jane_Doe', nodeType: 'widget-entity' }
+      ]);
+    });
   });
 
   describe('collectionsTree hide-empty filter', () => {

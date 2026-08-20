@@ -41,10 +41,20 @@ describe('resolveTitleOrContent', () => {
       expect(resolveTitleOrContent({ title: '', content: 'raw content' }, true)).toBe('');
     });
 
-    it('treats a title with no word characters as unresolved', () => {
+    it('treats a title with no letters or numbers as unresolved', () => {
       // e.g. "{first_name} {last_name}" with both fields empty resolves to " ".
       expect(resolveTitleOrContent({ title: ' ', content: 'raw' }, true)).toBe('');
+      // A template whose only literal text is a separator (e.g. "{first} — {last}" with
+      // both fields empty) resolves to punctuation and whitespace only — still unresolved.
       expect(resolveTitleOrContent({ title: ' — ', content: 'raw' }, true)).toBe('');
+    });
+
+    it('recognizes a resolved title in a non-Latin script, not just ASCII word characters', () => {
+      // A regression an ASCII-only `\w` guard would get wrong: these are fully-resolved
+      // template values (e.g. a Person's {first_name} {last_name}) containing no ASCII
+      // letters at all, not unresolved templates — they must NOT render empty.
+      expect(resolveTitleOrContent({ title: '田中太郎', content: 'raw' }, true)).toBe('田中太郎');
+      expect(resolveTitleOrContent({ title: 'محمد', content: 'raw' }, true)).toBe('محمد');
     });
   });
 

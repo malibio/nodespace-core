@@ -443,9 +443,12 @@ class CollectionsStore {
             // pluginRegistry.resolveDisplayTitle already picks title vs. content correctly
             // (title only for title_template-driven schemas — a plain node.title fallback is
             // stale for everything else, since it's only refreshed by a backend round-trip).
-            // stripMarkdown then cleans the result so an imported header root shows "ACP
-            // Integration Architecture", not the raw "# ACP Integration Architecture".
-            name: stripMarkdown(pluginRegistry.resolveDisplayTitle(node)),
+            // stripMarkdown is passed in as the content formatter, not wrapped around the
+            // whole call, so it cleans an imported header root ("# ACP Integration
+            // Architecture" -> "ACP Integration Architecture") WITHOUT also running over a
+            // title_template-computed name, which is a property value, not markdown — a name
+            // containing an underscore or asterisk would otherwise get silently mangled.
+            name: pluginRegistry.resolveDisplayTitle(node, stripMarkdown),
             nodeType: node.nodeType,
           }))
       );
