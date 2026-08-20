@@ -9,8 +9,8 @@
 //! `NSApplication` is main-thread-only), so the tonic gRPC server runs on a
 //! worker tokio runtime and signals back via [`TrayController::shutdown`].
 
-use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -31,6 +31,12 @@ const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
 /// the tray. The app treats it as the highest-precedence choice for that
 /// launch only; a plain "Open NodeSpace" leaves it unset so the app restores
 /// whatever it last had.
+///
+/// Read at startup by a *cold* launch (no other instance running). When an
+/// instance is already running, the environment of a freshly-spawned process
+/// is invisible to it — the same database id is also passed as a `--database
+/// <id>` CLI argument (see [`TrayState::open_ui`]), which is what the app's
+/// `tauri-plugin-single-instance` relaunch handler reads instead.
 pub const INITIAL_DATABASE_ENV: &str = "NODESPACE_INITIAL_DATABASE";
 
 /// Events the tonic side of the daemon can push into the tray event loop.
@@ -176,8 +182,6 @@ struct TrayState {
     _tray: tray_icon::TrayIcon,
     status_item: MenuItem,
     ui_binary: Option<PathBuf>,
-    /// Spawned UI child, retained so its pipes stay attached.
-    ui_child: Option<Child>,
     open_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     /// Databases submenu, repopulated whenever a registry snapshot arrives.
@@ -373,7 +377,6 @@ fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
         _tray: tray,
         status_item,
         ui_binary,
-        ui_child: None,
         open_id,
         quit_id,
         databases_menu,
@@ -428,15 +431,26 @@ impl TrayState {
             .map(|(_, db)| db.clone())
     }
 
-    /// Spawn the Tauri UI binary, optionally pointing it at `database`, or — if
-    /// a previous spawn is still alive — leave it alone and rely on the OS to
-    /// focus an existing window.
+    /// Spawn the Tauri UI binary, optionally pointing it at `database`.
     ///
-    /// That last case makes picking a database while the app is already running
-    /// a no-op, and when the app was started outside the tray we have no child
-    /// to notice, so the same click spawns a second window instead. Re-pointing
-    /// a running app needs cross-process focus (`NSRunningApplication::activate`
-    /// etc.) plus a select signal over gRPC; tracked separately.
+    /// Always spawns — the daemon has no reliable way to know whether a UI
+    /// process is already alive: a child it spawned itself may have exited
+    /// without the tray noticing, and one launched outside the tray (Dock
+    /// icon, Spotlight, a previous run) leaves no child here to check at all.
+    /// Rather than track liveness in the daemon, dedup is delegated to the app
+    /// itself via `tauri-plugin-single-instance`: a genuinely-second launch
+    /// detects the running instance, forwards its argv to it, and exits
+    /// immediately, so at most one real UI process ever survives regardless of
+    /// how many times this is called or how the first instance was started.
+    ///
+    /// The requested database is passed two ways so either launch path can
+    /// read it: as `INITIAL_DATABASE_ENV`, which a *cold* launch (no other
+    /// instance running) reads at startup, and as a `--database <id>` CLI
+    /// argument, which is what `tauri-plugin-single-instance` forwards to an
+    /// *already-running* instance's relaunch handler — that handler has no
+    /// visibility into the new process's environment, only its argv. The
+    /// already-running instance focuses its window and switches to the
+    /// requested database in place on receiving it.
     fn open_ui(&mut self, database: Option<DatabaseId>) -> Result<()> {
         let Some(path) = self.ui_binary.as_ref() else {
             tracing::warn!(
@@ -446,41 +460,36 @@ impl TrayState {
             return Ok(());
         };
 
-        // Reap any exited child first so a closed-then-reopened window works.
-        if let Some(existing) = self.ui_child.as_mut() {
-            match existing.try_wait() {
-                Ok(Some(_status)) => {
-                    self.ui_child = None;
-                }
-                Ok(None) => {
-                    // A running UI cannot be re-pointed from here: the initial
-                    // database is read at startup. Switching an open window
-                    // needs a focus/select signal over gRPC, tracked separately.
-                    tracing::info!(
-                        requested_database = database.as_ref().map(|d| d.as_str()),
-                        "UI binary already running; leaving it to OS to focus"
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "try_wait on UI child failed; respawning anyway");
-                    self.ui_child = None;
-                }
-            }
-        }
-
-        let mut command = Command::new(path);
-        if let Some(id) = database.as_ref() {
-            // Only set when the user picked a specific database, so a plain
-            // "Open NodeSpace" still honours whatever the app last remembered.
-            command.env(INITIAL_DATABASE_ENV, id.as_str());
-        }
-        let child = command
+        let mut command = build_ui_command(path, database.as_ref());
+        let mut child = command
             .spawn()
             .with_context(|| format!("spawn UI binary {}", path.display()))?;
-        self.ui_child = Some(child);
+
+        // Reap on a plain OS thread rather than the tao event loop: a relaunch
+        // that the app's own single-instance guard dedupes exits almost
+        // immediately, and nothing else in this process ever calls `wait` on
+        // it, so an unreaped child would sit as a zombie for the rest of the
+        // daemon's lifetime (its parent). `Child` is `Send`, so this never
+        // blocks tray event handling.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
         Ok(())
     }
+}
+
+/// Build the command to launch the UI binary, optionally requesting it open on
+/// `database`. Split out from [`TrayState::open_ui`] so the exact args/env are
+/// assertable in tests without actually spawning a process.
+fn build_ui_command(path: &Path, database: Option<&DatabaseId>) -> Command {
+    let mut command = Command::new(path);
+    if let Some(id) = database {
+        // Only set when the user picked a specific database, so a plain
+        // "Open NodeSpace" still honours whatever the app last remembered.
+        command.env(INITIAL_DATABASE_ENV, id.as_str());
+        command.arg("--database").arg(id.as_str());
+    }
+    command
 }
 
 #[cfg(test)]
@@ -649,6 +658,37 @@ mod tests {
             Some(std::path::Path::new("/opt/nodespace/ui"))
         );
         assert!(unset_result.is_none());
+    }
+
+    /// A plain "Open NodeSpace" (no database requested) must not set the env
+    /// var or the CLI flag — otherwise a cold launch would misread it as a
+    /// database pick and override whatever the app last remembered.
+    #[test]
+    fn build_ui_command_without_database_sets_neither_env_nor_arg() {
+        let command = build_ui_command(Path::new("/opt/nodespace/ui"), None);
+
+        assert!(command.get_envs().all(|(k, _)| k != INITIAL_DATABASE_ENV));
+        assert!(command.get_args().next().is_none());
+    }
+
+    /// Picking a specific database must set both the env var (read by a cold
+    /// launch at startup) and the `--database <id>` CLI flag (forwarded by
+    /// `tauri-plugin-single-instance` to an already-running instance, which has
+    /// no visibility into the new process's environment) — one code path
+    /// handles both launch scenarios without the tray knowing which applies.
+    #[test]
+    fn build_ui_command_with_database_sets_env_and_cli_arg() {
+        let id = DatabaseId::from("db-123".to_string());
+        let command = build_ui_command(Path::new("/opt/nodespace/ui"), Some(&id));
+
+        let env_value = command
+            .get_envs()
+            .find(|(k, _)| *k == INITIAL_DATABASE_ENV)
+            .and_then(|(_, v)| v);
+        assert_eq!(env_value, Some(std::ffi::OsStr::new("db-123")));
+
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        assert_eq!(args, vec!["--database", "db-123"]);
     }
 }
 

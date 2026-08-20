@@ -170,6 +170,58 @@ impl ShutdownToken {
     }
 }
 
+/// Handle a relaunch forwarded by `tauri-plugin-single-instance`: the daemon's
+/// tray always spawns a fresh UI process (it cannot reliably tell whether one
+/// is already alive), so every click after the first arrives here instead of
+/// as a second window.
+///
+/// Always focuses the running window — cross-process activation
+/// (`NSRunningApplication::activate` on macOS, the equivalent on Windows/Linux)
+/// is exactly what `WebviewWindow::set_focus` does under the hood, so a plain
+/// "Open NodeSpace" click while the app is already running now does something:
+/// it raises the window instead of silently no-op'ing. If the relaunch also
+/// named a specific database (`--database <id>`, set by the tray only when the
+/// user picked one from the submenu), forward it to the frontend so it can
+/// switch in place via `databaseStore.switchTo` — the same path an in-app
+/// switcher click already uses.
+fn handle_relaunch(app: &tauri::AppHandle, argv: &[String]) {
+    use tauri::{Emitter, Manager};
+
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("single-instance relaunch: no main window to focus");
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    if let Some(id) = parse_relaunch_database_arg(argv) {
+        if let Err(e) = window.emit("tray:select-database", id) {
+            tracing::warn!(error = %e, "failed to emit tray:select-database");
+        }
+    }
+}
+
+/// Extract the database id from a relaunch's argv, as passed by the daemon's
+/// tray via `--database <id>` (the CLI counterpart of
+/// `nodespace_daemon::tray::INITIAL_DATABASE_ENV`, forwarded here because the
+/// environment of the just-exited relaunch process is not visible to the
+/// already-running instance) when the user picks a specific database while
+/// the app is already running. `None` when the relaunch carried no database
+/// request (a plain "Open NodeSpace") or the flag's value is missing or blank.
+fn parse_relaunch_database_arg(argv: &[String]) -> Option<String> {
+    let value = argv
+        .iter()
+        .position(|a| a == "--database")
+        .and_then(|i| argv.get(i + 1))?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::{menu::*, Emitter, Manager};
@@ -189,7 +241,24 @@ pub fn run() {
     // the same way `graceful_shutdown` always has.
     let shutdown_token_for_setup = ShutdownToken::new();
 
-    let app = tauri::Builder::default()
+    // Single-instance guard: the daemon's tray always spawns a fresh UI
+    // process when a database is picked (see `nodespace_daemon::tray::
+    // TrayState::open_ui`) — it has no reliable way to know whether a UI
+    // process from an earlier launch is still alive, and none at all when the
+    // app was started outside the tray. Rather than the daemon tracking
+    // liveness, this plugin makes any second launch detect the running
+    // instance, forward its argv to it, and exit immediately, so exactly one
+    // real UI process ever survives regardless of launch path. Must be
+    // registered before any other plugin (upstream requirement).
+    let mut builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            handle_relaunch(app, &argv);
+        }));
+    }
+
+    let app = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
@@ -731,4 +800,63 @@ pub(crate) fn graceful_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle
 
     shutdown_token.cancel();
     tracing::info!("Shutdown: complete");
+}
+
+#[cfg(test)]
+mod relaunch_tests {
+    use super::parse_relaunch_database_arg;
+
+    #[test]
+    fn parses_database_id_from_argv() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+            "db-123".to_string(),
+        ];
+        assert_eq!(
+            parse_relaunch_database_arg(&argv),
+            Some("db-123".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_without_the_flag() {
+        let argv = vec!["/path/to/nodespace-app".to_string()];
+        assert_eq!(parse_relaunch_database_arg(&argv), None);
+    }
+
+    #[test]
+    fn returns_none_when_the_flag_has_no_value() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+        ];
+        assert_eq!(parse_relaunch_database_arg(&argv), None);
+    }
+
+    #[test]
+    fn returns_none_for_a_blank_value() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+            "   ".to_string(),
+        ];
+        assert_eq!(parse_relaunch_database_arg(&argv), None);
+    }
+
+    /// A flag value that happens to look like another flag is still just a
+    /// value — parsing is positional (whatever follows `--database`), not a
+    /// search for the next `--`-prefixed token.
+    #[test]
+    fn takes_the_very_next_token_even_if_flag_shaped() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+            "--not-actually-a-flag".to_string(),
+        ];
+        assert_eq!(
+            parse_relaunch_database_arg(&argv),
+            Some("--not-actually-a-flag".to_string())
+        );
+    }
 }
