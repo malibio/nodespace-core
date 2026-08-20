@@ -16,6 +16,7 @@ use nodespace_core::schema::handle_create_schema;
 use nodespace_core::services::{NodeEmbeddingService, NodeService};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -225,6 +226,124 @@ fn extract_json_object(text: &str) -> Option<&str> {
         }
     }
     None
+}
+
+/// Quote bare `YYYY-MM-DD` date literals in the decomposition sub-call's raw
+/// output so the object parses as JSON.
+///
+/// The malformation, measured (33 decompositions over the corpus in
+/// `tests/live_resolve_query_decomposition_shapes.rs`, 3/3 reps identical on
+/// the request that triggers it):
+///
+/// ```text
+/// {"query": "", "filters": [{"operator":"lt","property":"due_date","value":2026-08-19}]}
+/// ```
+///
+/// `value` is an unquoted date. `serde_json` reads `2026` as a number and then
+/// fails on `-08-19`, so the **whole** object is rejected — not just that
+/// filter. `exec_resolve_query` then falls back to an empty resolution and the
+/// search degrades to a bare type listing, which is how a request that should
+/// resolve to one node comes back as `multiple_matches` over every node of the
+/// type. That is worse than the dropped-filter case the surrounding code
+/// already guards, and invisible in exactly the same way.
+///
+/// The decomposition prompt provokes it directly: it instructs the model to
+/// resolve a relative date to "a concrete YYYY-MM-DD value", and `YYYY-MM-DD`
+/// written literally, unquoted, is what came back.
+///
+/// This repairs the raw **text**, before parsing, because that is the only
+/// place it can be repaired. The four argument repairs in `agent_loop` — and
+/// `coerce_filter_value_to_field_type` below — all operate on an already-parsed
+/// `Value`, and there is nothing parsed here to hand them. Routing this output
+/// through `repair_parsed_tool_arguments` would not catch it either, for the
+/// same reason.
+///
+/// Safe because the shape is not expressible as valid JSON under any reading: a
+/// bare `2026-08-19` is never a legal JSON value, so no legitimate document is
+/// rewritten, and the only possible intent behind those characters is the date
+/// string. The scan skips string literals so a date already correctly quoted
+/// (the overwhelmingly common case) is left exactly as sent, and a date
+/// appearing *inside* a quoted value — `"query": "due 2026-08-19"` — is not
+/// touched.
+///
+/// Deliberately not generalized to other unquoted scalars. A bare word could be
+/// a typo'd `true`, an enum member, or a malformed number, and guessing between
+/// those is interpretation rather than repair. `YYYY-MM-DD` is unambiguous, and
+/// it is the one shape this path was measured to produce.
+fn quote_bare_date_literals(text: &str) -> Cow<'_, str> {
+    /// A bare date runs `dddd-dd-dd` and must not be adjacent to characters
+    /// that would make it part of a larger token (a quoted string, or a
+    /// longer bare word the caller has no reading for).
+    fn is_bare_date(bytes: &[u8], start: usize) -> bool {
+        const LEN: usize = 10; // YYYY-MM-DD
+        if start + LEN > bytes.len() {
+            return false;
+        }
+        let shape_ok = bytes[start..start + LEN].iter().enumerate().all(|(i, &b)| {
+            if matches!(i, 4 | 7) {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        });
+        if !shape_ok {
+            return false;
+        }
+        // Reject a longer run — `2026-08-19-01` is not a date this can claim.
+        let next_ok = bytes
+            .get(start + LEN)
+            .is_none_or(|&b| !b.is_ascii_alphanumeric() && b != b'-' && b != b'.');
+        // Reject a digit immediately before, so a longer numeric token is not
+        // sliced apart mid-way.
+        let prev_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        next_ok && prev_ok
+    }
+
+    let bytes = text.as_bytes();
+    let mut out: Option<String> = None;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut i = 0usize;
+    let mut copied_to = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if b.is_ascii_digit() && is_bare_date(bytes, i) {
+            let buf = out.get_or_insert_with(String::new);
+            buf.push_str(&text[copied_to..i]);
+            buf.push('"');
+            buf.push_str(&text[i..i + 10]);
+            buf.push('"');
+            i += 10;
+            copied_to = i;
+            continue;
+        }
+        i += 1;
+    }
+
+    match out {
+        Some(mut buf) => {
+            buf.push_str(&text[copied_to..]);
+            Cow::Owned(buf)
+        }
+        None => Cow::Borrowed(text),
+    }
 }
 
 /// Render a `resolve_query` decomposition field line with an explicit
@@ -2069,10 +2188,28 @@ impl GraphToolExecutor {
         // extracting the first balanced {...} object rather than requiring an
         // exact-match parse.
         let json_slice = extract_json_object(&text).unwrap_or(&text);
-        let resolved: Value = serde_json::from_str(json_slice).unwrap_or_else(|_| {
+        // Repair bare `YYYY-MM-DD` date literals before parsing. This is the
+        // only point at which that malformation is reachable — see
+        // `quote_bare_date_literals`. It is a no-op (and allocation-free) for
+        // output that was already well-formed, which is the common case.
+        let json_slice = quote_bare_date_literals(json_slice);
+        let resolved: Value = serde_json::from_str(&json_slice).unwrap_or_else(|e| {
             // Decomposition failed to produce parseable JSON — fall back to an
             // empty resolution so the search below degrades to a bare
             // type listing rather than erroring the turn.
+            //
+            // Logged rather than swallowed, for the same reason the per-filter
+            // drop below is: this fallback discards the *entire* resolution, so
+            // a request that should have matched one node comes back as
+            // `multiple_matches` over every node of the type, with nothing on
+            // the wire to say why. That is how the bare-date malformation went
+            // unnoticed until it was measured.
+            tracing::warn!(
+                error = %e,
+                raw = %truncate(&json_slice, 512),
+                "resolve_query: decomposition output did not parse as JSON — \
+                 falling back to an empty resolution"
+            );
             json!({ "query": "", "filters": [] })
         });
 
@@ -2091,6 +2228,28 @@ impl GraphToolExecutor {
         // dropped filter can turn a would-be unique match into a false
         // multiple_matches (or a different unique match), with no signal that
         // anything went wrong.
+        //
+        // COVERAGE BOUNDARY: the four tool-argument repairs in `agent_loop`
+        // (`repair_over_quoted_keys`, `repair_leaked_special_token_keys`,
+        // `repair_spliced_object_values`, `repair_scalar_in_operator_values`)
+        // do NOT run on these filters. They are applied at the agent loop's
+        // tool-call parse boundary; this is a nested sub-call parsed locally.
+        //
+        // That gap was measured rather than assumed — 33 decompositions across
+        // the corpus in `tests/live_resolve_query_decomposition_shapes.rs` — and
+        // every one of the four came back inert here: zero over-quoted keys,
+        // zero leaked special-token keys, zero `deny_unknown_fields` drops, and
+        // zero scalar-valued `in` filters. Notably the model DOES emit `in`
+        // (6 of 21 filters, on multi-value enum phrasings) even though this
+        // prompt never instructs it — but always with a proper JSON array. So
+        // do not port those repairs here on the theory that the shapes might
+        // appear; nothing on this path was observed to produce them, and a
+        // repair for a shape nothing emits is a liability, not a safeguard.
+        //
+        // What this path DOES produce is a bare unquoted `YYYY-MM-DD` value,
+        // which fails *before* any of the above could apply — see
+        // `quote_bare_date_literals`, applied to the raw text above. Re-measure
+        // with that harness before concluding the shape mix has changed.
         let filters: Vec<query_ops::AgentFilterItem> = resolved
             .get("filters")
             .and_then(|v| v.as_array())
@@ -3869,6 +4028,83 @@ mod tests {
         assert_eq!(extract_json_object("no json here"), None);
     }
 
+    // -- quote_bare_date_literals --
+
+    /// The measured malformation, verbatim from the decomposition dump: an
+    /// unquoted `YYYY-MM-DD` that makes the whole object unparseable.
+    #[test]
+    fn quote_bare_date_literals_repairs_the_measured_malformation() {
+        let raw = r#"{"query": "", "filters": [{"type":"property","operator":"lt","property":"due_date","value":2026-08-19}]}"#;
+        assert!(
+            serde_json::from_str::<Value>(raw).is_err(),
+            "fixture must be genuinely unparseable, or this test proves nothing"
+        );
+
+        let repaired = quote_bare_date_literals(raw);
+        let parsed: Value =
+            serde_json::from_str(&repaired).expect("repaired output must parse as JSON");
+        assert_eq!(parsed["filters"][0]["value"], json!("2026-08-19"));
+        assert_eq!(parsed["filters"][0]["operator"], json!("lt"));
+    }
+
+    /// Well-formed output is returned untouched, and without allocating — the
+    /// common case must not pay for the repair.
+    #[test]
+    fn quote_bare_date_literals_leaves_quoted_dates_alone() {
+        let raw = r#"{"query": "", "filters": [{"operator":"lt","property":"due_date","value":"2026-08-19"}]}"#;
+        let repaired = quote_bare_date_literals(raw);
+        assert!(
+            matches!(repaired, Cow::Borrowed(_)),
+            "already-valid input must not be rewritten or reallocated"
+        );
+        assert_eq!(repaired, raw);
+    }
+
+    /// A date inside a string value is part of the user's text, not a literal
+    /// to repair. Quoting it again would corrupt the string.
+    #[test]
+    fn quote_bare_date_literals_ignores_dates_inside_strings() {
+        let raw = r#"{"query": "invoices due 2026-08-19", "filters": []}"#;
+        let repaired = quote_bare_date_literals(raw);
+        assert!(matches!(repaired, Cow::Borrowed(_)));
+        let parsed: Value = serde_json::from_str(&repaired).unwrap();
+        assert_eq!(parsed["query"], json!("invoices due 2026-08-19"));
+    }
+
+    /// Several bare dates in one object — a range filter is the obvious way
+    /// this arrives — must all be repaired, not just the first.
+    #[test]
+    fn quote_bare_date_literals_repairs_every_occurrence() {
+        let raw = r#"{"filters":[{"operator":"gte","value":2026-01-01},{"operator":"lte","value":2026-12-31}]}"#;
+        let parsed: Value = serde_json::from_str(&quote_bare_date_literals(raw)).unwrap();
+        assert_eq!(parsed["filters"][0]["value"], json!("2026-01-01"));
+        assert_eq!(parsed["filters"][1]["value"], json!("2026-12-31"));
+    }
+
+    /// Numbers that merely contain digits and dashes are not dates. A plain
+    /// number must survive as a number — coercing it to a string would break
+    /// the number-field filters that currently work.
+    #[test]
+    fn quote_bare_date_literals_leaves_plain_numbers_alone() {
+        let raw =
+            r#"{"filters":[{"property":"replacement_cost","operator":"equals","value":2400}]}"#;
+        let repaired = quote_bare_date_literals(raw);
+        assert!(matches!(repaired, Cow::Borrowed(_)));
+        let parsed: Value = serde_json::from_str(&repaired).unwrap();
+        assert_eq!(parsed["filters"][0]["value"], json!(2400));
+    }
+
+    /// A longer digit-dash run is not a `YYYY-MM-DD` this can honestly claim.
+    /// Slicing the first ten characters out of it would invent a value.
+    #[test]
+    fn quote_bare_date_literals_declines_longer_digit_runs() {
+        let raw = r#"{"value":2026-08-19-01}"#;
+        assert!(matches!(quote_bare_date_literals(raw), Cow::Borrowed(_)));
+        // Still unparseable — correctly left for the fallback to handle rather
+        // than silently rewritten into a plausible-looking wrong value.
+        assert!(serde_json::from_str::<Value>(&quote_bare_date_literals(raw)).is_err());
+    }
+
     /// End-to-end fixture: real schema (via `handle_create_schema`), stub
     /// inference engine returning fixed JSON, exercising the full
     /// `exec_resolve_query` path — schema field lookup, prompt construction,
@@ -4012,6 +4248,77 @@ mod tests {
                 .await
                 .unwrap();
             assert!(!result.is_error, "fixture node creation failed: {result:?}");
+        }
+
+        /// The bare-date malformation, asserted end to end through the real
+        /// `exec_resolve_query` rather than only against the repair helper.
+        ///
+        /// The distinction matters here more than usual. Before the fix this
+        /// case did not fail loudly — the parse failed, the fallback swapped in
+        /// an empty resolution, and the tool returned a perfectly well-formed
+        /// `multiple_matches` listing every node of the type. So the regression
+        /// this guards is not "an error appears", it is "the right node stops
+        /// being found", and only an assertion on the resolved identity catches
+        /// that. Asserting the helper alone would pass just as happily with the
+        /// call site unwired.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn resolve_query_recovers_from_bare_unquoted_date_in_decomposition() {
+            let (ns, _tmp) = make_test_service().await;
+            handle_create_schema(
+                &ns,
+                json!({
+                    "name": "Invoice",
+                    "fields": [
+                        {"name": "amount", "type": "number"},
+                        {"name": "due_date", "type": "date"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+            // Exactly what the model emitted, 3/3 reps, for "show me the
+            // overdue ones" — an unquoted YYYY-MM-DD.
+            let executor = executor_with(
+                ns,
+                r#"{"query": "", "filters": [{"type":"property","operator":"lt","property":"due_date","value":2026-08-19}]}"#,
+            );
+            create_invoice(
+                &executor,
+                "Overdue invoice",
+                json!({"amount": 1200, "due_date": "2026-08-01"}),
+            )
+            .await;
+            create_invoice(
+                &executor,
+                "Future invoice",
+                json!({"amount": 500, "due_date": "2026-09-04"}),
+            )
+            .await;
+
+            let result = executor
+                .execute(
+                    "resolve_query",
+                    json!({ "request": "show me the overdue ones", "node_type": "invoice" }),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                result.result["resolved"],
+                json!(true),
+                "the date filter must survive the unquoted literal and resolve to the one \
+                 overdue invoice. Before the repair the whole decomposition failed to parse, \
+                 the empty-resolution fallback listed both invoices, and this came back as \
+                 multiple_matches — well-formed, and wrong. got {}",
+                result.result
+            );
+            assert_eq!(
+                result.result["title"],
+                json!("Overdue invoice"),
+                "resolved to the wrong node: {}",
+                result.result
+            );
         }
 
         /// The sub-prompt tells the model to map "a status word to an

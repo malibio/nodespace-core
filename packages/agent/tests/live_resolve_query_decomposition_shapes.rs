@@ -228,6 +228,14 @@ struct Tally {
     /// Filter objects seen, total.
     total_filters: usize,
     /// Decompositions whose raw text did not yield parseable JSON at all.
+    ///
+    /// Counts what the MODEL emitted, deliberately — this classifies the raw
+    /// dump, upstream of any repair production applies. So a nonzero count here
+    /// does not mean resolution failed: `quote_bare_date_literals` recovers the
+    /// bare-`YYYY-MM-DD` case that produces all of them today, and the printed
+    /// per-request outcomes are where that recovery shows up. Read this as "how
+    /// often the model emits invalid JSON", and the `resolved:` line as "how
+    /// often that mattered".
     unparseable_output: usize,
     /// Decompositions that ran.
     total_decompositions: usize,
@@ -504,10 +512,7 @@ async fn measure_decomposition_filter_shapes() {
     }
     println!("\n=== filter shape tally (#2185) ===");
     println!("{tally:#?}");
-    println!(
-        "\nresolved: {resolved_count}/{} requests",
-        outcomes.len()
-    );
+    println!("\nresolved: {resolved_count}/{} requests", outcomes.len());
 
     // Guard the harness, not the model. A run that captured nothing has not
     // answered #2185's question — and would otherwise print an all-zero tally
