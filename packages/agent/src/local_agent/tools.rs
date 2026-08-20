@@ -1138,13 +1138,27 @@ fn def_create_schema() -> ToolDefinition {
                     // used to read `(e.g. "Ticket", "ADR")`, and the model
                     // adopted "ADR" as the created type's actual name on a
                     // request whose text said "architecture decision records"
-                    // and never abbreviated it — 3/3, with the abbreviation
-                    // appearing nowhere else in the prompt. Genericising the
+                    // and never abbreviated it — 3/3. Genericising the
                     // *guidance*'s own worked example changed nothing and
-                    // deleting it changed nothing; a prompt dump located the
-                    // only occurrence here, in the schema. An example naming a
-                    // plausible type supplies a candidate answer to a question
-                    // it was not addressing. Say what the value IS instead.
+                    // deleting it changed nothing; a prompt dump found the
+                    // token here, in the schema, and removing it fixed the
+                    // name 3/3.
+                    //
+                    // `'adr'` still appears in three other model-facing
+                    // descriptions reaching the same prompt — `create_node`'s
+                    // `node_type`, `create_schema`'s `relationships.targetType`,
+                    // and `update_schema`'s `schema_id` — and the fix measured
+                    // clean with all three present. They are not the same
+                    // defect: each names an id that must ALREADY exist and says
+                    // so ("do NOT invent types that don't exist yet"), so the
+                    // example illustrates a format rather than offering a value
+                    // to adopt. This parameter names the thing being CREATED,
+                    // which is what made its example answerable.
+                    //
+                    // The rule, stated so it survives without the measurement:
+                    // an example in a description for a value the model is
+                    // choosing supplies a candidate answer. Say what the value
+                    // IS instead.
                     "description": "Display name for the entity type, in the user's own words, singular."
                 },
                 "description": {

@@ -225,6 +225,23 @@
 #     "architecture decision records" and never abbreviates.
 #     After: "Architecture Decision Record" 3/3 in both paired arms.
 #
+#     CORRECTION (review of PR #2188): an earlier draft of this section said
+#     the abbreviation appeared "nowhere else in the prompt". That is wrong.
+#     `'adr'` survives in three other model-facing descriptions inside the
+#     same tool surface -- create_node's `node_type`, create_schema's
+#     `relationships.targetType`, and update_schema's `schema_id` -- plus
+#     skill_rules.rs's RELATIONSHIP_VS_FIELD example. The 3/3 after-measurement
+#     was taken with all of them present, so what was demonstrated is narrower
+#     than "removing the token fixes it": removing it FROM THIS PARAMETER
+#     fixes it.
+#
+#     The three survivors are plausibly a different case rather than an
+#     unfixed instance of the same one. Each names an id that must ALREADY
+#     exist and says so explicitly, so the example illustrates a format; the
+#     `name` parameter names the thing being CREATED, so its example offered a
+#     value to adopt. That distinction is untested -- it predicts the
+#     survivors are harmless, and a measurement could refute it.
+#
 #     A schema's illustrative example supplies a candidate answer to a question
 #     it was not addressing. This is the mirror of what #1932 guards: there,
 #     eval prompts must not share text with guidance; here, a SCHEMA supplied a
@@ -325,6 +342,10 @@
 # Treat the Schema Creation trim as ready to apply and measure; treat general
 # application to the other skills as requiring the same per-skill measurement,
 # not as a settled conclusion.
+#
+#   >>> REVOKED by section 5A. Properly paired against production's own tool
+#   >>> schemas the trim FAILS, and no trim was applied. Read 5A before acting
+#   >>> on anything in this section.
 #
 # Single runs are not decision-grade: identical code has scored 6/7/7 on the
 # agent matrix, and scenario 6 measured 3/3 versus 0/8 on carried history alone.
