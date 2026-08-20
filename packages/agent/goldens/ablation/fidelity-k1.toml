@@ -1,0 +1,153 @@
+# derived-from: production-baseline.toml -- the honest 9-tool/3-candidate reference.
+name = "fidelity-k1"
+reps = 5
+
+notes = """
+ARM E -- RETRIEVAL_TOP_K = 1: one candidate, and the tool surface scoped to that
+one skill's whitelist.
+
+The largest single footprint lever. Production unions three candidates'
+whitelists, and because the read tools appear in 5-6 of the 8 seeded skills, that
+union is 9 of 15 registered tools. K=1 gives Node Creation's whitelist alone:
+create_node, search_semantic, search_nodes, get_node.
+
+Note this arm removes BOTH the extra candidates and the extra tools, so a failure
+does not say which mattered -- fidelity-no-subtrees already isolates the
+candidate half. What this measures is whether the turn survives on a 4-tool
+surface at all.
+
+Reference results, all 5 reps, byte-identical within each arm:
+  production-baseline   turn1 RIGHT  turn2 RIGHT   9 tools, 3 full subtrees
+  fidelity-no-subtrees  turn1 RIGHT  turn2 RIGHT   9 tools, 0 subtrees
+  fidelity-rank1-only   turn1 WRONG  turn2 RIGHT   9 tools, 1 subtree
+  fidelity-rank1-fetch  turn1 RIGHT  turn2 RIGHT   10 tools, 1 subtree, 0 fetches
+
+turn 1 RIGHT = search_nodes with node_type "ticket" and filters carrying the
+exact enum member "in_dev". The 5/5 failure shape is query "in dev" with no
+filter -- right tool, wrong argument shape.
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — find the ticket. Exists so turn 2's id is a real tool result.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-find-ticket"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+
+REFERENCE — procedures relevant to this request. Use whichever applies and IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Creation
+Purpose: Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Spec, ADR, Ticket. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type.
+# Node Creation Guidance
+
+CALL create_node NOW: your next action is the tool call, not planning text.
+
+THE TYPE: set node_type to the id shown in EXISTING SCHEMAS, copied exactly.
+
+THE VALUES: put every particular the user supplied into field_values. Work through their message value by value and check each against the type's field list before calling. field_values is the ONLY way any value is stored — a value left out is lost silently while the record still reports as saved.
+
+VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in field_values under a key of your own — lowercase, singular, snake_case, named after the user's own noun for it. NEVER drop a value because the type has no field for it: a dropped value is gone silently and the user was told the record was saved. Bare on a type from EXISTING SCHEMAS; `custom:`-prefixed on a built-in type — text, task, date — where unprefixed names are reserved for built-in fields. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call.
+
+SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete.
+"""
+user = "Which tickets are still in dev?"
+expect = """
+search_nodes(node_type="ticket", ...) filtering status to the exact enum \
+member "in_dev" — not "in dev", not "In Dev". A title-text query instead of a \
+status filter is the miss worth noting.
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", "title": "Token refresh returns 401 after idle", "node_type": "ticket", "properties": {"status": "in_dev", "assignee": "dana", "sprint": "S-24"}}], "count": 1}
+  """
+
+  [[turn.tool]]
+  name = "create_node"
+  description = "Create one new record of a type that already exists. Use for a single instance, never to define a new kind of record. Always pass 'content' as the record's title and nothing else — facts about it belong in 'field_values', never appended to the title. Always pass 'field_values' with every particular the user supplied, checked against the type's own field list — it is the only way those values are stored, and a call without them creates an empty record that still reports as saved. If the schema has a title_template (shown in EXISTING SCHEMAS), include those template fields in 'field_values' — the service composes the displayed title from them automatically. The example's user said: \"open a ticket for dana to rotate the signing keys on deploy in S-24, it's in dev, and it depends on the vault migration\". Note depends_on: the type lists no field for it, so it is carried under a key named after the user's own wording rather than dropped. Example call: {\"node_type\": \"ticket\", \"content\": \"Rotate signing keys on deploy\", \"field_values\": {\"status\": \"in_dev\", \"assignee\": \"dana\", \"sprint\": \"S-24\", \"depends_on\": \"the vault migration\"}}"
+  parameters_schema = { properties = { content = { description = "The record's title and nothing else: the shortest phrase naming what this record IS. Facts ABOUT it — who owns it, what state it is in, what it depends on — are field_values entries, never appended to the title.", type = "string" }, field_values = { description = "The values the user supplied. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from EXISTING SCHEMAS (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields.", type = "object" }, node_type = { description = "Node type: 'text', 'task', or a custom schema ID (e.g. 'ticket', 'adr'). For a custom schema ID, copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it.", type = "string" }, parent_id = { description = "Optional parent node ID", type = "string" } }, required = ["node_type", "content"], type = "object" }
+
+  [[turn.tool]]
+  name = "search_semantic"
+  description = "Find nodes semantically related to a natural-language query. By default returns full content for the top result (include_markdown=1). Increase include_markdown to get full content for more results, or set to 0 for IDs and snippets only. If a result's 'markdown' field is non-empty, that is the complete document — summarize or answer from it directly, do not call get_node or search_nodes again for that result."
+  parameters_schema = { properties = { collection = { description = "Filter results to a specific collection path (e.g. 'Architecture', 'Development'). Use for namespace/folder filtering.", type = "string" }, exclude_collections = { description = "Collection paths to exclude from results (e.g. [\"Archived\", \"Drafts\"]). Useful to narrow results when a collection is noisy.", items = { type = "string" }, type = "array" }, graph_boost = { description = "When true, re-rank results by blending similarity with graph connectivity (nodes with more relationships score higher). Formula: 0.7 * similarity + 0.3 * normalized_degree. Default: false.", type = "boolean" }, include_archived = { description = "Whether to include archived nodes in results. Default: false. Set to true when the user explicitly asks about archived or historical content.", type = "boolean" }, include_edges = { description = "When true, attach outgoing 'mentions' relationships of each result as an 'edges' array. Reduces round-trips for graph traversal. Default: false.", type = "boolean" }, include_markdown = { description = "Number of top results to include full markdown content for (0-5, default 1). Set to 0 for IDs and snippets only, or increase to get full content for multiple results.", type = "integer" }, limit = { description = "Max results to return (default 5)", type = "integer" }, node_types = { description = "Filter results to specific node types (e.g. [\"task\", \"text\"]). Use for type filtering; use 'collection' for namespace/folder filtering.", items = { type = "string" }, type = "array" }, property_filters = { additionalProperties = { type = "string" }, description = "Filter by node properties (AND logic, e.g. {\"status\": \"done\"})", type = "object" }, query = { description = "Natural language query for semantic search", type = "string" }, scope = { description = "Search scope: 'knowledge' (default, searches text/header/code/schema nodes) or 'everything' (all embedded node types). Note: ai-chat conversations are not embedded, so they are never returned by search regardless of scope.", enum = ["knowledge", "everything"], type = "string" }, threshold = { description = "Minimum similarity score (0.0-1.0). Lower values return more results with less precision. Default: 0.3. Lower to 0.1-0.2 for broader recall when initial results are too few.", type = "number" } }, required = ["query"], type = "object" }
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = "Find, list, and filter nodes by title, type, or stored field value. Returns each node's id and fields. Use when the node you need is not already identified in this conversation — re-searching for a record already returned earlier wastes a turn. This is the single tool for querying the graph by title, type, and/or typed properties — use it for all three of: (1) title/keyword lookup (query='auth'); (2) listing every node of a type (query='' or query='*', node_type='ticket' — both enumerate all of that type; do not expect '*' to do a wildcard substring match, it means \"no keyword filter\" just like ''); (3) filtering by typed properties with operators (status='in_dev', a date field before a given date) — pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). A count of 0 means nothing in the workspace matches — it does not mean the query was wrong. When a type-scoped search returns no matches, the result carries 'filterable_properties' — the fields that type actually defines, with allowed values where they are constrained. Use it to check the filter you sent: retry with a listed field or value if yours was not among them, otherwise the result is genuinely empty. Never ask the user to confirm a field name or value that appears in that list. Dates use YYYY-MM-DD. Prefer this over search_semantic when you know the name/type or want structured results; use search_semantic only for meaning-based / fuzzy questions."
+  parameters_schema = { properties = { filters = { description = "Optional typed-property filters. Use for status/due_date/amount and any custom schema field, with operators. Omit for plain title/type listing.", items = { properties = { case_sensitive = { description = "For 'contains' operator: case sensitivity (default: true)", type = "boolean" }, node_id = { description = "For 'relationship' filters: the anchor node ID to traverse from", type = "string" }, operator = { description = "Comparison operator", enum = ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"], type = "string" }, property = { description = "Property key. Example: {\"type\": \"property\", \"property\": \"status\", \"operator\": \"equals\", \"value\": \"open\"} — status is a property filter, not metadata.", type = "string" }, relationship_type = { description = "For 'relationship' filters: which graph edge direction to traverse", enum = ["parent", "children", "mentions", "mentioned_by"], type = "string" }, type = { description = "Filter category: 'property' for ANY schema/node field (status, due_date, priority, and all custom schema fields) — use this for status. 'content' for node text. 'metadata' ONLY for the 4 built-in fields created_at, modified_at, node_type, content — NEVER use 'metadata' for status or any schema field, it will fail with 'Invalid metadata field'. 'relationship' for graph edges.", enum = ["property", "content", "metadata", "relationship"], type = "string" }, value = { description = "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator.", type = ["string", "number", "boolean", "array"] } }, required = ["type", "operator"], type = "object" }, type = "array" }, limit = { description = "Max results to return (default 50)", type = "integer" }, node_type = { description = "Filter by node type (e.g. 'task', 'text', or a custom schema ID). For a custom schema ID, copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. Omit to search all types.", type = "string" }, query = { description = "Keyword or phrase to match against node titles (substring match). Pass empty string or '*' to skip the title filter and enumerate all matching nodes (e.g. to list all nodes of a type).", type = "string" }, sorting = { description = "Optional sort configuration, applied in order.", items = { properties = { direction = { description = "Sort direction (default: asc)", enum = ["asc", "desc"], type = "string" }, field = { description = "Field to sort by (e.g. 'due_date', 'created_at', 'status')", type = "string" } }, required = ["field"], type = "object" }, type = "array" } }, required = [], type = "object" }
+
+  [[turn.tool]]
+  name = "get_node"
+  description = "Get a node by ID. In the default json format, returns the node's current values in 'properties', plus 'available_properties' — every field this node's type defines, each with its type, any allowed values, and 'set' indicating whether this node currently has a value for it. A field with \"set\": false exists and can be written; it simply has no value yet. Use format=markdown instead to get the node and all its descendants as a readable document; that format returns the document text alone, without either of those fields."
+  parameters_schema = { properties = { format = { description = "Output format: json (default) returns node fields, markdown returns the node and all descendants as a readable document", enum = ["json", "markdown"], type = "string" }, id = { description = "Node ID to retrieve", type = "string" } }, required = ["id"], type = "object" }
+[[turn]]
+label = "turn2-status-to-ready-for-review"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+
+REFERENCE — procedures relevant to this request. Use whichever applies and IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Creation
+Purpose: Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Spec, ADR, Ticket. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type.
+# Node Creation Guidance
+
+CALL create_node NOW: your next action is the tool call, not planning text.
+
+THE TYPE: set node_type to the id shown in EXISTING SCHEMAS, copied exactly.
+
+THE VALUES: put every particular the user supplied into field_values. Work through their message value by value and check each against the type's field list before calling. field_values is the ONLY way any value is stored — a value left out is lost silently while the record still reports as saved.
+
+VALUES WITH NO MATCHING FIELD: If the user supplies a particular the listed fields do not cover, still put it in field_values under a key of your own — lowercase, singular, snake_case, named after the user's own noun for it. NEVER drop a value because the type has no field for it: a dropped value is gone silently and the user was told the record was saved. Bare on a type from EXISTING SCHEMAS; `custom:`-prefixed on a built-in type — text, task, date — where unprefixed names are reserved for built-in fields. Do NOT call create_schema or update_schema to add the field first; put the value in this create_node call.
+
+SUCCESS: After create_node returns a node ID, confirm to the user what was created and STOP. Do NOT call get_node or any other tool — the create response is sufficient. The task is complete.
+"""
+user = "I've pushed the branch for that one — it's ready for review now"
+expect = """
+update_node carrying BOTH the id from turn 1's real tool result \
+("7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", not the ticket's title) AND \
+field_values={"status": "ready_for_review"} — the exact enum member, not \
+"review" / "In Review" / "ready for review". Two distinct failures worth \
+telling apart: a title in `id` means the id never reached the model, and an \
+absent or empty `field_values` means the write silently changes nothing.
+"""
+
+  [turn.tool_results]
+  update_node = '{"ok": true, "updated": ["status"]}'
+
+  [[turn.tool]]
+  name = "create_node"
+  description = "Create one new record of a type that already exists. Use for a single instance, never to define a new kind of record. Always pass 'content' as the record's title and nothing else — facts about it belong in 'field_values', never appended to the title. Always pass 'field_values' with every particular the user supplied, checked against the type's own field list — it is the only way those values are stored, and a call without them creates an empty record that still reports as saved. If the schema has a title_template (shown in EXISTING SCHEMAS), include those template fields in 'field_values' — the service composes the displayed title from them automatically. The example's user said: \"open a ticket for dana to rotate the signing keys on deploy in S-24, it's in dev, and it depends on the vault migration\". Note depends_on: the type lists no field for it, so it is carried under a key named after the user's own wording rather than dropped. Example call: {\"node_type\": \"ticket\", \"content\": \"Rotate signing keys on deploy\", \"field_values\": {\"status\": \"in_dev\", \"assignee\": \"dana\", \"sprint\": \"S-24\", \"depends_on\": \"the vault migration\"}}"
+  parameters_schema = { properties = { content = { description = "The record's title and nothing else: the shortest phrase naming what this record IS. Facts ABOUT it — who owns it, what state it is in, what it depends on — are field_values entries, never appended to the title.", type = "string" }, field_values = { description = "The values the user supplied. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from EXISTING SCHEMAS (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields.", type = "object" }, node_type = { description = "Node type: 'text', 'task', or a custom schema ID (e.g. 'ticket', 'adr'). For a custom schema ID, copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it.", type = "string" }, parent_id = { description = "Optional parent node ID", type = "string" } }, required = ["node_type", "content"], type = "object" }
+
+  [[turn.tool]]
+  name = "search_semantic"
+  description = "Find nodes semantically related to a natural-language query. By default returns full content for the top result (include_markdown=1). Increase include_markdown to get full content for more results, or set to 0 for IDs and snippets only. If a result's 'markdown' field is non-empty, that is the complete document — summarize or answer from it directly, do not call get_node or search_nodes again for that result."
+  parameters_schema = { properties = { collection = { description = "Filter results to a specific collection path (e.g. 'Architecture', 'Development'). Use for namespace/folder filtering.", type = "string" }, exclude_collections = { description = "Collection paths to exclude from results (e.g. [\"Archived\", \"Drafts\"]). Useful to narrow results when a collection is noisy.", items = { type = "string" }, type = "array" }, graph_boost = { description = "When true, re-rank results by blending similarity with graph connectivity (nodes with more relationships score higher). Formula: 0.7 * similarity + 0.3 * normalized_degree. Default: false.", type = "boolean" }, include_archived = { description = "Whether to include archived nodes in results. Default: false. Set to true when the user explicitly asks about archived or historical content.", type = "boolean" }, include_edges = { description = "When true, attach outgoing 'mentions' relationships of each result as an 'edges' array. Reduces round-trips for graph traversal. Default: false.", type = "boolean" }, include_markdown = { description = "Number of top results to include full markdown content for (0-5, default 1). Set to 0 for IDs and snippets only, or increase to get full content for multiple results.", type = "integer" }, limit = { description = "Max results to return (default 5)", type = "integer" }, node_types = { description = "Filter results to specific node types (e.g. [\"task\", \"text\"]). Use for type filtering; use 'collection' for namespace/folder filtering.", items = { type = "string" }, type = "array" }, property_filters = { additionalProperties = { type = "string" }, description = "Filter by node properties (AND logic, e.g. {\"status\": \"done\"})", type = "object" }, query = { description = "Natural language query for semantic search", type = "string" }, scope = { description = "Search scope: 'knowledge' (default, searches text/header/code/schema nodes) or 'everything' (all embedded node types). Note: ai-chat conversations are not embedded, so they are never returned by search regardless of scope.", enum = ["knowledge", "everything"], type = "string" }, threshold = { description = "Minimum similarity score (0.0-1.0). Lower values return more results with less precision. Default: 0.3. Lower to 0.1-0.2 for broader recall when initial results are too few.", type = "number" } }, required = ["query"], type = "object" }
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = "Find, list, and filter nodes by title, type, or stored field value. Returns each node's id and fields. Use when the node you need is not already identified in this conversation — re-searching for a record already returned earlier wastes a turn. This is the single tool for querying the graph by title, type, and/or typed properties — use it for all three of: (1) title/keyword lookup (query='auth'); (2) listing every node of a type (query='' or query='*', node_type='ticket' — both enumerate all of that type; do not expect '*' to do a wildcard substring match, it means \"no keyword filter\" just like ''); (3) filtering by typed properties with operators (status='in_dev', a date field before a given date) — pass 'filters' for these. Combine as needed (e.g. node_type + a property filter). A count of 0 means nothing in the workspace matches — it does not mean the query was wrong. When a type-scoped search returns no matches, the result carries 'filterable_properties' — the fields that type actually defines, with allowed values where they are constrained. Use it to check the filter you sent: retry with a listed field or value if yours was not among them, otherwise the result is genuinely empty. Never ask the user to confirm a field name or value that appears in that list. Dates use YYYY-MM-DD. Prefer this over search_semantic when you know the name/type or want structured results; use search_semantic only for meaning-based / fuzzy questions."
+  parameters_schema = { properties = { filters = { description = "Optional typed-property filters. Use for status/due_date/amount and any custom schema field, with operators. Omit for plain title/type listing.", items = { properties = { case_sensitive = { description = "For 'contains' operator: case sensitivity (default: true)", type = "boolean" }, node_id = { description = "For 'relationship' filters: the anchor node ID to traverse from", type = "string" }, operator = { description = "Comparison operator", enum = ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"], type = "string" }, property = { description = "Property key. Example: {\"type\": \"property\", \"property\": \"status\", \"operator\": \"equals\", \"value\": \"open\"} — status is a property filter, not metadata.", type = "string" }, relationship_type = { description = "For 'relationship' filters: which graph edge direction to traverse", enum = ["parent", "children", "mentions", "mentioned_by"], type = "string" }, type = { description = "Filter category: 'property' for ANY schema/node field (status, due_date, priority, and all custom schema fields) — use this for status. 'content' for node text. 'metadata' ONLY for the 4 built-in fields created_at, modified_at, node_type, content — NEVER use 'metadata' for status or any schema field, it will fail with 'Invalid metadata field'. 'relationship' for graph edges.", enum = ["property", "content", "metadata", "relationship"], type = "string" }, value = { description = "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator.", type = ["string", "number", "boolean", "array"] } }, required = ["type", "operator"], type = "object" }, type = "array" }, limit = { description = "Max results to return (default 50)", type = "integer" }, node_type = { description = "Filter by node type (e.g. 'task', 'text', or a custom schema ID). For a custom schema ID, copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. Omit to search all types.", type = "string" }, query = { description = "Keyword or phrase to match against node titles (substring match). Pass empty string or '*' to skip the title filter and enumerate all matching nodes (e.g. to list all nodes of a type).", type = "string" }, sorting = { description = "Optional sort configuration, applied in order.", items = { properties = { direction = { description = "Sort direction (default: asc)", enum = ["asc", "desc"], type = "string" }, field = { description = "Field to sort by (e.g. 'due_date', 'created_at', 'status')", type = "string" } }, required = ["field"], type = "object" }, type = "array" } }, required = [], type = "object" }
+
+  [[turn.tool]]
+  name = "get_node"
+  description = "Get a node by ID. In the default json format, returns the node's current values in 'properties', plus 'available_properties' — every field this node's type defines, each with its type, any allowed values, and 'set' indicating whether this node currently has a value for it. A field with \"set\": false exists and can be written; it simply has no value yet. Use format=markdown instead to get the node and all its descendants as a readable document; that format returns the document text alone, without either of those fields."
+  parameters_schema = { properties = { format = { description = "Output format: json (default) returns node fields, markdown returns the node and all descendants as a readable document", enum = ["json", "markdown"], type = "string" }, id = { description = "Node ID to retrieve", type = "string" } }, required = ["id"], type = "object" }

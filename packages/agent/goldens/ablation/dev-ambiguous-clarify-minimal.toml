@@ -1,0 +1,230 @@
+# derived-from: dev-ambiguous-clarify.toml -- subtree minimised per the KEEP/DROP rule.
+name = "dev-ambiguous-clarify-minimal"
+reps = 5
+
+notes = """
+MINIMAL-SUBTREE SWEEP -- dev-ambiguous-clarify
+
+The editorial rule applied here, chosen by what a schema CAN and CANNOT state:
+
+  KEEP  a sentence stating something no parameter schema and no EXISTING SCHEMAS
+        block can express -- an ontological distinction (kind vs instance,
+        reference-as-field) or an instruction to act on something ABSENT from
+        the declared surface (a value with no matching field).
+  DROP  a sentence a schema already carries -- argument shape, required-ness,
+        enum membership, key spelling, "call X now", or a restatement of the
+        tool description.
+
+Nothing survives the KEEP test for this case: every rule its subtree states is already carried by a parameter schema or by EXISTING SCHEMAS, so the subtree is dropped entirely.
+
+EVIDENCE THIS RULE RESTS ON (dev-schema-creation, 3 reps each, byte-identical):
+
+  whole subtree, 786 chars              supersedes PRESENT
+  ONE TYPE rule alone, 2 sentences      PRESENT
+  ONE TYPE rule alone, 1 terse clause   PRESENT
+  ENUM rule alone, 2 sentences          PRESENT
+  FIELDS rule alone                     ABSENT
+  FIELDS expanded to 2 sentences        ABSENT
+  an irrelevant 2-sentence rule         MALFORMED OUTPUT
+  no subtree at all                     ABSENT
+
+Terse-but-on-topic works; long-but-off-topic does not, and off-topic prose in the
+slot is worse than an empty slot. Confirmed at production fidelity (9 tools, 3
+candidates) by ablation/minimal-at-fidelity.toml, 5/5.
+
+BASE RESULT: route_clarify with both real ids
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — establish two indistinguishable candidates via a real tool result.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-list-in-review"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Search
+Purpose: Find, list, or filter existing records by title, type, or stored \
+field value.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = "What's sitting in review?"
+expect = """
+search_nodes(node_type="ticket", ...) filtering status to the exact enum \
+member "in_review".
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "c41d8e07-9b32-4a6f-8d15-3f92a7b6c084", "title": "Rotate signing keys on deploy", "node_type": "ticket", "properties": {"status": "in_review", "assignee": "dana", "sprint": "S-24"}}, {"id": "e58b2f19-6c74-4e83-b207-1a4d9c5e3f60", "title": "Backfill audit log retention", "node_type": "ticket", "properties": {"status": "in_review", "assignee": "dana", "sprint": "S-24"}}], "count": 2}
+  """
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+
+      [turn.tool.parameters_schema.properties.filters]
+      type = "array"
+      description = "Field filters. Use the field name and value exactly as listed for the type."
+
+        [turn.tool.parameters_schema.properties.filters.items]
+        type = "object"
+        required = ["type", "operator", "property", "value"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.type]
+          type = "string"
+          enum = ["property"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.operator]
+          type = "string"
+          enum = ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.property]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.value]
+          type = "string"
+
+# ---------------------------------------------------------------------------
+# Turn 2 — the ambiguous request. Asking is correct.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-merge-it-ambiguous"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Update
+Purpose: Change a field on an existing record when the user describes a new \
+state for something that already exists.
+
+--- Candidate 2: Clarification
+Purpose: Ask the user which record they meant, when the request fits more \
+than one and nothing in the conversation picks between them.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = "Go ahead and mark it done"
+expect = """
+route_clarify listing BOTH in-review tickets as options — asking is the \
+correct answer here, not a fallback. Two failures worth telling apart: \
+update_node against either ticket is a silent wrong write, and a prose \
+question instead of a route_clarify call looks fine in a transcript while \
+being invisible to anything downstream.
+"""
+
+  [turn.tool_results]
+  route_clarify = '{"ok": true, "asked": true}'
+
+  [[turn.tool]]
+  name = "route_clarify"
+  description = """
+  Ask the user which of several specific records they meant. Use only when \
+  the request matches more than one and nothing in the conversation \
+  distinguishes them. Always supply the candidates as options — never a bare \
+  question.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["question", "options"]
+
+      [turn.tool.parameters_schema.properties.question]
+      type = "string"
+      description = "The question to put to the user, one sentence."
+
+      [turn.tool.parameters_schema.properties.options]
+      type = "array"
+      description = "The concrete candidates the request could mean, one entry each."
+
+        [turn.tool.parameters_schema.properties.options.items]
+        type = "object"
+        required = ["id", "label"]
+
+          [turn.tool.parameters_schema.properties.options.items.properties.id]
+          type = "string"
+          description = "The candidate's id, copied exactly from the tool result."
+
+          [turn.tool.parameters_schema.properties.options.items.properties.label]
+          type = "string"
+          description = "How to describe this candidate to the user."
+
+  [[turn.tool]]
+  name = "update_node"
+  description = """
+  Update an existing node's fields immediately — call this directly with the \
+  node id you already have from a previous tool result. An id on its own \
+  changes nothing: every call must also carry the change itself in \
+  field_values.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+
+      [turn.tool.parameters_schema.properties.id]
+      type = "string"
+      description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
+
+      # Declared sub-properties mirroring the `ticket` type's own fields — the
+      # pattern dev-instance-creation.toml established after eight
+      # wording-level arms failed to carry a value the schema did not declare.
+      # Applied here for consistency and to check it does not regress a case
+      # that already passed.
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The change itself: field keys to new values, e.g. {\"status\": \"done\"}. When a field lists allowed values, use one of those values exactly."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+        description = "The ticket's workflow state."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+        type = "string"
+        description = "Who the work is assigned to."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.sprint]
+        type = "string"
+        description = "The sprint identifier."

@@ -1,0 +1,352 @@
+# Not a case file. A `.toml` so it sits beside the arms it summarises; the
+# runner is never pointed at it.
+#
+# ===========================================================================
+# GUIDANCE MINIMISATION SPIKE -- what was measured and what it means
+# ===========================================================================
+#
+# Every result below is 3 or 5 reps, byte-identical within each arm unless
+# stated. Reproduce any of them with, from the repo root:
+#
+#   cargo build --release -p nodespace-agent --bin golden_runner
+#   ./target/release/golden_runner --reps 5 packages/agent/goldens/ablation/<arm>.toml
+#
+# No daemon, no DB. Set NODESPACE_PROMPT_DUMP=<path> to capture the exact
+# post-template prompt for any run.
+#
+# ---------------------------------------------------------------------------
+# 0. THE FIDELITY GAP THAT STARTED THIS
+# ---------------------------------------------------------------------------
+#
+# The corpus cases hand-author the one or two tools a turn needs. Production
+# Stage 2 sends the union of the retrieved candidates' whitelists -- 9 tools
+# with full parameter schemas -- because the read tools (search_nodes,
+# search_semantic, get_node) appear in 5-6 of the 8 seeded skills, so any three
+# candidates drag most of the registry in.
+#
+# Measured on a live daemon turn via NODESPACE_PROMPT_DUMP:
+#
+#   dev-status-change-enum turn 1     2,679 chars    1 tool declaration
+#   real production stage 2          24,636 chars    9 tool declarations
+#
+# The corpus was measuring 11% of the prompt production sends, and the missing
+# 15,373 chars were entirely tool declarations.
+#
+# WHAT THAT INVALIDATED: handing the model one tool and asking it to call that
+# tool does not test tool SELECTION -- no wrong answer is available. So the
+# corpus measured argument FORMATION but never selection, and any conclusion
+# resting on selection was uninformative. That specifically included
+# no-candidate-block.toml and no-instruction-subtree.toml, whose "the Stage-2
+# candidate block is inert" verdict was measured with neither competing tools
+# nor competing procedures.
+#
+# `full-tool-surface.toml` and `production-baseline.toml` rebuild the case at
+# real fidelity. production-baseline (9 tools, 3 candidates, 22,064 chars) is
+# the honest reference: 5/5, and its turn-1 filter is BETTER than the 1-tool
+# arm's -- the real schema taught the structured form where the hand-authored
+# one produced a loose {"status":"in_dev"}.
+#
+# One generator bug worth recording, because it parsed and ran cleanly while
+# measuring the wrong thing: `parameters_schema` is a toml::Value, not a
+# string. Emitting it as a multi-line string yields `parameters:{}` at the
+# template boundary, and every tool rendered at roughly half production size.
+# Caught only by diffing per-tool rendered sizes against a live capture.
+#
+# ---------------------------------------------------------------------------
+# 1. THE CANDIDATE BLOCK AT FIDELITY
+# ---------------------------------------------------------------------------
+#
+#   arm                        tools  subtrees   turn 1   turn 2
+#   production-baseline            9  3 full     RIGHT    RIGHT
+#   fidelity-no-subtrees           9  0          RIGHT    RIGHT
+#   fidelity-rank1-only            9  1          WRONG    RIGHT
+#   fidelity-rank1-fetch          10  1          RIGHT    RIGHT   0 fetches
+#   fidelity-rank1-header-only     9  1          RIGHT    RIGHT
+#   fidelity-rank1-tool-only      10  1          WRONG    RIGHT
+#   fidelity-k1                    4  1          RIGHT    WRONG
+#
+# turn-1 WRONG = search_nodes({"node_type":"ticket","query":"in dev"}) -- right
+# tool, wrong shape: a keyword query instead of a typed status filter.
+#
+# THREE RESULTS:
+#
+# (a) Dropping ALL subtrees changed nothing, even at 9 tools and 3 candidates.
+#     The earlier inertness finding survives the honest test on this case.
+#
+# (b) ONE subtree is WORSE than none. Keeping only rank-1's procedure failed
+#     5/5. Zero procedures leaves the tool schema as sole authority and the
+#     model follows it; one partial procedure competes with the schema and the
+#     model follows the prose into a keyword search. Partial injection is
+#     actively harmful, which is not what a "less is more" reading predicts.
+#
+# (c) The repair is one SENTENCE, not a mechanism. rank1-header-only (a
+#     sentence saying only the first candidate is shown in full, no fetch tool)
+#     passes; rank1-tool-only (the fetch tool, no sentence) fails.
+#     `load_procedure` was never called in ANY arm offering it -- 0 fetches
+#     across three arms. LAZY LOADING WAS NOT NEEDED: the model never wanted
+#     the withheld procedures.
+#
+# (d) K=1 breaks multi-turn. fidelity-k1 scopes to Node Creation's whitelist
+#     (4 tools); turn 2 then calls search_nodes again because update_node is not
+#     in that whitelist. Scoping to one skill removes tools LATER turns need.
+#     That is a real constraint on the largest footprint lever.
+#
+# ---------------------------------------------------------------------------
+# 2. WHERE INERTNESS STOPS -- the sweep
+# ---------------------------------------------------------------------------
+#
+# Arm A's treatment (drop subtrees, keep name + Purpose) applied to the cases
+# whose guidance states rules a schema CANNOT express:
+#
+#   dev-status-change-enum     inert    (its rules are all in schemas)
+#   dev-instance-creation      inert    (blocked_by still captured)
+#   dev-schema-creation        LOAD-BEARING -- `supersedes` vanished 3/3
+#   dev-unseen-schema          turn 1 degraded to a malformed `in` filter
+#
+# So "subtrees are inert" does NOT generalise. It holds where every rule the
+# subtree carries is also carried structurally -- `filters`' shape by
+# search_nodes' schema, legal enum members by EXISTING SCHEMAS -- and fails
+# where the subtree states something no schema can.
+#
+# ---------------------------------------------------------------------------
+# 3. WHICH SENTENCE DOES THE WORK -- isolation
+# ---------------------------------------------------------------------------
+#
+# dev-schema-creation, each arm keeping exactly ONE rule of the four:
+#
+#   ONE TYPE PER REQUEST (2 sentences)          supersedes PRESENT
+#   A FIELD WITH A FIXED SET OF STATES (2 sent) PRESENT
+#   FIELDS: define only the fields implied      ABSENT
+#   CALL create_schema NOW                      ABSENT
+#   whole subtree dropped                       ABSENT
+#
+# A semantic reading predicts only ONE TYPE works -- it is the rule naming
+# cross-record references, and `supersedes` is one. The enum rule names no such
+# thing and works anyway; FIELDS states completeness most directly and fails.
+#
+# SHAPE WAS THEN REFUTED FROM BOTH DIRECTIONS:
+#
+#   ONE TYPE cut to a single terse clause       PRESENT   (short, on-topic)
+#   FIELDS expanded to 2 sentences + consequence ABSENT   (long, off-topic)
+#   an IRRELEVANT 2-sentence rule (title casing) MALFORMED OUTPUT
+#
+# The irrelevant-rule arm is the strongest result in the set: the model emitted
+# a call echoing create_schema's OWN TOOL DESCRIPTION back as an argument value
+# with a bogus nested `parameters` object, 3/3. Off-topic prose in the guidance
+# slot is worse than an empty slot -- direct support for ADR-064's
+# deletion-not-substitution rule.
+#
+# ---------------------------------------------------------------------------
+# 4. THE RULE THAT EMERGED
+# ---------------------------------------------------------------------------
+#
+#   KEEP a sentence only if it states something no parameter schema and no
+#        EXISTING SCHEMAS block can express:
+#          - an ontological distinction (kind vs instance, reference-as-field)
+#          - an instruction to act on something ABSENT from the declared
+#            surface (a value with no matching field)
+#          - a convention a schema cannot encode (query "" means list all)
+#
+#   DROP anything a schema already carries: argument shape, required-ness,
+#        enum membership, key spelling, "call X now", restatements of the tool
+#        description.
+#
+#   NEVER SUBSTITUTE. Do not put a differently-worded rule in a slot you are
+#        emptying. Measured: off-topic prose produced malformed output, and a
+#        generically-worded filter rule produced WORSE output than no rule --
+#        the model emitted Gemma's internal call syntax as raw text
+#        (`call:search_nodes{filters:[...]}`) instead of a JSON tool call.
+#
+# Applied across all 8 corpus cases: ~4,500 chars removable, 6 of 8 clean.
+# Verified at production fidelity by minimal-at-fidelity.toml -- 9 tools, 3
+# candidates, 5/5.
+#
+# ===========================================================================
+# CORRECTION (appended after sections 5-7 were written)
+# ===========================================================================
+#
+# Sections 5 and 6 below are SUPERSEDED. Both rest on arms that paired
+# production GUIDANCE with the corpus's HAND-AUTHORED tool schemas, and the
+# mismatch changed the results. Read sections 5A and 6A instead; the originals
+# are kept because a retracted measurement is still evidence about method.
+#
+# ---------------------------------------------------------------------------
+# 5A. THE RULE DOES NOT SURVIVE PROPER PAIRING
+# ---------------------------------------------------------------------------
+#
+# `prod-paired-*.toml` pair both halves from source: guidance from
+# skill_rules.rs, tool schemas from model_facing_tool_definitions() via
+# `dump_tool_defs`. Tool surface is Schema Creation's whitelist.
+#
+#   arm                        rules  chars   name   coreValues
+#   prod-paired-current            9  3,491   OK     {value,label} pairs -- CORRECT
+#   prod-paired-trimmed            5  1,794   OK     {label} only, `value` MISSING
+#   + UNIQUE_FIELD_FLAGS           6  2,500   OK     still missing
+#   + TITLE_TEMPLATE_PLACEHOLDERS  6  2,105   OK     CORRECT
+#   + EDIT_DONT_RECREATE           6  2,163   OK     CORRECT
+#   + RENAME_VS_RELABEL            6  2,105   OK     CORRECT
+#
+# THREE UNRELATED RULES EACH INDEPENDENTLY RESTORE `value`. None mentions
+# enums. One rule (UNIQUE_FIELD_FLAGS) does not, and it is the LONGEST of the
+# four -- so it is not simply mass either.
+#
+# This is the same signature as section 3: two unrelated rules restored
+# `supersedes` while the rule most directly about completeness did not. There
+# the shape hypothesis was refuted; here the semantic one is too. What "which
+# rules to keep" depends on is NOT recoverable by reading the rules.
+#
+# CONSEQUENCE: the KEEP/DROP rule in section 4 is NOT VALIDATED against
+# production. It held on the corpus's own guidance across 8 cases, and that
+# result stands for the corpus. It does not license editing skill_rules.rs.
+# No trim was applied.
+#
+# ---------------------------------------------------------------------------
+# 6A. THE TWO DEFECTS, CORRECTED
+# ---------------------------------------------------------------------------
+#
+# (a) core#2182 was WRONG and is closed. #2183 established that the evidence
+#     came from goldens/dev-unseen-schema.toml, which declares `value` as a
+#     bare `type = "string"`. The model emitting "cut,soak" was COMPLYING with
+#     the schema in front of it. Production already carried the
+#     ["string","number","boolean","array"] union. The defect was in the
+#     measurement corpus, not the shipping schema.
+#
+#     Same error as the coreValues/allowed_values mixup: a hand-authored
+#     fixture measured, the result attributed to production. #2183 did land a
+#     repair (repair_scalar_in_operator_values) as an explicit BACKSTOP, not as
+#     the mechanism.
+#
+# (b) The "ADR" contamination is REAL and is FIXED in this branch. Located by
+#     prompt dump, not by the mispaired arms, which is why it survives the
+#     correction above. Two occurrences in create_schema, both removed:
+#       - the `name` parameter description: (e.g. "Ticket", "ADR")
+#       - the tool's top-level description: (e.g. 'Ticket', 'ADR')
+#     Before: trimmed arms produced name "ADR" 3/3 on a request that says
+#     "architecture decision records" and never abbreviates.
+#     After: "Architecture Decision Record" 3/3 in both paired arms.
+#
+#     CORRECTION (review of PR #2188): an earlier draft of this section said
+#     the abbreviation appeared "nowhere else in the prompt". That is wrong.
+#     `'adr'` survives in three other model-facing descriptions inside the
+#     same tool surface -- create_node's `node_type`, create_schema's
+#     `relationships.targetType`, and update_schema's `schema_id` -- plus
+#     skill_rules.rs's RELATIONSHIP_VS_FIELD example. The 3/3 after-measurement
+#     was taken with all of them present, so what was demonstrated is narrower
+#     than "removing the token fixes it": removing it FROM THIS PARAMETER
+#     fixes it.
+#
+#     The three survivors are plausibly a different case rather than an
+#     unfixed instance of the same one. Each names an id that must ALREADY
+#     exist and says so explicitly, so the example illustrates a format; the
+#     `name` parameter names the thing being CREATED, so its example offered a
+#     value to adopt. That distinction is untested -- it predicts the
+#     survivors are harmless, and a measurement could refute it.
+#
+#     A schema's illustrative example supplies a candidate answer to a question
+#     it was not addressing. This is the mirror of what #1932 guards: there,
+#     eval prompts must not share text with guidance; here, a SCHEMA supplied a
+#     name the model adopted.
+#
+# ---------------------------------------------------------------------------
+# 7A. WHAT IS ACTUALLY ESTABLISHED
+# ---------------------------------------------------------------------------
+#
+# HOLDS:
+#   - The tool-surface fidelity gap (section 0) and everything measured at
+#     fidelity in section 1. Those arms use real tool definitions.
+#   - Inertness does not generalise (section 2).
+#   - Neither shape nor semantics explains which rule works (sections 3, 5A).
+#   - The "ADR" schema-example contamination, and its fix.
+#   - Off-topic prose in an emptied guidance slot measured WORSE than an empty
+#     slot -- malformed output, 3/3.
+#
+# DOES NOT HOLD:
+#   - Any recommendation to trim skill_rules.rs. Not measured validly.
+#   - core#2182 as filed.
+#   - The prod-guidance-* arms (kept, marked superseded by prod-paired-*).
+#
+# METHOD NOTE, twice earned: measuring a hand-authored fixture and attributing
+# the result to production is the recurring error in this spike. It produced a
+# wrong issue (#2182) and a wrong trim recommendation. Any arm that speaks to
+# production must take BOTH its guidance and its tool schemas from source --
+# which is what build_prod_paired.py does, and why it aborts if a DROP claim
+# cannot be verified against the real schema.
+#
+# ---------------------------------------------------------------------------
+# 5. THE RULE ON PRODUCTION'S OWN GUIDANCE
+# ---------------------------------------------------------------------------
+#
+# Everything above used the corpus's hand-authored guidance. Production's is
+# different text -- named constants in skill_rules.rs, 3,900 chars for Schema
+# Creation. Applying the rule without measuring it there would repeat exactly
+# the error this spike exists to correct.
+#
+#   prod-guidance-full (10 rules, 3,900)   status OK, supersedes -> relationship
+#                                          with an INVENTED targetType
+#   prod-guidance-trimmed (4 rules, 1,438) allowed_values EMPTY, supersedes
+#                                          malformed, name truncated
+#   prod-guidance-trimmed-v2 (ENUM in,     status OK, name OK, supersedes ABSENT
+#     RELATIONSHIP_VS_FIELD out)
+#   prod-guidance-trimmed-v3 (both in)     status OK, supersedes -> targetType
+#     5 rules, 1,546 chars                 "adr" (VALID), name "ADR"
+#
+# TWO CORRECTIONS TO THE FIRST TRIM, both confirmed:
+#   - ENUM_FORMAT was dropped on the grounds the schema carries it. It does
+#     NOT -- `allowed_values` is absent from create_schema's parameter schema.
+#     Restoring it fixed the empty enum. That was a misapplication of the KEEP
+#     test, not a failure of it.
+#   - RELATIONSHIP_VS_FIELD is what makes the model NOTICE the cross-record
+#     detail at all. Without it `supersedes` vanishes entirely (v2); with it
+#     the detail is captured.
+#
+# v3 is BETTER than full on the substantive axis -- a valid targetType where
+# full invents one -- at 60% fewer characters.
+#
+# ---------------------------------------------------------------------------
+# 6. TWO DEFECTS FOUND, NEITHER FIXABLE BY GUIDANCE
+# ---------------------------------------------------------------------------
+#
+# (a) core#2182 -- search_nodes' `in` operator receives a comma-joined string
+#     ("cut,soak") instead of an array. BOTH channels already state the rule:
+#     `value` is typed ["string","number","boolean","array"] and its
+#     description says "Use array for 'in' operator". Prose was measured and
+#     does not fix it (dev-unseen-schema-filter-rule.toml, 3/3 unchanged); a
+#     generic wording made a sibling case worse. A malformed FILTER is worse
+#     than a malformed write: it returns zero results, indistinguishable from a
+#     genuinely empty one.
+#
+# (b) The name "ADR" in prod-guidance-trimmed-v3's output does NOT come from
+#     the guidance. The user's message says "architecture decision records" and
+#     never "ADR". Genericising the guidance's own worked example changed
+#     nothing; deleting it changed nothing. Dumping the prompt located the only
+#     occurrence: create_schema's `name` parameter description, which reads
+#     'Display name for the type, singular (e.g. "Ticket", "ADR")'. The model
+#     copies the schema's illustrative example as the answer.
+#
+#     This is contamination in the mirror direction from the one #1932 guards.
+#     That guard stops eval prompts sharing text with guidance, so a pass
+#     cannot prove memorisation. Here a SCHEMA supplies an incidental detail
+#     that the model adopts on an unrelated axis. Worked examples in schemas
+#     need the same discipline as eval prompts: their incidental details are
+#     not inert.
+#
+# ---------------------------------------------------------------------------
+# 7. WHAT IS NOT ESTABLISHED
+# ---------------------------------------------------------------------------
+#
+# Sections 5 and 6(b) rest on ONE case (dev-schema-creation) and ONE skill
+# (Schema Creation). The KEEP/DROP rule generalised across 8 cases in the
+# CORPUS's guidance, but production's text behaved differently enough that the
+# first trim was wrong twice. The other seven production skills are untested.
+#
+# Treat the Schema Creation trim as ready to apply and measure; treat general
+# application to the other skills as requiring the same per-skill measurement,
+# not as a settled conclusion.
+#
+#   >>> REVOKED by section 5A. Properly paired against production's own tool
+#   >>> schemas the trim FAILS, and no trim was applied. Read 5A before acting
+#   >>> on anything in this section.
+#
+# Single runs are not decision-grade: identical code has scored 6/7/7 on the
+# agent matrix, and scenario 6 measured 3/3 versus 0/8 on carried history alone.
+# Every result here is 3 or 5 reps.

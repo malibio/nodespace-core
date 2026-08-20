@@ -1,0 +1,169 @@
+# derived-from: dev-instance-creation.toml -- subtree minimised per the KEEP/DROP rule.
+name = "dev-instance-creation-minimal"
+reps = 5
+
+notes = """
+MINIMAL-SUBTREE SWEEP -- dev-instance-creation
+
+The editorial rule applied here, chosen by what a schema CAN and CANNOT state:
+
+  KEEP  a sentence stating something no parameter schema and no EXISTING SCHEMAS
+        block can express -- an ontological distinction (kind vs instance,
+        reference-as-field) or an instruction to act on something ABSENT from
+        the declared surface (a value with no matching field).
+  DROP  a sentence a schema already carries -- argument shape, required-ness,
+        enum membership, key spelling, "call X now", or a restatement of the
+        tool description.
+
+Kept for this case: "VALUES WITH NO MATCHING FIELD: put a particular the listed fields do not cover into field_values under a key of your own rather than dropping it."
+
+EVIDENCE THIS RULE RESTS ON (dev-schema-creation, 3 reps each, byte-identical):
+
+  whole subtree, 786 chars              supersedes PRESENT
+  ONE TYPE rule alone, 2 sentences      PRESENT
+  ONE TYPE rule alone, 1 terse clause   PRESENT
+  ENUM rule alone, 2 sentences          PRESENT
+  FIELDS rule alone                     ABSENT
+  FIELDS expanded to 2 sentences        ABSENT
+  an irrelevant 2-sentence rule         MALFORMED OUTPUT
+  no subtree at all                     ABSENT
+
+Terse-but-on-topic works; long-but-off-topic does not, and off-topic prose in the
+slot is worse than an empty slot. Confirmed at production fidelity (9 tools, 3
+candidates) by ablation/minimal-at-fidelity.toml, 5/5.
+
+BASE RESULT: create_node with all five values incl. blocked_by (unlisted)
+"""
+
+[[turn]]
+label = "create-ticket-with-particulars"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text; blocked_by: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Creation
+Purpose: Add one new record of a type the workspace already tracks, when the \
+user supplies the particulars of a single item rather than describing a new \
+kind of thing.
+
+VALUES WITH NO MATCHING FIELD: put a particular the listed fields do not cover into field_values under a key of your own rather than dropping it.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text; blocked_by: text [title_template: {title}]
+"""
+user = """
+File a ticket for dana to fix the flaky retry test in sprint S-25 — it's \
+ready for dev, and it's blocked by the token refresh work
+"""
+expect = """
+create_node(node_type="ticket") carrying ALL FOUR particulars: assignee=dana, \
+sprint=S-25, status="ready_for_dev" as the exact enum member, and \
+blocked_by="token refresh work" as a plain string. Measured 3/3.
+
+blocked_by is the one that matters: it was dropped 3/3 across eight \
+wording-level arms and only lands once the field is DECLARED in the tool \
+schema — see the notes. A call carrying the three listed values but not \
+blocked_by is the regression this case exists to catch, and it reports success \
+while losing what the user said.
+"""
+
+  [turn.tool_results]
+  create_node = '{"ok": true, "id": "9a2f4c81-7d35-4e60-b184-6c93f2a5e07b"}'
+
+  [[turn.tool]]
+  name = "create_node"
+  description = """
+  Create one new record of a type that already exists. Use for a single \
+  instance, never to define a new kind of record. The example's user said: \
+  "open a ticket for dana to rotate the signing keys on deploy in S-24, it's \
+  in dev, and it depends on the vault migration". Note `depends_on`: the type \
+  lists no field for it, so it is carried under a key named after the user's \
+  own wording rather than dropped. Example call: {"node_type": "ticket", \
+  "content": "Rotate signing keys on deploy", "field_values": {"status": \
+  "in_dev", "assignee": "dana", "sprint": "S-24", "depends_on": "the vault \
+  migration"}}
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["node_type", "content"]
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+
+      # The diagnostic probe showed the model does not DROP an unlisted detail
+      # — it folds it into `content` as extra title text. So the fix belongs
+      # here, bounding what content is, rather than in another restatement of
+      # "record the value".
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "The record's title and nothing else: the shortest phrase naming what this record IS. Facts ABOUT it — who owns it, what state it is in, what it depends on — are field_values entries, never appended to the title."
+
+      # `additionalProperties` is the schema-channel way to say "keys beyond
+      # the listed ones are legal here". Prose asserting the same thing was
+      # measured inert across four arms; this states it as structure, which is
+      # the channel ADR-064 rule 1 gives argument shape to.
+      # Every field the type declares is declared HERE too, as a typed
+      # sub-property. That is the mechanism that closed this case after eight
+      # wording-level arms failed — see the notes.
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The values the user supplied, keyed by the type's field names."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+
+        [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+        type = "string"
+        description = "Who the work is assigned to."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.sprint]
+        type = "string"
+        description = "The sprint identifier."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.blocked_by]
+        type = "string"
+        description = "The work this ticket is waiting on, when the user says it is blocked by or depends on something else. A plain string naming that work, e.g. \"token refresh work\" — not an object."
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = """
+  Define a NEW entity type. Use only when the workspace does not already track \
+  the kind of record described — never for a single instance of a type that \
+  already exists.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["name", "fields"]
+
+      [turn.tool.parameters_schema.properties.name]
+      type = "string"
+
+      [turn.tool.parameters_schema.properties.fields]
+      type = "array"
+
+        [turn.tool.parameters_schema.properties.fields.items]
+        type = "object"
+        required = ["name", "type"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.name]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.type]
+          type = "string"
+          enum = ["text", "number", "date", "enum", "boolean"]

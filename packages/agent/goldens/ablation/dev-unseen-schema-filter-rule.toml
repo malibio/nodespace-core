@@ -1,0 +1,212 @@
+# derived-from: dev-unseen-schema.toml -- minimal subtree plus one filter rule.
+name = "dev-unseen-schema-filter-rule"
+reps = 5
+
+notes = """
+FILTER-CONSTRUCTION ARM -- dev-unseen-schema, rule: filter-rule
+
+Closes (or fails to close) the two remaining failures from the minimal-subtree
+sweep. That sweep applied one editorial rule to all 8 corpus cases:
+
+  KEEP  a sentence stating something no parameter schema and no EXISTING SCHEMAS
+        block can express -- an ontological distinction, or an instruction to act
+        on something ABSENT from the declared surface.
+  DROP  a sentence a schema already carries -- argument shape, required-ness,
+        enum membership, key spelling, "call X now".
+
+6 of 8 cases passed 3/3. The two failures are both search_nodes turn-1 FILTER
+ARRAY construction:
+
+  dev-status-change-enum  query "\"\"\"" -- corrupted empty-string literal
+  dev-unseen-schema       {"operator":"in","value":"cut,soak"} -- comma-joined
+                          string where `in` needs a list
+
+Both yield a filter matching nothing, indistinguishable from a real empty result.
+Same class as #2159, where enums-on-filters gave right values in a broken format.
+
+THE RULE ADDED HERE
+
+"FILTERS: each filter is one object with property, operator, and value. An operator taking several values takes them as a list, never as one comma-joined string."
+
+This is nominally argument shape, which the KEEP test assigns to the schema. But
+search_nodes' parameter schema is depth 7 with arrays of objects, and the model
+does not build it reliably from the schema alone. If this arm closes the failure,
+deep-array construction is a genuine KEEP category and the editorial rule needs
+that clause. If it does not, the problem is the schema's shape rather than
+missing prose, and the fix belongs in tools.rs.
+
+BASE (unmodified case): passes 3/3.
+MINIMAL (subtree dropped): turn 1 fails as above, turn 2 correct.
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — find the release. Unseen type, unseen enum.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-find-release"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- release "Release" -> version: text, required; stage: enum {cut,soak,shipped,rolled_back}, required; build: text; owner: text [title_template: {version}]
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Search
+Purpose: Find, list, or filter existing records by title, type, or stored \
+field value.
+
+FILTERS: each filter is one object with property, operator, and value. An operator taking several values takes them as a list, never as one comma-joined string.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- release "Release" -> version: text, required; stage: enum {cut,soak,shipped,rolled_back}, required; build: text; owner: text [title_template: {version}]
+"""
+user = "What releases do we have open?"
+expect = """
+search_nodes(node_type="release") — the unseen type id, taken off the entity \
+types block rather than from any example. A filter on `stage` is welcome but \
+not the measurement; the type id is.
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "b8c4e260-1f97-4a53-8e0d-72a5b1c9f483", "title": "2026.8.3", "node_type": "release", "properties": {"version": "2026.8.3", "stage": "cut", "build": "2026.8.3", "owner": "sam"}}], "count": 1}
+  """
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+
+      [turn.tool.parameters_schema.properties.filters]
+      type = "array"
+      description = "Field filters. Use the field name and value exactly as listed for the type."
+
+        [turn.tool.parameters_schema.properties.filters.items]
+        type = "object"
+        required = ["type", "operator", "property", "value"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.type]
+          type = "string"
+          enum = ["property"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.operator]
+          type = "string"
+          enum = ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.property]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.value]
+          type = "string"
+
+# ---------------------------------------------------------------------------
+# Turn 2 — the write. `soak` cannot be guessed; it must be read.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-stage-to-soak"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- release "Release" -> version: text, required; stage: enum {cut,soak,shipped,rolled_back}, required; build: text; owner: text [title_template: {version}]
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Update
+Purpose: Change a field on an existing record when the user describes a new \
+state for something that already exists.
+
+FILTERS: each filter is one object with property, operator, and value. An operator taking several values takes them as a list, never as one comma-joined string.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- release "Release" -> version: text, required; stage: enum {cut,soak,shipped,rolled_back}, required; build: text; owner: text [title_template: {version}]
+"""
+user = "2026.8.3 is out on staging now, baking overnight before we ship it"
+expect = """
+update_node(id="b8c4e260-...", field_values={"stage": "soak"}). `soak` is the \
+measurement: the user never says the word, it is not guessable from general \
+knowledge the way "shipped" would be, and it appears in no example anywhere \
+in the prompt. Producing it requires reading the allowed values off the \
+node-types block and matching the description to one. "staging", "baking", \
+"testing" or any prettified form is the failure — and so is `shipped`, which \
+is the plausible-sounding wrong answer since the user mentions shipping as a \
+LATER step.
+"""
+
+  [turn.tool_results]
+  update_node = '{"ok": true, "updated": ["stage"]}'
+
+  [[turn.tool]]
+  name = "update_node"
+  description = """
+  Update an existing node's fields immediately — call this directly with the \
+  node id you already have from a previous tool result. An id on its own \
+  changes nothing: every call must also carry the change itself in \
+  field_values. Example call: {"id": "a1b2c3d4-...", "field_values": \
+  {"status": "in_dev"}}
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+
+      [turn.tool.parameters_schema.properties.id]
+      type = "string"
+      description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
+
+      # Declared sub-properties, mirroring the `release` type's own fields —
+      # the pattern dev-instance-creation.toml established. This case is its
+      # hardest test: the type is one no example or instruction mentions, so
+      # the declarations are generated from the schema rather than recognised
+      # from training.
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The change itself: field keys to new values. Send only the keys that change."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.stage]
+        type = "string"
+        enum = ["cut", "soak", "shipped", "rolled_back"]
+        description = "The release's lifecycle stage."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.version]
+        type = "string"
+        description = "The release version."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.build]
+        type = "string"
+        description = "The build identifier."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.owner]
+        type = "string"
+        description = "Who owns the release."

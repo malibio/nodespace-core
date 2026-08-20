@@ -1,0 +1,148 @@
+# derived-from: dev-schema-creation.toml -- keeps only the "CALL create_schema NOW" rule.
+name = "schema-creation-only-call-now"
+reps = 5
+
+notes = """
+ISOLATION ARM -- keeps exactly ONE rule from Schema Creation's subtree (CALL create_schema NOW),
+drops the other three. Everything else byte-identical to dev-schema-creation.toml.
+
+WHY
+
+ablation/dev-schema-creation-no-subtrees.toml dropped the whole subtree and lost
+the `supersedes` field 3/3 -- the base emits both `status` and `supersedes`, the
+stripped arm only `status`. That established the subtree is load-bearing HERE
+while being inert on dev-status-change-enum and dev-instance-creation.
+
+But "the subtree matters" is not actionable: the subtree is four separate rules.
+This arm set finds which one.
+
+`supersedes` is a reference to another record, so ONE TYPE PER REQUEST ("a detail
+that points at another record is a FIELD on this type, not a second type to
+define") is the prior suspect. If that arm alone restores the field, the finding
+is narrow and precise: the model needs telling that a cross-record reference
+belongs as a field. If instead FIELDS restores it, the rule is about completeness
+of extraction. If none does, the rules combine and none is individually
+sufficient.
+
+BASE (3 reps, byte-identical): create_schema with name "Architecture Decision
+Record" and BOTH fields -- status (enum, allowed_values [proposed, accepted]) and
+supersedes (text).
+
+STRIPPED (3 reps, byte-identical): same call, `supersedes` absent.
+"""
+
+[[turn]]
+label = "create-adr-type"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Schema Creation
+Purpose: Define a new kind of record the workspace does not track yet, when \
+the user describes a category of thing rather than one particular instance.
+
+CALL create_schema NOW: your next action is the tool call, not planning text.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = """
+We need to start tracking architecture decision records — each one has a \
+status, moving from proposed to accepted, and sometimes one supersedes an \
+older one
+"""
+expect = """
+create_schema, exactly ONCE, defining a status field of type enum whose \
+allowed_values include proposed and accepted, plus a field for the supersedes \
+relationship. Failures worth telling apart: an enum declared with no \
+allowed_values, a second create_schema for the superseded record, and any \
+field copied off `ticket` (assignee, sprint) that this request never mentioned.
+"""
+
+  [turn.tool_results]
+  create_schema = '{"ok": true, "type_id": "adr", "note": "Type created. The id is derived from the name: lowercased, spaces to underscores."}'
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = """
+  Define a new entity type with its fields. Use when the user describes a kind \
+  of record the workspace does not track yet, not a single instance of an \
+  existing kind. The example shows one field per detail the user mentioned, \
+  including "blocks another ticket" as a field rather than a second type. \
+  Example call: {"name": "Ticket", "fields": [{"name": "status", "type": \
+  "enum", "allowed_values": ["ready_for_dev", "in_dev", "done"]}, {"name": \
+  "assignee", "type": "text"}, {"name": "blocks", "type": "text"}]}
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["name", "fields"]
+
+      [turn.tool.parameters_schema.properties.name]
+      type = "string"
+      description = "Display name for the type, singular (e.g. \"Ticket\", \"ADR\")."
+
+      # Deliberately plain. An earlier version spelled out the obligation here
+      # ("work through the user's message detail by detail ... a detail with no
+      # field is silently lost") and measured NO effect, 3/3. The worked
+      # example in the tool description is what moved it — see the notes.
+      [turn.tool.parameters_schema.properties.fields]
+      type = "array"
+      description = "Every field this type needs, listed explicitly. Do not include a title or name field — every record already has a title."
+
+        [turn.tool.parameters_schema.properties.fields.items]
+        type = "object"
+        required = ["name", "type"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.name]
+          type = "string"
+          description = "Field name, lowercase snake_case (e.g. status, due_date)."
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.type]
+          type = "string"
+          enum = ["text", "number", "date", "enum", "boolean"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.required]
+          type = "boolean"
+          description = "Whether every record of this type must carry a value."
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.allowed_values]
+          type = "array"
+          description = "Required and non-empty when type is \"enum\": every legal value for the field, lowercase snake_case (e.g. [\"proposed\", \"accepted\"])."
+
+            [turn.tool.parameters_schema.properties.fields.items.properties.allowed_values.items]
+            type = "string"
+
+  [[turn.tool]]
+  name = "create_node"
+  description = """
+  Create one new record of a type that already exists. Use for a single \
+  instance, never to define a new kind of record.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["node_type", "content"]
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Type id, copied exactly from EXISTING SCHEMAS."
+
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "The record's title."
+
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "Field values for this record."
