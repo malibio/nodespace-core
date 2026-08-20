@@ -110,8 +110,7 @@ use std::collections::HashMap;
 use nodespace_agent::agent_types::{SkillCandidate, ToolDefinition};
 use nodespace_agent::local_agent::agent_loop::STAGE1_SYSTEM_PROMPT;
 use nodespace_agent::local_agent::routing::{
-    declare_write_tool_fields, render_candidates_for_prompt, stage1_tool_definitions,
-    stage2_tools,
+    declare_write_tool_fields, render_candidates_for_prompt, stage1_tool_definitions, stage2_tools,
 };
 use nodespace_agent::local_agent::tools::model_facing_tool_definitions;
 use nodespace_agent::prompt_assembler::PromptAssembler;

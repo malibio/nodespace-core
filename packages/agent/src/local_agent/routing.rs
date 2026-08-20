@@ -582,7 +582,8 @@ pub fn declare_write_tool_fields(
     candidates: &[SkillCandidate],
     tools: Vec<ToolDefinition>,
 ) -> Vec<ToolDefinition> {
-    let cleared: Vec<&SkillCandidate> = candidates.iter().filter(|c| clears_score_gate(c)).collect();
+    let cleared: Vec<&SkillCandidate> =
+        candidates.iter().filter(|c| clears_score_gate(c)).collect();
     let max_score = cleared.iter().map(|c| c.score).fold(f32::MIN, f32::max);
     tools
         .into_iter()
@@ -885,7 +886,9 @@ mod tests {
     }
 
     fn schema_metadata_for(type_id: &str, fields: &[(&str, &str)]) -> serde_json::Value {
-        use nodespace_core::ops::entity_types_block::{EntityFieldDescriptor, EntityTypeDescriptor};
+        use nodespace_core::ops::entity_types_block::{
+            EntityFieldDescriptor, EntityTypeDescriptor,
+        };
         json!([EntityTypeDescriptor {
             type_id: type_id.to_string(),
             name: Some(type_id.to_string()),
@@ -918,7 +921,8 @@ mod tests {
     #[test]
     fn declare_write_tool_fields_declares_from_the_sole_candidates_schema() {
         let mut c = candidate("Node Creation", 0.85, &["create_node"]);
-        c.schema_metadata = schema_metadata_for("ticket", &[("status", "text"), ("assignee", "text")]);
+        c.schema_metadata =
+            schema_metadata_for("ticket", &[("status", "text"), ("assignee", "text")]);
         let declared = declare_write_tool_fields(&[c], vec![write_tool("create_node")]);
         let names = field_values_property_names(&declared[0]);
         assert!(names.contains(&"status".to_string()));
@@ -1013,7 +1017,8 @@ mod tests {
     /// neighbouring tests below for `stage2_tools`'s fail-open behaviour).
     #[test]
     fn declare_write_tool_fields_is_a_no_op_with_no_cleared_candidates() {
-        let declared = declare_write_tool_fields(&[], vec![write_tool("create_node"), tool("search_nodes")]);
+        let declared =
+            declare_write_tool_fields(&[], vec![write_tool("create_node"), tool("search_nodes")]);
         let create_node = declared
             .iter()
             .find(|t| t.name == "create_node")
