@@ -628,15 +628,9 @@ export const aiChatNodePlugin: PluginDefinition = {
   // quote-block) it must not absorb a Backspace-merge from the node below it.
   acceptsContentMerge: false,
   config: {
-    slashCommands: [
-      {
-        id: 'ai-chat',
-        name: 'AI Chat',
-        description: 'Start an AI conversation',
-        contentTemplate: '',
-        nodeType: 'ai-chat'
-      }
-    ],
+    // No slash command — entity types are not slash-creatable. AI chats are created
+    // via the sidebar's dedicated "AI Chats" section ("+ New chat").
+    slashCommands: [],
     canHaveChildren: false,
     canBeChild: true
   },
@@ -659,15 +653,9 @@ export const personNodePlugin: PluginDefinition = {
   description: 'Create a person node — contact, collaborator, or stakeholder',
   version: '1.0.0',
   config: {
-    slashCommands: [
-      {
-        id: 'person',
-        name: 'Person',
-        description: 'Create a person node',
-        contentTemplate: '',
-        nodeType: 'person'
-      }
-    ],
+    // No slash command — entity types are not slash-creatable. Person nodes are
+    // created via the sidenav's type view (SIDENAV_CORE_TYPES → create instance).
+    slashCommands: [],
     canHaveChildren: false,
     canBeChild: true
   },
@@ -697,14 +685,9 @@ export const personNodePlugin: PluginDefinition = {
  * records set up deliberately — by the agent, or through the schema/entity surfaces — not
  * typed in ad hoc mid-outline. They stay reachable: most core entity types are listed in
  * the sidenav as user-queryable types and open to schema-driven properties forms
- * (`SIDENAV_CORE_TYPES`), and the rest reach creation through a surface of their own.
- *
- * Two surfaces predate this rule and still contradict it: `person` and `ai-chat` carry
- * slash commands above, and `createPluginFromSchema` generates one for every user-defined
- * schema type. Both are slated for removal — `person` and user-defined types already
- * reach creation through the sidenav's type view, and `ai-chat` gets a dedicated sidebar
- * section before its command goes — so do not read either as precedent for adding new
- * entity-type slash commands.
+ * (`SIDENAV_CORE_TYPES`), and the rest reach creation through a surface of their own —
+ * `person` and every user-defined type through the sidenav's type view, `ai-chat` through
+ * its own dedicated sidebar section.
  *
  * `project` therefore has no plugin here at all. If you are here because `/project` seems
  * to be "missing", it is absent by decision, not by oversight. Note that `project` renders

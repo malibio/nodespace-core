@@ -16,6 +16,7 @@
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { extractNodeMetadata } from '$lib/design/components/schema-field-update';
   import { rendersAsEntityRow } from '$lib/design/components/node-type-predicates';
+  import { HAS_RESOLVED_CHARACTER_RE } from '$lib/utils/node-display-title';
   import {
     extractFallbackDisplayContent,
     extractFallbackMetadata
@@ -125,12 +126,11 @@
     <!-- Custom schema entities also render here (no lazy-loaded node component) -->
     <!-- Note: on:taskStateChanged below is inert on plain BaseNode (only task-node dispatches
          it); it fires only via the plugin-component branch above. Kept for branch symmetry. -->
-    {@const nodeSlashCmd = pluginRegistry.findSlashCommand(node.nodeType)}
-    {@const nodeHasTitleTemplate = !!nodeSlashCmd?.hasTitleTemplate}
+    {@const nodeHasTitleTemplate = pluginRegistry.hasTitleTemplate(node.nodeType)}
     {@const nodeTitleDisplay = nodeHasTitleTemplate
-      ? node.title && /\w/.test(node.title)
+      ? node.title && HAS_RESOLVED_CHARACTER_RE.test(node.title)
         ? node.title
-        : (nodeSlashCmd?.titleTemplate ?? '')
+        : (pluginRegistry.getTitleTemplate(node.nodeType) ?? '')
       : undefined}
     {#key `${node.id}-${node.nodeType}`}
       <BaseNode
@@ -139,7 +139,7 @@
         autoFocus={node.autoFocus}
         content={node.content}
         readonly={nodeHasTitleTemplate}
-        displayContentIsPlaceholder={nodeHasTitleTemplate && !(node.title && /\w/.test(node.title))}
+        displayContentIsPlaceholder={nodeHasTitleTemplate && !(node.title && HAS_RESOLVED_CHARACTER_RE.test(node.title))}
         displayContent={nodeTitleDisplay !== undefined
           ? nodeTitleDisplay
           : extractFallbackDisplayContent(node.content, node.nodeType)}

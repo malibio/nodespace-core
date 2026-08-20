@@ -1104,38 +1104,6 @@
   }
 
   /**
-   * Handle custom entity slash command side-effects: navigate to other pane and
-   * optionally create a blank text sibling below when the entity is the last visible node.
-   *
-   * @param entityNodeId - ID of the custom entity node
-   * @param hasTitleTemplate - Whether the schema has a title_template (node is read-only inline)
-   */
-  async function handleCustomEntitySlashCommand(
-    entityNodeId: string,
-    hasTitleTemplate: boolean
-  ): Promise<void> {
-    const { getNavigationService } = await import('$lib/services/navigation-service');
-    getNavigationService().navigateToNodeInOtherPane(entityNodeId, paneId);
-    // Only create blank text node if the entity is the last visible node
-    // (no existing node below it to continue typing into).
-    // When hasTitleTemplate is false the node is editable inline (like a task),
-    // so no sibling is needed.
-    if (hasTitleTemplate) {
-      const rendered = nodesToRender();
-      const nodeIndex = rendered.findIndex((n) => n.id === entityNodeId);
-      const isLast = nodeIndex === rendered.length - 1;
-      if (isLast) {
-        handleCreateNewNode({
-          afterNodeId: entityNodeId,
-          nodeType: 'text',
-          currentContent: '',
-          newContent: ''
-        });
-      }
-    }
-  }
-
-  /**
    * Handle slash command selection.
    * Placeholder promotion uses the tick-deferred, isPromoting-guarded path; existing
    * nodes get contentTemplate + nodeType applied atomically in one store update.
@@ -1215,15 +1183,6 @@
 
         // Clear promotion flag after state updates complete
         isPromoting = false;
-
-        // Entity nodes (no inline editor): open in other pane + optionally create text node
-        // below. Types with an inline editor (person, task) are typed into in place — sending
-        // focus to another pane mid-keystroke would interrupt the user.
-        if (rendersAsEntityRow(newNodeType)) {
-          handleCustomEntitySlashCommand(promotedNode.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
-            log.error('Custom entity slash command failed (placeholder path):', err)
-          );
-        }
       });
     } else {
       log.debug('Updating node type for real node');
@@ -1243,11 +1202,6 @@
         if (!sharedNodeStore.hasNode(node.id)) return;
         focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
         sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
-        if (rendersAsEntityRow(newNodeType)) {
-          handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
-            log.error('Custom entity slash command failed (real-node path):', err)
-          );
-        }
       });
     }
   }

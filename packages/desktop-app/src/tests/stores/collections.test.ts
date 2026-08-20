@@ -492,19 +492,9 @@ describe('Collections Store', () => {
         name: 'Widget',
         description: 'Custom entity with a title template',
         version: '1.0.0',
-        config: {
-          slashCommands: [
-            {
-              id: 'widget-entity',
-              name: 'Widget',
-              description: 'Create Widget',
-              contentTemplate: '',
-              nodeType: 'widget-entity',
-              hasTitleTemplate: true,
-              titleTemplate: '{first_name} {last_name}'
-            }
-          ]
-        }
+        config: { slashCommands: [] },
+        hasTitleTemplate: true,
+        titleTemplate: '{first_name} {last_name}'
       });
 
       const members = new Map<string, Node[]>([
@@ -543,19 +533,9 @@ describe('Collections Store', () => {
         name: 'Widget',
         description: 'Custom entity with a title template',
         version: '1.0.0',
-        config: {
-          slashCommands: [
-            {
-              id: 'widget-entity',
-              name: 'Widget',
-              description: 'Create Widget',
-              contentTemplate: '',
-              nodeType: 'widget-entity',
-              hasTitleTemplate: true,
-              titleTemplate: '{first_name}_{last_name}'
-            }
-          ]
-        }
+        config: { slashCommands: [] },
+        hasTitleTemplate: true,
+        titleTemplate: '{first_name}_{last_name}'
       });
 
       const members = new Map<string, Node[]>([
