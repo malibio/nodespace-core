@@ -191,6 +191,9 @@ class DatabaseStore {
           // Hydrate the active database's DatabaseSettingsNode so the Pro-sync
           // variant machine can read sync_enabled/auth_status.
           this.refreshDatabaseSettings();
+          if (resolved !== null) {
+            this.pinWindowDatabase(resolved);
+          }
         }
       }
     } catch (err) {
@@ -198,6 +201,32 @@ class DatabaseStore {
       log.error('Failed to load databases', err);
     } finally {
       this.loading = false;
+    }
+  }
+
+  /**
+   * Declare to the backend which database this window is now showing. The
+   * backend uses this to route
+   * database-scoped events (`node:*`, `relationship:*`) to the correct
+   * window instead of broadcasting to every open one, and to restore this
+   * database's last saved window size/position. Best-effort and
+   * fire-and-forget — a failure here only means this window's live events
+   * fall back to focused-window routing (see `window_routing::emit_routed`)
+   * instead of being pinned to this specific database, which is a strict
+   * improvement over never pinning at all, never a regression.
+   */
+  private pinWindowDatabase(id: string): void {
+    if (!isTauriBridgePresent()) return;
+    // Wrapped in Promise.resolve(...) (adopts a real promise unchanged) and a
+    // try/catch, rather than a bare `invoke(...).catch(...)`: this call must
+    // never destabilize `load()`/`switchTo()`, including against a test
+    // double that returns something other than a promise.
+    try {
+      Promise.resolve(invoke('pin_window_database', { id })).catch((err: unknown) => {
+        log.debug('Failed to pin window to database', { id, error: err });
+      });
+    } catch (err) {
+      log.debug('Failed to pin window to database', { id, error: err });
     }
   }
 
@@ -256,6 +285,7 @@ class DatabaseStore {
       // Remember the selection so a webview reload / app restart restores it
       // instead of snapping back to the daemon's registry default.
       rememberActiveDatabaseId(id);
+      this.pinWindowDatabase(id);
 
       // Re-target Pro cloud-sync to follow the newly-active database (ADR-053
       // single-active sync): switching database in the app switches which tenant

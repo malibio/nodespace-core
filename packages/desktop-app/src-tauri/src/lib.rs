@@ -31,6 +31,16 @@ pub mod skill_setup;
 // App update check (detect newer releases)
 pub mod update_check;
 
+// Shared atomic write-to-temp-then-rename helper for JSON config files.
+mod atomic_file;
+
+// Window <-> database routing: window label/pin tracking and the
+// emit-routing helper that replaces every hardcoded "main" window emit.
+pub mod window_routing;
+
+// Per-database window size/position persistence.
+pub mod window_state;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -218,10 +228,10 @@ fn take_pending_tray_database_selection() -> Option<String> {
 /// switch in place via `databaseStore.switchTo` — the same path an in-app
 /// switcher click already uses.
 fn handle_relaunch<R: tauri::Runtime>(app: &tauri::AppHandle<R>, argv: &[String]) {
-    use tauri::{Emitter, Manager};
+    use tauri::Emitter;
 
-    let Some(window) = app.get_webview_window("main") else {
-        tracing::warn!("single-instance relaunch: no main window to focus");
+    let Some(window) = window_routing::resolve_focus_window(app) else {
+        tracing::warn!("single-instance relaunch: no window to focus");
         return;
     };
     if let Err(e) = window.unminimize() {
@@ -236,7 +246,13 @@ fn handle_relaunch<R: tauri::Runtime>(app: &tauri::AppHandle<R>, argv: &[String]
 
     if let Some(id) = parse_relaunch_database_arg(argv) {
         *PENDING_TRAY_DATABASE_SELECTION.lock().unwrap() = Some(id.clone());
-        if let Err(e) = window.emit("tray:select-database", id) {
+        // Scoped to exactly the window just focused above via `emit_to`, NOT
+        // a bare `window.emit(...)` — `Emitter::emit` is never scoped to the
+        // object it's called on (confirmed against the `tauri` 2.11 source;
+        // see `window_routing::resolve_target_labels`'s doc comment), so with
+        // more than one window open a bare `.emit()` here would broadcast the
+        // switch to every window instead of just the one being raised.
+        if let Err(e) = window.emit_to(window.label(), "tray:select-database", id) {
             tracing::warn!(error = %e, "failed to emit tray:select-database");
         }
     }
@@ -264,7 +280,7 @@ fn parse_relaunch_database_arg(argv: &[String]) -> Option<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    use tauri::{menu::*, Emitter, Manager};
+    use tauri::{menu::*, Manager};
 
     // Initialize tracing — respects RUST_LOG env var, defaults to info for nodespace_app
     tracing_subscriber::fmt()
@@ -387,6 +403,10 @@ pub fn run() {
             // Register shutdown token as managed state for background task coordination.
             app.manage(shutdown_token_for_setup.clone());
 
+            // Window <-> database pin registry — every emit-routing decision
+            // in `window_routing::emit_routed` reads this.
+            app.manage(window_routing::WindowDatabaseRegistry::default());
+
             // Kill the running daemon if its binary is stale (size mismatch vs bundled
             // sidecar). Must run before connect_lazy so the frontend never connects to
             // an outdated daemon. ensure_daemon_running (spawned below) then extracts
@@ -409,16 +429,17 @@ pub fn run() {
             // event on "up to date" or any failure, so the frontend banner appears
             // solely on a real update. Independent of the daemon path below.
             {
-                use tauri::{Emitter, Manager};
-
                 let update_app_handle = app.handle().clone();
                 let current_version = app.package_info().version.to_string();
                 tauri::async_runtime::spawn(async move {
                     let status = update_check::check_for_update(&current_version).await;
                     if status.update_available {
-                        if let Some(window) = update_app_handle.get_webview_window("main") {
-                            let _ = window.emit(update_check::UPDATE_AVAILABLE_EVENT, &status);
-                        }
+                        window_routing::emit_routed(
+                            &update_app_handle,
+                            update_check::UPDATE_AVAILABLE_EVENT,
+                            &status,
+                            None,
+                        );
                     }
                 });
             }
@@ -439,28 +460,35 @@ pub fn run() {
                         use daemon_setup::{ensure_daemon_running, DaemonStatus};
 
                         // Signal the frontend to hold off on gRPC calls until the daemon is ready.
-                        if let Some(window) = app_handle.get_webview_window("main") {
-                            let _ = window.emit("daemon-status", "starting");
-                        }
+                        window_routing::emit_routed(&app_handle, "daemon-status", "starting", None);
 
                         match ensure_daemon_running(&app_handle).await {
                             Ok(DaemonStatus::Healthy) => {
                                 tracing::info!("nodespaced is running");
-                                if let Some(window) = app_handle.get_webview_window("main") {
-                                    let _ = window.emit("daemon-status", "healthy");
-                                }
+                                window_routing::emit_routed(
+                                    &app_handle,
+                                    "daemon-status",
+                                    "healthy",
+                                    None,
+                                );
                             }
                             Ok(status) => {
                                 tracing::warn!("nodespaced not yet healthy: {:?}", status);
-                                if let Some(window) = app_handle.get_webview_window("main") {
-                                    let _ = window.emit("daemon-status", "not_running");
-                                }
+                                window_routing::emit_routed(
+                                    &app_handle,
+                                    "daemon-status",
+                                    "not_running",
+                                    None,
+                                );
                             }
                             Err(e) => {
                                 tracing::error!("Daemon setup failed: {:#}", e);
-                                if let Some(window) = app_handle.get_webview_window("main") {
-                                    let _ = window.emit("daemon-status", "not_running");
-                                }
+                                window_routing::emit_routed(
+                                    &app_handle,
+                                    "daemon-status",
+                                    "not_running",
+                                    None,
+                                );
                             }
                         }
                     }
@@ -486,20 +514,20 @@ pub fn run() {
                             }
                             if let Some(warning) = result.cli_warning {
                                 tracing::warn!("{}", warning);
-                                if let Some(window) = app_handle.get_webview_window("main") {
-                                    let _ = window.emit(
-                                        "skill:cli-missing",
-                                        serde_json::json!({ "warning": warning }),
-                                    );
-                                }
+                                window_routing::emit_routed(
+                                    &app_handle,
+                                    "skill:cli-missing",
+                                    serde_json::json!({ "warning": warning }),
+                                    None,
+                                );
                             }
                         } else if result.failure_is_new {
-                            if let (Some(window), Some(error)) =
-                                (app_handle.get_webview_window("main"), result.error)
-                            {
-                                let _ = window.emit(
+                            if let Some(error) = result.error {
+                                window_routing::emit_routed(
+                                    &app_handle,
                                     "skill:install-failed",
                                     serde_json::json!({ "error": error }),
+                                    None,
                                 );
                             }
                         }
@@ -562,9 +590,12 @@ pub fn run() {
                             DaemonStatus::NotRunning
                         ) {
                             tracing::error!("nodespaced unreachable after startup");
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                let _ = window.emit("daemon-status", "not_running");
-                            }
+                            window_routing::emit_routed(
+                                &app_handle,
+                                "daemon-status",
+                                "not_running",
+                                None,
+                            );
                         }
                     }
                 });
@@ -584,35 +615,24 @@ pub fn run() {
             let open_integrations_id = MenuId::new("open_integrations");
 
             if *event.id() == toggle_sidebar_id {
-                // Emit an event to the frontend
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("menu-toggle-sidebar", ());
-                    println!("Sidebar toggle requested from menu");
-                }
+                // Route to the focused window (none of these menu events are
+                // database-scoped — see `window_routing`).
+                window_routing::emit_routed(app, "menu-toggle-sidebar", (), None);
+                println!("Sidebar toggle requested from menu");
             } else if *event.id() == toggle_status_bar_id {
-                // Emit an event to the frontend to toggle status bar
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("menu-toggle-status-bar", ());
-                    println!("Status bar toggle requested from menu");
-                }
+                window_routing::emit_routed(app, "menu-toggle-status-bar", (), None);
+                println!("Status bar toggle requested from menu");
             } else if *event.id() == import_folder_id {
-                // Emit an event to the frontend to open import dialog
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("menu-import-folder", ());
-                    println!("Import folder requested from menu");
-                }
+                window_routing::emit_routed(app, "menu-import-folder", (), None);
+                println!("Import folder requested from menu");
             } else if *event.id() == open_settings_id {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("menu-open-settings", ());
-                }
+                window_routing::emit_routed(app, "menu-open-settings", (), None);
             } else if *event.id() == open_integrations_id {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("menu-open-integrations", ());
-                }
+                window_routing::emit_routed(app, "menu-open-integrations", (), None);
             } else if *event.id() == quit_id {
                 // Request exit through Tauri's event loop instead of std::process::exit(0)
                 // This triggers RunEvent::ExitRequested, allowing proper cleanup
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = window_routing::resolve_focus_window(app) {
                     let _ = window.close();
                 }
             }
@@ -624,6 +644,7 @@ pub fn run() {
             frontend_log,
             check_daemon_status,
             take_pending_tray_database_selection,
+            window_routing::pin_window_database,
             update_check::check_for_update_command,
             commands::pro_sync::pro_tier,
             commands::pro_sync::pro_current_status,
@@ -788,6 +809,8 @@ pub fn run() {
 /// not built here, see `ShutdownToken::shutdown_started`'s doc comment for
 /// why the one-shot guard already lives somewhere that scales to that.
 fn handle_run_event<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, event: &tauri::RunEvent) {
+    use tauri::Manager;
+
     match event {
         tauri::RunEvent::WindowEvent {
             label,
@@ -799,6 +822,26 @@ fn handle_run_event<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, event: 
                  frontend flush-before-close veto isn't cut short",
                 label
             );
+        }
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Destroyed,
+            ..
+        } => {
+            // Drop the window's pin so a later event never routes to a label
+            // nothing is listening on, or to a different, newer window that
+            // happens to reuse the same label (see `WindowDatabaseRegistry::unpin`).
+            if let Some(registry) = app_handle.try_state::<window_routing::WindowDatabaseRegistry>()
+            {
+                registry.unpin(label);
+            }
+        }
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_),
+            ..
+        } => {
+            persist_window_geometry(app_handle, label);
         }
         tauri::RunEvent::ExitRequested { code, .. } => {
             tracing::info!(
@@ -817,6 +860,44 @@ fn handle_run_event<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, event: 
         }
         _ => {}
     }
+}
+
+/// Best-effort persist `label`'s current outer size/position, keyed by the
+/// database it is pinned to. Re-queries the window live rather than
+/// threading the `Resized`/`Moved` event's own payload through, since either
+/// event alone only carries half the geometry (size XOR position) — querying
+/// both fresh avoids reasoning about stitching a partial update onto stale
+/// state. No-ops (nothing to key the save by) for a window that hasn't
+/// pinned a database yet — the bootstrap window, in the brief window between
+/// being shown and the frontend's first `pin_window_database` call.
+fn persist_window_geometry<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, label: &str) {
+    use tauri::Manager;
+
+    let Some(registry) = app_handle.try_state::<window_routing::WindowDatabaseRegistry>() else {
+        return;
+    };
+    let Some(database_id) = registry.database_for_window(label) else {
+        return;
+    };
+    let Some(window) = app_handle.get_webview_window(label) else {
+        return;
+    };
+    let (Ok(size), Ok(position)) = (window.outer_size(), window.outer_position()) else {
+        return;
+    };
+
+    let geometry = window_state::WindowGeometry {
+        width: size.width,
+        height: size.height,
+        x: position.x,
+        y: position.y,
+    };
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = window_state::save_geometry(&app_handle, &database_id, geometry).await {
+            tracing::warn!(error = %e, "failed to persist window geometry");
+        }
+    });
 }
 
 /// Perform graceful shutdown: cancel background tasks.

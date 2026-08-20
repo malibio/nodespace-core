@@ -1,5 +1,7 @@
 //! gRPC-backed watcher that bridges `nodespaced`'s `WatchNodes` stream to the
-//! Tauri frontend via `app.emit("node:*", ...)`.
+//! Tauri frontend, routed per-window by each event's `database_id` (see
+//! `window_routing::emit_routed`, which replaced the previous unconditional
+//! `app.emit("node:*", ...)` broadcast to every open window).
 //!
 //! # Status
 //!
@@ -31,11 +33,21 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use nodespace_proto::nodespace::{node_event::Event as NodeEventKind, WatchRequest};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Runtime};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use crate::services::GrpcClient;
+use crate::window_routing::emit_routed;
+
+/// `""` is the daemon's convention for "not database-scoped" (a Pro daemon
+/// with no registry — see `NodeIdPayload::database_id`'s doc comment).
+/// `emit_routed` already treats an empty id as "no id", but callers here work
+/// with owned `String`s pulled out of a payload, so this makes the intent
+/// explicit at each call site rather than repeating the `is_empty()` check.
+fn non_empty(id: &str) -> Option<&str> {
+    (!id.is_empty()).then_some(id)
+}
 
 /// Exponential backoff bounds for reconnection attempts.
 const BACKOFF_START: Duration = Duration::from_secs(1);
@@ -175,8 +187,11 @@ async fn stream_once<R: Runtime>(app: &AppHandle<R>, grpc_client: &GrpcClient) -
 fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::NodeEvent) {
     // The database this event originated from (ADR-053). Empty when the daemon
     // serves a single unregistered database (Pro daemon) — the frontend guard
-    // treats an empty id as "always applies".
+    // treats an empty id as "always applies". Computed once here (rather than
+    // at each emit call site below) since it's the same routing target for
+    // every variant of this one event.
     let database_id = event.database_id;
+    let target = non_empty(&database_id).map(str::to_string);
     let Some(kind) = event.event else {
         debug!("Received NodeEvent with no event variant; ignoring");
         return;
@@ -185,13 +200,11 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
     match kind {
         NodeEventKind::Created(data) => {
             let payload = NodeIdPayload {
-                id: data.id.clone(),
+                id: data.id,
                 node_type: Some(data.node_type),
                 database_id,
             };
-            if let Err(e) = app.emit("node:created", &payload) {
-                error!("Failed to emit node:created for {}: {e}", data.id);
-            }
+            emit_routed(app, "node:created", &payload, target.as_deref());
         }
         NodeEventKind::Updated(data) => {
             // node:updated payload omits node_type because the frontend
@@ -206,45 +219,47 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
                 node_type: None,
                 database_id,
             };
-            if let Err(e) = app.emit("node:updated", &payload) {
-                error!("Failed to emit node:updated for {}: {e}", payload.id);
-            }
+            emit_routed(app, "node:updated", &payload, target.as_deref());
         }
         NodeEventKind::Deleted(d) => {
             // node_type is required — consumers (e.g. collections sidebar)
             // apply type-aware cleanup logic for schema/collection deletions
             // without fetching the already-deleted node.
             let payload = NodeIdPayload {
-                id: d.node_id.clone(),
+                id: d.node_id,
                 node_type: Some(d.node_type),
                 database_id,
             };
-            if let Err(e) = app.emit("node:deleted", &payload) {
-                error!("Failed to emit node:deleted for {}: {e}", d.node_id);
-            }
+            emit_routed(app, "node:deleted", &payload, target.as_deref());
         }
         // Relationship variants — so cloud-sync / cross-window hierarchy
         // changes reach the frontend's reactiveStructureTree.
         // `properties` arrives JSON-encoded on the wire (proto schema is
         // stable); re-parse it here before emitting so the frontend gets a
         // real object (the `has_child` listener reads `properties.order`).
-        NodeEventKind::RelationshipCreated(r) => {
-            emit_relationship(app, "relationship:created", r, database_id)
-        }
-        NodeEventKind::RelationshipUpdated(r) => {
-            emit_relationship(app, "relationship:updated", r, database_id)
-        }
+        NodeEventKind::RelationshipCreated(r) => emit_relationship(
+            app,
+            "relationship:created",
+            r,
+            database_id,
+            target.as_deref(),
+        ),
+        NodeEventKind::RelationshipUpdated(r) => emit_relationship(
+            app,
+            "relationship:updated",
+            r,
+            database_id,
+            target.as_deref(),
+        ),
         NodeEventKind::RelationshipDeleted(r) => {
             let payload = RelationshipDeletedOut {
-                id: r.id.clone(),
+                id: r.id,
                 from_id: r.from_id,
                 to_id: r.to_id,
                 relationship_type: r.relationship_type,
                 database_id,
             };
-            if let Err(e) = app.emit("relationship:deleted", &payload) {
-                error!("Failed to emit relationship:deleted for {}: {e}", r.id);
-            }
+            emit_routed(app, "relationship:deleted", &payload, target.as_deref());
         }
     }
 }
@@ -280,6 +295,7 @@ fn emit_relationship<R: Runtime>(
     name: &str,
     r: nodespace_proto::nodespace::RelationshipPayload,
     database_id: String,
+    target: Option<&str>,
 ) {
     // `r.properties` arrives JSON-encoded as a string on the wire so
     // the proto schema stays stable across additions to the
@@ -302,14 +318,12 @@ fn emit_relationship<R: Runtime>(
         }
     };
     let payload = RelationshipPayloadOut {
-        id: r.id.clone(),
+        id: r.id,
         from_id: r.from_id,
         to_id: r.to_id,
         relationship_type: r.relationship_type,
         properties: props,
         database_id,
     };
-    if let Err(e) = app.emit(name, &payload) {
-        error!("Failed to emit {name} for {}: {e}", r.id);
-    }
+    emit_routed(app, name, &payload, target);
 }
