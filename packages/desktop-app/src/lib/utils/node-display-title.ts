@@ -28,7 +28,7 @@
  * CJK or Arabic name) is correctly recognized as resolved, not misclassified as empty
  * alongside a genuinely-unresolved separator-only value like `" — "` — see the guard below.
  */
-const HAS_RESOLVED_CHARACTER_RE = /[\p{L}\p{N}]/u;
+export const HAS_RESOLVED_CHARACTER_RE = /[\p{L}\p{N}]/u;
 
 export function resolveTitleOrContent(
   node: { title?: string | null; content?: string | null } | null | undefined,

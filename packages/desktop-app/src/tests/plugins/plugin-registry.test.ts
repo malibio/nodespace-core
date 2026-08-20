@@ -1742,7 +1742,7 @@ describe('PluginRegistry - Core Functionality', () => {
     });
   });
 
-  describe('hasTitleTemplate / getTitleTemplate (core#2152)', () => {
+  describe('hasTitleTemplate / getTitleTemplate (issue #2152)', () => {
     it('reads a per-type plugin field, not a slash command — true for a type with no slash command at all', () => {
       const plugin: PluginDefinition = {
         id: 'venue',
@@ -1792,6 +1792,26 @@ describe('PluginRegistry - Core Functionality', () => {
       registry.setEnabled('venue', false);
 
       expect(registry.hasTitleTemplate('venue')).toBe(false);
+      expect(registry.getTitleTemplate('venue')).toBeUndefined();
+    });
+
+    it('returns undefined, not an empty string, when titleTemplate is set but hasTitleTemplate is false', () => {
+      // createPluginFromSchema derives hasTitleTemplate as !!schema.titleTemplate, so an
+      // empty-string titleTemplate produces hasTitleTemplate: false but titleTemplate: ''.
+      // getTitleTemplate must honor hasTitleTemplate as the gate, not titleTemplate's own
+      // truthiness, so callers can rely on its documented "undefined means no template"
+      // contract without also having to check hasTitleTemplate themselves.
+      const plugin: PluginDefinition = {
+        id: 'venue',
+        name: 'Venue',
+        description: 'Custom entity',
+        version: '1.0.0',
+        config: { slashCommands: [] },
+        hasTitleTemplate: false,
+        titleTemplate: ''
+      };
+      registry.register(plugin);
+
       expect(registry.getTitleTemplate('venue')).toBeUndefined();
     });
   });

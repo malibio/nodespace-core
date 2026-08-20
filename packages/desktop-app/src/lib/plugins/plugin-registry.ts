@@ -504,11 +504,13 @@ export class PluginRegistry {
    * `hasTitleTemplate(nodeType)` is false.
    */
   getTitleTemplate(nodeType: string): string | undefined {
-    const plugin = this.plugins.get(nodeType);
-    if (!plugin || !this.enabledPlugins.has(nodeType)) {
+    // Gate on hasTitleTemplate (not just plugin.titleTemplate's own truthiness) so an
+    // empty-string titleTemplate — which hasTitleTemplate treats as "no template" — can't
+    // slip through here as a defined-but-empty value, contradicting this method's contract.
+    if (!this.hasTitleTemplate(nodeType)) {
       return undefined;
     }
-    return plugin.titleTemplate;
+    return this.plugins.get(nodeType)?.titleTemplate;
   }
 
   /**
