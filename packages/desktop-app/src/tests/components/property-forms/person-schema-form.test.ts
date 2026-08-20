@@ -15,7 +15,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import type { Node } from '$lib/types';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { mockTauriCore } from '../../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 const navigateToNodeInOtherPane = vi.fn();
 vi.mock('$lib/services/navigation-service', () => ({

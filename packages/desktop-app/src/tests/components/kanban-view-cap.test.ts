@@ -19,7 +19,9 @@ import { render, cleanup, fireEvent } from '@testing-library/svelte';
 import type { SchemaNode } from '$lib/types/schema-node';
 import type { Node } from '$lib/types';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 import KanbanView from '$lib/components/query/kanban-view.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';

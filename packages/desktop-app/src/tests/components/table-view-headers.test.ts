@@ -12,7 +12,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/svelte';
 import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 import TableView from '$lib/components/query/table-view.svelte';
 

@@ -20,9 +20,11 @@ import type { Node } from '$lib/types';
 // Mock the Tauri bridge so we can assert Pro-gated daemon commands are NEVER
 // invoked in the community build. `mock`-prefixed names satisfy vitest's hoisting.
 const mockInvoke = vi.fn();
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args)
-}));
+import { mockTauriCore } from './helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({ invoke: (...args: unknown[]) => mockInvoke(...args) })
+);
 
 const mockListeners = new Map<string, (event: { payload: unknown }) => void>();
 vi.mock('@tauri-apps/api/event', () => ({

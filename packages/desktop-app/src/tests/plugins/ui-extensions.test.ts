@@ -17,9 +17,11 @@ vi.mock('$lib/utils/logger', () => ({
 // SharedNodeStore.setNode does not persist here (skipPersistence), but stub the
 // Tauri bridge so nothing reaches a real daemon.
 const mockInvoke = vi.fn();
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args)
-}));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({ invoke: (...args: unknown[]) => mockInvoke(...args) })
+);
 
 import { proSync } from '$lib/stores/pro-sync.svelte';
 import { SharedNodeStore } from '$lib/services/shared-node-store.svelte';

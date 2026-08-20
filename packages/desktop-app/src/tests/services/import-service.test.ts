@@ -9,9 +9,9 @@ vi.mock('$lib/utils/logger', () => ({
   })
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn()
-}));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn()

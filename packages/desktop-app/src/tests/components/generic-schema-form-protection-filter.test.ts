@@ -18,7 +18,9 @@ import { render, cleanup, screen, waitFor } from '@testing-library/svelte';
 import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
 import type { Node } from '$lib/types';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 const loadNodeRelationshipsView = vi.fn();
 vi.mock('$lib/services/relationship-viewer-service', () => ({
