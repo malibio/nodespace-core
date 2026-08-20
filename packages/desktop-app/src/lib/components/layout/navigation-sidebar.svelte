@@ -4,7 +4,8 @@
     layoutStore,
     toggleSidebar,
     setCollectionsExpanded,
-    setSchemaTypesExpanded
+    setSchemaTypesExpanded,
+    setAiChatsExpanded
   } from '$lib/stores/layout.svelte';
   import { navigationStore, setActiveTab, addTab } from '$lib/stores/navigation.svelte';
   import { openSettings } from '$lib/utils/open-settings';
@@ -15,6 +16,7 @@
   import DatabaseSwitcher from './database-switcher.svelte';
   import { onMount, onDestroy } from 'svelte';
   import { schemasStore, schemasData } from '$lib/stores/schemas.svelte';
+  import { aiChatsData } from '$lib/stores/ai-chats.svelte';
   import { clearCollectionRefreshTimer, clearSchemaRefreshTimer } from '$lib/utils/collection-refresh';
 
   // Read reactive store state directly (ADR-049)
@@ -24,6 +26,8 @@
   let collectionsExpanded = $derived(layoutStore.state.collectionsExpanded);
   // Schema Types expanded state from layout store (persisted)
   let schemaTypesExpanded = $derived(layoutStore.state.schemaTypesExpanded);
+  // AI Chats expanded state from layout store (persisted)
+  let aiChatsExpanded = $derived(layoutStore.state.aiChatsExpanded);
 
   // Collections state from collections store (UI-only, not persisted)
   let subPanelOpen = $derived(collectionsState.state.subPanelOpen);
@@ -89,10 +93,16 @@
   let builtInSchemas = $derived(schemasStore.builtInSchemas);
   let customSchemas = $derived(schemasStore.customSchemas);
 
-  // Load collections and schemas from backend on mount
+  // AI Chats list from global store (reactive — updates when chats are created elsewhere)
+  let aiChats = $derived(aiChatsData.state.chats);
+  let createChatBusy = $derived(aiChatsData.createBusy);
+  let createChatError = $derived(aiChatsData.createError);
+
+  // Load collections, schemas, and AI chats from backend on mount
   onMount(() => {
     collectionsData.loadCollections();
     schemasData.loadSchemas();
+    aiChatsData.loadAiChats();
   });
 
   // Cancel any pending debounced refreshes when the sidebar is destroyed
@@ -267,6 +277,52 @@
         },
         true
       );
+    }
+  }
+
+  /** Fallback label for a chat that has no content yet — chats start empty and
+   * get a real title later from idle-gated background titling. */
+  function aiChatLabel(content: string): string {
+    return content.trim() ? content : 'Untitled chat';
+  }
+
+  /**
+   * Open (or focus) an ai-chat node in a tab. Same tab-reuse shape as
+   * `handleSchemaClick`, but routed to `AiChatNodeViewer` via `nodeType: 'ai-chat'`
+   * instead of `handleSchemaClick`'s hardcoded `'query'`.
+   */
+  function handleAiChatClick(chatId: string) {
+    const currentState = navigationStore.state;
+    const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === chatId);
+
+    if (existingTab) {
+      setActiveTab(existingTab.id, existingTab.paneId);
+    } else {
+      const targetPaneId = getTargetPaneId();
+      addTab(
+        {
+          id: uuidv4(),
+          title: 'Loading...',
+          type: 'node',
+          content: { nodeId: chatId, nodeType: 'ai-chat' },
+          closeable: true,
+          paneId: targetPaneId
+        },
+        true
+      );
+    }
+  }
+
+  /**
+   * "+ New chat": create an ai-chat node immediately (no name prompt — a
+   * chat's title comes from its content later) and open it. On failure,
+   * `aiChatsData.createChat` leaves `createError` set for the section to
+   * display; nothing to open in that case.
+   */
+  async function handleNewChat() {
+    const created = await aiChatsData.createChat();
+    if (created) {
+      handleAiChatClick(created.id);
     }
   }
 
@@ -616,6 +672,117 @@
           <rect x="11" y="3" width="6" height="6" />
           <rect x="3" y="13" width="6" height="6" />
           <path d="M14 13 L17 16 L14 19 L11 16 Z" />
+        </svg>
+      </button>
+    {/if}
+
+    <!-- AI Chats section (after Schema Types) - accordion toggle -->
+    {#if !isCollapsed}
+      <Collapsible.Root open={aiChatsExpanded} onOpenChange={(open) => setAiChatsExpanded(open)}>
+        <Collapsible.Trigger
+          class="nav-item"
+          aria-label={aiChatsExpanded ? 'Collapse AI Chats' : 'Expand AI Chats'}
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <!-- Reuses the existing "aiSquare" glyph (design/icons/ui/ai-square.ts) -->
+            <rect
+              x="2"
+              y="2"
+              width="12"
+              height="12"
+              rx="2"
+              ry="2"
+              fill="currentColor"
+              opacity="0.1"
+              stroke="currentColor"
+              stroke-width="1"
+            />
+            <text
+              x="8"
+              y="10.5"
+              font-family="system-ui, -apple-system, sans-serif"
+              font-size="6"
+              font-weight="600"
+              text-anchor="middle"
+              fill="currentColor">AI</text
+            >
+          </svg>
+          <span class="nav-label">AI Chats</span>
+        </Collapsible.Trigger>
+
+        <Collapsible.Content>
+          <div class="ai-chat-list">
+            {#if aiChats.length === 0}
+              <span class="schema-type-empty">No chats yet</span>
+            {:else}
+              {#each aiChats as chat (chat.id)}
+                <button class="ai-chat-item" onclick={() => handleAiChatClick(chat.id)}>
+                  <span class="ai-chat-name">{aiChatLabel(chat.content)}</span>
+                </button>
+              {/each}
+            {/if}
+
+            <!-- Create a new chat: immediate, no name prompt (unlike collections) -->
+            <button
+              class="ai-chat-item ai-chat-new-btn"
+              onclick={handleNewChat}
+              disabled={createChatBusy}
+              title="Start a new chat"
+            >
+              + New chat
+            </button>
+            {#if createChatError}
+              <div class="ai-chat-item ai-chat-error" role="alert">
+                <span>{createChatError}</span>
+              </div>
+            {/if}
+          </div>
+        </Collapsible.Content>
+      </Collapsible.Root>
+    {:else}
+      <!-- Collapsed state: just show icon -->
+      <button
+        class="nav-item"
+        title="AI Chats"
+        onclick={() => {
+          toggleSidebar();
+          setAiChatsExpanded(true);
+        }}
+      >
+        <svg
+          class="nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <rect
+            x="2"
+            y="2"
+            width="12"
+            height="12"
+            rx="2"
+            ry="2"
+            fill="currentColor"
+            opacity="0.1"
+            stroke="currentColor"
+            stroke-width="1"
+          />
+          <text
+            x="8"
+            y="10.5"
+            font-family="system-ui, -apple-system, sans-serif"
+            font-size="6"
+            font-weight="600"
+            text-anchor="middle"
+            fill="currentColor">AI</text
+          >
         </svg>
       </button>
     {/if}
@@ -1027,5 +1194,77 @@
     font-size: 0.8125rem;
     color: hsl(var(--muted-foreground));
     font-style: italic;
+  }
+
+  /* AI Chats list (expanded content) - mirrors schema-type-list; chats are a
+     flat list (no expand-area/nesting), same as schema types. */
+  .ai-chat-list {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    margin: 0 -1rem;
+    overflow-y: auto;
+    max-height: calc(10 * 28px); /* ~10 items tall before scrolling, matches collection-list */
+    scrollbar-width: thin;
+    background: hsl(var(--active-nav-background));
+  }
+
+  .ai-chat-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* AI chat row - mirrors schema-type-item */
+  .ai-chat-item {
+    display: flex;
+    align-items: center;
+    padding: 0.4rem 1rem 0.4rem 3.5rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.8125rem;
+    width: 100%;
+    transition:
+      background-color 0.2s,
+      color 0.2s;
+  }
+
+  .ai-chat-item:hover:not(:disabled) {
+    background: hsl(var(--border));
+    color: hsl(var(--foreground));
+  }
+
+  .ai-chat-item:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .ai-chat-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* "+ New chat" row - mirrors new-collection-btn */
+  .ai-chat-new-btn {
+    opacity: 0.75;
+  }
+
+  .ai-chat-new-btn:hover:not(:disabled) {
+    opacity: 1;
+  }
+
+  /* Failed-create message - mirrors new-collection-error */
+  .ai-chat-error {
+    color: hsl(var(--destructive));
+    padding-bottom: 0.4rem;
+    white-space: normal;
+    cursor: default;
+  }
+
+  .ai-chat-error:hover {
+    background: none;
+    color: hsl(var(--destructive));
   }
 </style>

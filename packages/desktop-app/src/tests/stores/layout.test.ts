@@ -37,7 +37,8 @@ describe('Layout Store - Layout State Management', () => {
       sidebarCollapsed: false,
       activePane: 'today',
       collectionsExpanded: false,
-      schemaTypesExpanded: false
+      schemaTypesExpanded: false,
+      aiChatsExpanded: false
     };
   });
 
@@ -105,7 +106,8 @@ describe('Layout Store - Layout State Management', () => {
         sidebarCollapsed: true,
         activePane: 'today',
         collectionsExpanded: false,
-        schemaTypesExpanded: false
+        schemaTypesExpanded: false,
+        aiChatsExpanded: false
       };
 
       toggleSidebar();
@@ -118,7 +120,8 @@ describe('Layout Store - Layout State Management', () => {
         sidebarCollapsed: false,
         activePane: 'today',
         collectionsExpanded: false,
-        schemaTypesExpanded: false
+        schemaTypesExpanded: false,
+        aiChatsExpanded: false
       };
 
       toggleSidebar();
@@ -131,7 +134,8 @@ describe('Layout Store - Layout State Management', () => {
         sidebarCollapsed: false,
         activePane: 'custom-pane',
         collectionsExpanded: false,
-        schemaTypesExpanded: false
+        schemaTypesExpanded: false,
+        aiChatsExpanded: false
       };
 
       toggleSidebar();
@@ -165,7 +169,8 @@ describe('Layout Store - Layout State Management', () => {
         sidebarCollapsed: true,
         activePane: 'today',
         collectionsExpanded: false,
-        schemaTypesExpanded: false
+        schemaTypesExpanded: false,
+        aiChatsExpanded: false
       };
 
       setActivePane('search');
@@ -549,6 +554,60 @@ describe('Layout Store - Persistence Integration', () => {
       const { setSchemaTypesExpanded, layoutStore } = await import('$lib/stores/layout.svelte');
       setSchemaTypesExpanded(false);
       expect(layoutStore.state.schemaTypesExpanded).toBe(false);
+    });
+  });
+
+  describe('setAiChatsExpanded', () => {
+    it('should set aiChatsExpanded to true', async () => {
+      const { setAiChatsExpanded, layoutStore } = await import('$lib/stores/layout.svelte');
+      setAiChatsExpanded(true);
+      expect(layoutStore.state.aiChatsExpanded).toBe(true);
+    });
+
+    it('should set aiChatsExpanded to false', async () => {
+      const { setAiChatsExpanded, layoutStore } = await import('$lib/stores/layout.svelte');
+      setAiChatsExpanded(false);
+      expect(layoutStore.state.aiChatsExpanded).toBe(false);
+    });
+
+    it('persists aiChatsExpanded after initialization', async () => {
+      const persistedState = { version: 4, sidebarCollapsed: false, aiChatsExpanded: false };
+      vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
+
+      const { loadPersistedLayoutState, setAiChatsExpanded } =
+        await import('$lib/stores/layout.svelte');
+
+      loadPersistedLayoutState();
+      vi.clearAllMocks();
+
+      setAiChatsExpanded(true);
+
+      expect(LayoutPersistenceService.save).toHaveBeenCalledWith(
+        expect.objectContaining({ aiChatsExpanded: true })
+      );
+    });
+  });
+
+  describe('aiChatsExpanded hydration from persisted state', () => {
+    it('round-trips a persisted true value', async () => {
+      const persistedState = { version: 4, sidebarCollapsed: false, aiChatsExpanded: true };
+      vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
+
+      const { loadPersistedLayoutState, layoutStore } = await import('$lib/stores/layout.svelte');
+      loadPersistedLayoutState();
+
+      expect(layoutStore.state.aiChatsExpanded).toBe(true);
+    });
+
+    it('defaults to false when the persisted state predates the field', async () => {
+      // Simulates a pre-migration record with no aiChatsExpanded key at all.
+      const persistedState = { version: 1, sidebarCollapsed: false };
+      vi.mocked(LayoutPersistenceService.load).mockReturnValue(persistedState);
+
+      const { loadPersistedLayoutState, layoutStore } = await import('$lib/stores/layout.svelte');
+      loadPersistedLayoutState();
+
+      expect(layoutStore.state.aiChatsExpanded).toBe(false);
     });
   });
 });

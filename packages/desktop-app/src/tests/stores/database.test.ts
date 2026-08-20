@@ -61,6 +61,15 @@ vi.mock('$lib/stores/schemas.svelte', () => ({
   schemasData: { loadSchemas: (...a: unknown[]) => loadSchemas(...a) }
 }));
 
+const loadAiChats = vi.fn((..._a: unknown[]) => undefined);
+const invalidateForDatabaseSwitch = vi.fn((..._a: unknown[]) => undefined);
+vi.mock('$lib/stores/ai-chats.svelte', () => ({
+  aiChatsData: {
+    loadAiChats: (...a: unknown[]) => loadAiChats(...a),
+    invalidateForDatabaseSwitch: (...a: unknown[]) => invalidateForDatabaseSwitch(...a)
+  }
+}));
+
 const clearAllTabs = vi.fn((..._a: unknown[]) => undefined);
 const addTab = vi.fn((..._a: unknown[]) => undefined);
 vi.mock('$lib/stores/navigation.svelte', () => ({
@@ -294,12 +303,20 @@ describe('Database Store', () => {
       expect(addTab).toHaveBeenCalledOnce();
       expect(loadCollections).toHaveBeenCalledOnce();
       expect(loadSchemas).toHaveBeenCalledOnce();
+      expect(loadAiChats).toHaveBeenCalledOnce();
       // The hide-empty exemptions are per-database (collection ids are derived
       // from the name), so they are dropped before the new database loads —
       // otherwise a same-named empty collection would be un-hidden there.
       expect(forgetLocallyCreated).toHaveBeenCalledOnce();
       expect(forgetLocallyCreated.mock.invocationCallOrder[0]).toBeLessThan(
         loadCollections.mock.invocationCallOrder[0]
+      );
+      // Same discipline for ai-chats: an in-flight "+ New chat" create must be
+      // invalidated before the reload, so its result can't land in the store
+      // representing the newly-active database.
+      expect(invalidateForDatabaseSwitch).toHaveBeenCalledOnce();
+      expect(invalidateForDatabaseSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+        loadAiChats.mock.invocationCallOrder[0]
       );
       // switchTo wraps its whole body in a try/catch that only records the
       // failure on `this.error`, so anything that throws mid-switch — an

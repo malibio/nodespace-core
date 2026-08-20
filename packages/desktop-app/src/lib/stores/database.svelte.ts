@@ -6,6 +6,7 @@ import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { collectionsData } from '$lib/stores/collections.svelte';
 import { schemasData } from '$lib/stores/schemas.svelte';
+import { aiChatsData } from '$lib/stores/ai-chats.svelte';
 import {
   clearAllTabs,
   addTab,
@@ -285,6 +286,11 @@ class DatabaseStore {
       collectionsData.forgetLocallyCreated();
       collectionsData.loadCollections();
       schemasData.loadSchemas();
+      // As with collectionsData.forgetLocallyCreated() above: invalidate any
+      // in-flight "+ New chat" create before reloading, so its result can't
+      // land in a store that now represents a different database.
+      aiChatsData.invalidateForDatabaseSwitch();
+      aiChatsData.loadAiChats();
       // Re-hydrate the new database's DatabaseSettingsNode (the previous one was
       // evicted by clearAll) so the Pro-sync variant re-resolves for it.
       this.refreshDatabaseSettings();
