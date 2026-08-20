@@ -2,14 +2,31 @@
  * Shared mocked export surface for `@tauri-apps/api/core`.
  *
  * `vi.mock('@tauri-apps/api/core', factory)` replaces the ENTIRE real module.
- * Any binding the factory omits becomes `undefined` for every importer
- * reachable from that test file's import graph — which fails at *import
- * time* the moment anything in the graph imports the missing binding (see
- * core#2170, and core#2165 for the incident that motivated this file).
+ * A factory that hand-lists only the bindings a given test happens to need
+ * leaves every OTHER binding `undefined` for any importer reachable from
+ * that test file's import graph — which fails at *import time* the moment
+ * anything in the graph imports the missing binding (see core#2170, and
+ * core#2165 for the incident that motivated this file: `daemon-status.ts`
+ * importing `isTauri`, silently red for five nightly runs because 34 of 35
+ * mock factories only listed `invoke`).
  *
- * Declaring the full mocked surface here, once, means a new binding added to
- * the real `@tauri-apps/api/core` module only needs to be added to this
- * helper — not audited across every test file that mocks the module.
+ * This helper closes the omission class entirely rather than just
+ * centralizing it: it starts from `vi.importActual`'s real export object —
+ * so it never goes stale as `@tauri-apps/api/core` gains bindings this file
+ * doesn't know about — and only replaces `invoke`/`isTauri` with safe,
+ * deterministic defaults (the real `invoke` reaches for
+ * `window.__TAURI_INTERNALS__`, absent in every test tier, so calling it
+ * unmocked throws; the real `isTauri` happens to already return `false` in
+ * every test tier, but is pinned here as an explicit, controllable default
+ * rather than relying on that incidentally).
+ *
+ * Measured (core#2170): a `vi.mock` factory returning a Promise — which is
+ * what an `async` helper like this produces — is supported by Vitest under
+ * `bun run test` (Happy-DOM) and `bun run test:browser` (real Chromium via
+ * Playwright); `bun run test:webkit` could not be exercised locally in this
+ * environment (Playwright's WebKit launch itself times out here regardless
+ * of this change — see the tier's own "NIGHTLY and NON-BLOCKING, CI-only"
+ * note in vitest.webkit.config.ts).
  *
  * Usage:
  * ```ts
@@ -30,8 +47,12 @@
  */
 import { vi } from 'vitest';
 
-export function mockTauriCore(overrides: Record<string, unknown> = {}) {
+export async function mockTauriCore(overrides: Record<string, unknown> = {}) {
+  const actual = await vi.importActual<typeof import('@tauri-apps/api/core')>(
+    '@tauri-apps/api/core'
+  );
   return {
+    ...actual,
     invoke: vi.fn(),
     isTauri: vi.fn(() => false),
     ...overrides
