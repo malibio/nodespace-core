@@ -1,7 +1,7 @@
 //! gRPC-backed watcher that bridges `nodespaced`'s `WatchNodes` stream to the
-//! Tauri frontend, routed per-window by each event's `database_id` (issue
-//! #2033 — see `window_routing::emit_routed`, which replaced the previous
-//! unconditional `app.emit("node:*", ...)` broadcast to every open window).
+//! Tauri frontend, routed per-window by each event's `database_id` (see
+//! `window_routing::emit_routed`, which replaced the previous unconditional
+//! `app.emit("node:*", ...)` broadcast to every open window).
 //!
 //! # Status
 //!
@@ -187,8 +187,11 @@ async fn stream_once<R: Runtime>(app: &AppHandle<R>, grpc_client: &GrpcClient) -
 fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::NodeEvent) {
     // The database this event originated from (ADR-053). Empty when the daemon
     // serves a single unregistered database (Pro daemon) — the frontend guard
-    // treats an empty id as "always applies".
+    // treats an empty id as "always applies". Computed once here (rather than
+    // at each emit call site below) since it's the same routing target for
+    // every variant of this one event.
     let database_id = event.database_id;
+    let target = non_empty(&database_id).map(str::to_string);
     let Some(kind) = event.event else {
         debug!("Received NodeEvent with no event variant; ignoring");
         return;
@@ -196,7 +199,6 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
 
     match kind {
         NodeEventKind::Created(data) => {
-            let target = non_empty(&database_id).map(str::to_string);
             let payload = NodeIdPayload {
                 id: data.id,
                 node_type: Some(data.node_type),
@@ -212,7 +214,6 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
                 node_type = %data.node_type,
                 "WatchNodes → emitting node:updated"
             );
-            let target = non_empty(&database_id).map(str::to_string);
             let payload = NodeIdPayload {
                 id: data.id,
                 node_type: None,
@@ -224,7 +225,6 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
             // node_type is required — consumers (e.g. collections sidebar)
             // apply type-aware cleanup logic for schema/collection deletions
             // without fetching the already-deleted node.
-            let target = non_empty(&database_id).map(str::to_string);
             let payload = NodeIdPayload {
                 id: d.node_id,
                 node_type: Some(d.node_type),
@@ -237,14 +237,21 @@ fn forward<R: Runtime>(app: &AppHandle<R>, event: nodespace_proto::nodespace::No
         // `properties` arrives JSON-encoded on the wire (proto schema is
         // stable); re-parse it here before emitting so the frontend gets a
         // real object (the `has_child` listener reads `properties.order`).
-        NodeEventKind::RelationshipCreated(r) => {
-            emit_relationship(app, "relationship:created", r, database_id)
-        }
-        NodeEventKind::RelationshipUpdated(r) => {
-            emit_relationship(app, "relationship:updated", r, database_id)
-        }
+        NodeEventKind::RelationshipCreated(r) => emit_relationship(
+            app,
+            "relationship:created",
+            r,
+            database_id,
+            target.as_deref(),
+        ),
+        NodeEventKind::RelationshipUpdated(r) => emit_relationship(
+            app,
+            "relationship:updated",
+            r,
+            database_id,
+            target.as_deref(),
+        ),
         NodeEventKind::RelationshipDeleted(r) => {
-            let target = non_empty(&database_id).map(str::to_string);
             let payload = RelationshipDeletedOut {
                 id: r.id,
                 from_id: r.from_id,
@@ -288,6 +295,7 @@ fn emit_relationship<R: Runtime>(
     name: &str,
     r: nodespace_proto::nodespace::RelationshipPayload,
     database_id: String,
+    target: Option<&str>,
 ) {
     // `r.properties` arrives JSON-encoded as a string on the wire so
     // the proto schema stays stable across additions to the
@@ -309,7 +317,6 @@ fn emit_relationship<R: Runtime>(
             serde_json::Value::Object(Default::default())
         }
     };
-    let target = non_empty(&database_id).map(str::to_string);
     let payload = RelationshipPayloadOut {
         id: r.id,
         from_id: r.from_id,
@@ -318,5 +325,5 @@ fn emit_relationship<R: Runtime>(
         properties: props,
         database_id,
     };
-    emit_routed(app, name, &payload, target.as_deref());
+    emit_routed(app, name, &payload, target);
 }

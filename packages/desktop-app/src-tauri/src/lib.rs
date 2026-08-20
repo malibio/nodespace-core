@@ -31,11 +31,14 @@ pub mod skill_setup;
 // App update check (detect newer releases)
 pub mod update_check;
 
-// Window <-> database routing (issue #2033): window label/pin tracking and
-// the emit-routing helper that replaces every hardcoded "main" window emit.
+// Shared atomic write-to-temp-then-rename helper for JSON config files.
+mod atomic_file;
+
+// Window <-> database routing: window label/pin tracking and the
+// emit-routing helper that replaces every hardcoded "main" window emit.
 pub mod window_routing;
 
-// Per-database window size/position persistence (issue #2033).
+// Per-database window size/position persistence.
 pub mod window_state;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -400,8 +403,8 @@ pub fn run() {
             // Register shutdown token as managed state for background task coordination.
             app.manage(shutdown_token_for_setup.clone());
 
-            // Window <-> database pin registry (issue #2033) — every emit-routing
-            // decision in `window_routing::emit_routed` reads this.
+            // Window <-> database pin registry — every emit-routing decision
+            // in `window_routing::emit_routed` reads this.
             app.manage(window_routing::WindowDatabaseRegistry::default());
 
             // Kill the running daemon if its binary is stale (size mismatch vs bundled
@@ -860,14 +863,13 @@ fn handle_run_event<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, event: 
 }
 
 /// Best-effort persist `label`'s current outer size/position, keyed by the
-/// database it is pinned to (issue #2033's window-state-persistence scope
-/// item). Re-queries the window live rather than threading the `Resized`/
-/// `Moved` event's own payload through, since either event alone only
-/// carries half the geometry (size XOR position) — querying both fresh
-/// avoids reasoning about stitching a partial update onto stale state.
-/// No-ops (nothing to key the save by) for a window that hasn't pinned a
-/// database yet — the bootstrap window, in the brief window between being
-/// shown and the frontend's first `pin_window_database` call.
+/// database it is pinned to. Re-queries the window live rather than
+/// threading the `Resized`/`Moved` event's own payload through, since either
+/// event alone only carries half the geometry (size XOR position) — querying
+/// both fresh avoids reasoning about stitching a partial update onto stale
+/// state. No-ops (nothing to key the save by) for a window that hasn't
+/// pinned a database yet — the bootstrap window, in the brief window between
+/// being shown and the frontend's first `pin_window_database` call.
 fn persist_window_geometry<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, label: &str) {
     use tauri::Manager;
 

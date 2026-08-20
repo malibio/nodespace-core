@@ -102,26 +102,7 @@ pub async fn save_preferences(app: &AppHandle, prefs: &AppPreferences) -> Result
         .app_config_dir()
         .map_err(|e| format!("Failed to get config directory: {}", e))?;
 
-    fs::create_dir_all(&config_dir)
-        .await
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
-
-    let pref_file = config_dir.join(PREF_FILE);
-    let temp_file = config_dir.join(format!("{}.tmp", PREF_FILE));
-
-    let serialized = serde_json::to_string_pretty(prefs)
-        .map_err(|e| format!("Failed to serialize preferences: {}", e))?;
-
-    // Atomic write: write to temp file, then rename
-    fs::write(&temp_file, serialized)
-        .await
-        .map_err(|e| format!("Failed to write preferences: {}", e))?;
-
-    fs::rename(&temp_file, &pref_file)
-        .await
-        .map_err(|e| format!("Failed to save preferences: {}", e))?;
-
-    Ok(())
+    crate::atomic_file::write_json(&config_dir, PREF_FILE, prefs).await
 }
 
 /// Get default database path for current platform

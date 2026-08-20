@@ -205,8 +205,8 @@ class DatabaseStore {
   }
 
   /**
-   * Declare to the backend which database this window is now showing (issue
-   * #2033: window label = database id). The backend uses this to route
+   * Declare to the backend which database this window is now showing. The
+   * backend uses this to route
    * database-scoped events (`node:*`, `relationship:*`) to the correct
    * window instead of broadcasting to every open one, and to restore this
    * database's last saved window size/position. Best-effort and

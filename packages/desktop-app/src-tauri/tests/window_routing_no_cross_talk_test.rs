@@ -1,6 +1,6 @@
-//! issue #2033 — the core "no event cross-talk" guarantee, exercised against
-//! a REAL daemon with two real registered databases and two independently
-//! bound `watcher::run` tasks (mirrors `optimistic_echo_race_test.rs`'s "two
+//! The core "no event cross-talk" guarantee, exercised against a REAL daemon
+//! with two real registered databases and two independently bound
+//! `watcher::run` tasks (mirrors `optimistic_echo_race_test.rs`'s "two
 //! windows = two independent `GrpcClient`s" pattern, generalized to two
 //! independent *databases* too). Two mock `WebviewWindow`s are pinned, via
 //! `WindowDatabaseRegistry`, to the two databases; `watcher::forward` now
@@ -12,7 +12,7 @@
 //! shared `GrpcClient`'s "active" database (see `lib.rs`'s `setup()`) — the
 //! app has no way to open a second window yet, so nothing wires up a second,
 //! independently-bound watcher for it. This test proves the ROUTING layer
-//! this issue delivers is correct for when that wiring lands (a follow-up),
+//! this change delivers is correct for when that wiring lands (a follow-up),
 //! using two `watcher::run` tasks the way two real concurrent windows'
 //! watchers eventually would drive them — not a mock of the routing logic,
 //! the actual production `watcher::run` + `window_routing::emit_routed` path

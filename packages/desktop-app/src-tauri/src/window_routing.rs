@@ -1,4 +1,4 @@
-//! Window <-> database routing (issue #2033).
+//! Window <-> database routing: which open window an emitted event reaches.
 //!
 //! A window opened deliberately for a specific, already-known database
 //! (any future "open in a new window" trigger) gets that database's id as
@@ -110,30 +110,43 @@ pub fn resolve_targets(
     }
 }
 
-/// [`resolve_targets`] wired up against the real Tauri window set for `app` —
-/// gathers the live open-label/focused-label/pin inputs and returns just the
-/// target label(s), not window objects. `Emitter::emit` on a `WebviewWindow`
-/// is NOT scoped to that window (confirmed against the `tauri` 2.11 source —
-/// every `Emitter` implementor's `emit` shares one default body that always
-/// calls the manager's unscoped broadcast, `self.manager().emit(...)`,
-/// regardless of which object it was called on); [`emit_routed`] below
-/// therefore emits via `Emitter::emit_to(label, ...)` against these labels
-/// rather than calling `.emit()` on a resolved window — a mistake real
-/// enough that the very first test written against this module caught it
-/// (see `emit_routed_reaches_only_the_window_pinned_to_the_database`).
-fn resolve_target_labels<R: Runtime>(app: &AppHandle<R>, database_id: Option<&str>) -> Vec<String> {
+/// Gathers the live inputs every routing decision needs — the open window
+/// map and the current pin snapshot — exactly once. [`emit_routed`] and
+/// [`resolve_focus_window`] both build on this rather than each calling
+/// `app.webview_windows()` (a `HashMap` clone) independently.
+fn window_and_pin_state<R: Runtime>(
+    app: &AppHandle<R>,
+) -> (HashMap<String, WebviewWindow<R>>, HashMap<String, String>) {
     let windows = app.webview_windows();
+    let pins = app
+        .try_state::<WindowDatabaseRegistry>()
+        .map(|r| r.snapshot())
+        .unwrap_or_default();
+    (windows, pins)
+}
+
+/// [`resolve_targets`] wired up against a gathered window map and pin
+/// snapshot. `Emitter::emit` on a `WebviewWindow` is NOT scoped to that
+/// window (confirmed against the `tauri` 2.11 source — every `Emitter`
+/// implementor's `emit` shares one default body that always calls the
+/// manager's unscoped broadcast, `self.manager().emit(...)`, regardless of
+/// which object it was called on); [`emit_routed`] below therefore emits via
+/// `Emitter::emit_to(label, ...)` against these labels rather than calling
+/// `.emit()` on a resolved window — a mistake real enough that the very
+/// first test written against this module caught it (see
+/// `emit_routed_reaches_only_the_window_pinned_to_the_database`).
+fn resolve_target_labels<R: Runtime>(
+    windows: &HashMap<String, WebviewWindow<R>>,
+    pins: &HashMap<String, String>,
+    database_id: Option<&str>,
+) -> Vec<String> {
     let open_labels: Vec<String> = windows.keys().cloned().collect();
     let focused_label = windows
         .iter()
         .find(|(_, w)| w.is_focused().unwrap_or(false))
         .map(|(label, _)| label.clone());
-    let pins = app
-        .try_state::<WindowDatabaseRegistry>()
-        .map(|r| r.snapshot())
-        .unwrap_or_default();
 
-    resolve_targets(&pins, &open_labels, focused_label.as_deref(), database_id)
+    resolve_targets(pins, &open_labels, focused_label.as_deref(), database_id)
 }
 
 /// Replacement for every previous `app.get_webview_window("main")` +
@@ -143,35 +156,48 @@ fn resolve_target_labels<R: Runtime>(app: &AppHandle<R>, database_id: Option<&st
 /// `database_id`, or the focused window when `database_id` is `None` (or
 /// empty).
 ///
-/// When NO window exists in the whole app yet, there is nothing to scope
-/// to — this falls back to the same unscoped broadcast every emit used
-/// before this module existed, rather than silently dropping the event.
-/// This matters in production for the narrow window between process start
-/// and the first window materializing, and it is *load-bearing* for the
+/// Falls back to the same unscoped broadcast every emit used before this
+/// module existed — rather than silently dropping the event — whenever
+/// there is nothing to route by: no window exists in the app yet, OR no
+/// window has pinned to any database yet. The second condition matters in
+/// production, not just at the literal zero-window instant: `watcher::spawn`
+/// starts forwarding real events as soon as the daemon reports healthy,
+/// independent of the frontend's async `pin_window_database` call landing
+/// (`databaseStore.load()` resolving the active database over gRPC/
+/// `localStorage`, then round-tripping the IPC call) — an event arriving in
+/// that gap, with the bootstrap window already open but nothing pinned yet,
+/// would otherwise be silently dropped instead of reaching the one window
+/// that exists, a real regression from the unconditional broadcast every
+/// emit used before this module existed. This is also what makes the
 /// `tests/*.rs` real-daemon integration suite (`optimistic_echo_race_test.rs`
-/// et al.), which drives `watcher::run` against a bare `AppHandle` with no
-/// window at all and asserts on events via `AppHandle::listen` — exactly the
-/// regression the first version of this function shipped with, caught by
-/// running that pre-existing suite rather than only this module's own tests.
+/// et al., which drive `watcher::run` against a bare `AppHandle` with no
+/// window and no registry at all) pass unmodified — the same condition,
+/// not a special case carved out for them.
 ///
-/// Once at least one window exists, a `database_id` naming a database no
-/// open window is pinned to is not an error — there is nowhere for that
-/// specific event to go, so it is dropped (logged at debug) rather than
-/// broadcast to windows showing a different database.
+/// Once at least one window has pinned to a database, a `database_id`
+/// naming a database no open window is pinned to is not an error — there is
+/// nowhere for that specific event to go, so it is dropped (logged at
+/// debug) rather than broadcast to windows showing a different database.
 pub fn emit_routed<R: Runtime, S: Serialize + Clone>(
     app: &AppHandle<R>,
     event: &str,
     payload: S,
     database_id: Option<&str>,
 ) {
-    if app.webview_windows().is_empty() {
+    let (windows, pins) = window_and_pin_state(app);
+
+    if windows.is_empty() || pins.is_empty() {
         if let Err(e) = app.emit(event, payload) {
-            tracing::warn!(event, error = %e, "failed to broadcast event (no windows open)");
+            tracing::warn!(
+                event,
+                error = %e,
+                "failed to broadcast event (no windows open, or none pinned yet)"
+            );
         }
         return;
     }
 
-    let targets = resolve_target_labels(app, database_id);
+    let targets = resolve_target_labels(&windows, &pins, database_id);
     if targets.is_empty() {
         tracing::debug!(
             event,
@@ -193,8 +219,11 @@ pub fn emit_routed<R: Runtime, S: Serialize + Clone>(
 /// event's target label(s) — same underlying resolution (`database_id:
 /// None`), resolved to at most one real window.
 pub fn resolve_focus_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
-    let label = resolve_target_labels(app, None).into_iter().next()?;
-    app.get_webview_window(&label)
+    let (windows, pins) = window_and_pin_state(app);
+    let label = resolve_target_labels(&windows, &pins, None)
+        .into_iter()
+        .next()?;
+    windows.get(&label).cloned()
 }
 
 /// Declare (or update) which database `window` is showing. Called by the
@@ -203,11 +232,14 @@ pub fn resolve_focus_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWin
 /// reality even for the bootstrap window, whose database isn't known at
 /// window-creation time (see the module doc).
 ///
-/// Best-effort restores that database's last saved size/position (issue
-/// #2033's window-state-persistence scope item) the first time this window
-/// pins to it — not on every call, so re-affirming the same pin (e.g. a
-/// background registry reload) never yanks a window the user has since
-/// resized back to an old saved geometry.
+/// Best-effort restores that database's last saved size/position the first
+/// time this window pins to it — not on every call, so re-affirming the same
+/// pin (e.g. a background registry reload) never yanks a window the user has
+/// since resized back to an old saved geometry. A saved geometry that fails
+/// [`WindowGeometry::is_plausible`] (e.g. a degenerate `0x0` that a corrupt
+/// write or a future bug could produce) is treated as if nothing were saved
+/// — applying it directly could leave the window invisible or unusable, with
+/// no in-app way to recover its size short of deleting the state file.
 #[tauri::command]
 pub async fn pin_window_database(
     window: tauri::WebviewWindow,
@@ -221,15 +253,19 @@ pub async fn pin_window_database(
 
     if previous.as_deref() != Some(id.as_str()) {
         if let Some(geometry) = crate::window_state::load_geometry(&app, &id).await {
-            if let Err(e) =
-                window.set_size(tauri::PhysicalSize::new(geometry.width, geometry.height))
-            {
-                tracing::warn!(error = %e, "failed to restore saved window size");
-            }
-            if let Err(e) =
-                window.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y))
-            {
-                tracing::warn!(error = %e, "failed to restore saved window position");
+            if !geometry.is_plausible() {
+                tracing::warn!(?geometry, "ignoring implausible saved window geometry");
+            } else {
+                if let Err(e) =
+                    window.set_size(tauri::PhysicalSize::new(geometry.width, geometry.height))
+                {
+                    tracing::warn!(error = %e, "failed to restore saved window size");
+                }
+                if let Err(e) =
+                    window.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y))
+                {
+                    tracing::warn!(error = %e, "failed to restore saved window position");
+                }
             }
         }
     }
@@ -402,6 +438,42 @@ mod tests {
         assert!(
             received_b.lock().unwrap().is_empty(),
             "db-2's window must NOT receive an event routed to db-1 — no cross-talk"
+        );
+    }
+
+    /// The startup-race guard: a window exists (the bootstrap window, in
+    /// production) but nothing has pinned to a database yet — e.g. the
+    /// watcher started forwarding real events before the frontend's async
+    /// `pin_window_database` round-trip landed. Must broadcast rather than
+    /// silently drop, exactly like the pre-routing behavior every emit had.
+    #[test]
+    fn a_database_scoped_event_before_any_window_has_pinned_broadcasts_instead_of_dropping() {
+        use std::sync::{Arc, Mutex as StdMutex};
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        app.manage(WindowDatabaseRegistry::default());
+        let handle = app.handle().clone();
+
+        let bootstrap = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("failed to build mock bootstrap window");
+        // Deliberately no `registry.pin(...)` call — this is the gap before
+        // the frontend's first `pin_window_database`.
+
+        let received: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let r = received.clone();
+        bootstrap.listen("node:created", move |event| {
+            r.lock().unwrap().push(event.payload().to_string());
+        });
+
+        emit_routed(&handle, "node:created", "payload", Some("db-1"));
+
+        assert_eq!(
+            received.lock().unwrap().len(),
+            1,
+            "an unpinned bootstrap window must still receive the event via the broadcast \
+             fallback, not have it silently dropped"
         );
     }
 
