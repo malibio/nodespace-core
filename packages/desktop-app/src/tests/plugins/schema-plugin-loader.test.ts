@@ -12,8 +12,7 @@ import {
   createPluginFromSchema,
   registerSchemaPlugin,
   unregisterSchemaPlugin,
-  initializeSchemaPluginSystem,
-  PLUGIN_PRIORITIES
+  initializeSchemaPluginSystem
 } from '$lib/plugins/schema-plugin-loader';
 import type { SchemaNode } from '$lib/types/schema-node';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
@@ -71,16 +70,9 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
       description: 'Schema for invoices',
       version: '1.0.0',
       config: {
-        slashCommands: [
-          {
-            id: 'invoice',
-            name: 'Sales Invoice',
-            description: 'Schema for invoices',
-            contentTemplate: '',
-            nodeType: 'invoice',
-            priority: PLUGIN_PRIORITIES.CUSTOM_ENTITY
-          }
-        ],
+        // Entity types are not slash-creatable — no slash command is generated for
+        // user-defined schema types. Instances are created via the sidenav's type view.
+        slashCommands: [],
         canHaveChildren: true,
         canBeChild: true
       }
@@ -95,7 +87,8 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
     const plugin = createPluginFromSchema(schemaNode);
 
     expect(plugin.name).toBe('Customer Invoice');
-    expect(plugin.config.slashCommands[0].name).toBe('Customer Invoice');
+    // No slash command is generated for the display name to propagate onto.
+    expect(plugin.config.slashCommands).toHaveLength(0);
   });
 
   it('should use schema content as display name, falling back to humanized ID when content is empty', () => {
@@ -108,15 +101,15 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
     expect(createPluginFromSchema(emptyContent).name).toBe('Sales Invoice');
   });
 
-  it('should set correct priority for custom entities', () => {
+  it('should not generate a slash command for custom entities', () => {
     const schemaNode = createMockSchemaNode('invoice', {
       description: 'Invoice'
     });
 
     const plugin = createPluginFromSchema(schemaNode);
 
-    expect(plugin.config.slashCommands[0].priority).toBe(PLUGIN_PRIORITIES.CUSTOM_ENTITY);
-    expect(PLUGIN_PRIORITIES.CUSTOM_ENTITY).toBe(50);
+    // Entity types (core and user-defined alike) are not slash-creatable.
+    expect(plugin.config.slashCommands).toEqual([]);
   });
 
   it('should use schema version as plugin version', () => {
@@ -140,29 +133,29 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
     expect(plugin.node).toBeUndefined();
   });
 
-  it('should set contentTemplate to empty string when no titleTemplate (node name is editable)', () => {
+  it('should not generate a slash command when no titleTemplate is set', () => {
     const schemaNode = createMockSchemaNode('customer', { description: 'Customer' });
     const plugin = createPluginFromSchema(schemaNode);
-    expect(plugin.config.slashCommands[0].contentTemplate).toBe('');
+    expect(plugin.config.slashCommands).toHaveLength(0);
   });
 
-  it('should set contentTemplate to empty string when titleTemplate is set (viewer shows template as hint)', () => {
+  it('should not generate a slash command when titleTemplate is set', () => {
     const schemaNode: SchemaNode = {
       ...createMockSchemaNode('customer', { description: 'Customer' }),
       titleTemplate: '{first_name} {last_name}'
     };
     const plugin = createPluginFromSchema(schemaNode);
-    expect(plugin.config.slashCommands[0].contentTemplate).toBe('');
+    expect(plugin.config.slashCommands).toHaveLength(0);
   });
 
-  it('should set nodeType to schema ID for slash command creation', () => {
+  it('should not generate a slash command regardless of schema ID', () => {
     const schemaNode = createMockSchemaNode('customEntity', {
       description: 'Custom Entity'
     });
 
     const plugin = createPluginFromSchema(schemaNode);
 
-    expect(plugin.config.slashCommands[0].nodeType).toBe('customEntity');
+    expect(plugin.config.slashCommands).toHaveLength(0);
   });
 });
 

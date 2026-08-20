@@ -92,7 +92,9 @@ describe('Core Plugins Integration', () => {
       expect(aiChatNodePlugin.id).toBe('ai-chat');
       expect(aiChatNodePlugin.name).toBe('AI Chat');
       expect(aiChatNodePlugin.description).toBe('AI conversation node');
-      expect(aiChatNodePlugin.config.slashCommands).toHaveLength(1);
+      // Entity types are not slash-creatable — ai-chat nodes are created via the
+      // sidebar's dedicated "AI Chats" section ("+ New chat").
+      expect(aiChatNodePlugin.config.slashCommands).toHaveLength(0);
       expect(aiChatNodePlugin.config.canHaveChildren).toBe(false);
       expect(aiChatNodePlugin.config.canBeChild).toBe(true);
       // Conversation lives in properties.messages, not .content — must be
@@ -103,10 +105,6 @@ describe('Core Plugins Integration', () => {
       expect(aiChatNodePlugin.viewer).toBeDefined();
       expect(aiChatNodePlugin.viewer?.lazyLoad).toBeDefined();
       expect(aiChatNodePlugin.reference).toBeDefined();
-
-      const chatCommand = aiChatNodePlugin.config.slashCommands[0];
-      expect(chatCommand.id).toBe('ai-chat');
-      expect(chatCommand.nodeType).toBe('ai-chat');
     });
 
     it('should have valid reference-only plugins', () => {
@@ -166,7 +164,7 @@ describe('Core Plugins Integration', () => {
       // Note: Logger output is intentionally silenced during tests
       const stats = registry.getStats();
       expect(stats.pluginsCount).toBe(14); // text, header, task, checkbox, date, code-block, quote-block, ordered-list, horizontal-line, table, query, collection, ai-chat, person
-      expect(stats.slashCommandsCount).toBe(13); // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, ai-chat: 1, person: 1, query: 0 (removed #1919), collection: 0, date: 0
+      expect(stats.slashCommandsCount).toBe(11); // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 0 (removed #1919), collection: 0, date: 0, ai-chat: 0, person: 0 (entity types are not slash-creatable)
       expect(stats.viewersCount).toBe(5); // date, task, collection, query, and ai-chat have custom viewers
       expect(stats.referencesCount).toBe(14); // all plugins have references
     });
@@ -176,8 +174,8 @@ describe('Core Plugins Integration', () => {
 
       const stats = registry.getStats();
 
-      // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, ai-chat: 1, person: 1, query: 0 (removed #1919), date: 0, collection: 0 = 13 total
-      expect(stats.slashCommandsCount).toBe(13);
+      // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 0 (removed #1919), date: 0, collection: 0, ai-chat: 0, person: 0 (entity types are not slash-creatable) = 11 total
+      expect(stats.slashCommandsCount).toBe(11);
     });
 
     it('should provide all slash commands with proper inheritance', () => {
@@ -185,7 +183,7 @@ describe('Core Plugins Integration', () => {
 
       const commands = registry.getAllSlashCommands();
 
-      expect(commands).toHaveLength(13); // text, header1-3, task, checkbox, code, quote, ordered-list, hr, table, ai-chat, person (query slash command removed #1919)
+      expect(commands).toHaveLength(11); // text, header1-3, task, checkbox, code, quote, ordered-list, hr, table (query, ai-chat, person, collection, date have no slash command)
 
       // Verify text node commands from BasicNodeTypeRegistry work
       const textCommands = commands.filter((cmd) =>
@@ -361,7 +359,7 @@ describe('Core Plugins Integration', () => {
       registerExternalPlugin(registry, externalPlugin);
 
       expect(registry.getAllPlugins()).toHaveLength(initialCount + 1);
-      expect(registry.getAllSlashCommands()).toHaveLength(14); // 13 core + 1 external (query slash command removed #1919)
+      expect(registry.getAllSlashCommands()).toHaveLength(12); // 11 core + 1 external
     });
   });
 

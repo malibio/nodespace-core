@@ -1,8 +1,10 @@
 /**
  * Schema Plugin Auto-Registration System
  *
- * Automatically registers custom entity schemas as plugins, enabling immediate
- * slash command availability without manual plugin registration or app restart.
+ * Automatically registers custom entity schemas as plugins, enabling reference
+ * components and viewer fallback without manual plugin registration or app restart.
+ * Entity types are not slash-creatable (core or user-defined alike) — creation goes
+ * through the sidenav's type view instead.
  *
  * ## Features
  *
@@ -15,14 +17,12 @@
  * ## Architecture
  *
  * ```
- * Schema Creation → Plugin Auto-Registration → Slash Command Available
+ * Schema Creation → Plugin Auto-Registration → Reference/Viewer Available
  *      ↓                    ↓                           ↓
- * SchemaService    createPluginFromSchema()    SlashCommandService
+ * SchemaService    createPluginFromSchema()      PluginRegistry
  * ```
  *
  * The plugin registry already supports runtime registration without restart.
- * SlashCommandService queries the registry fresh on every `/` trigger, so
- * no caching layer blocks dynamic updates.
  *
  * ## Usage
  *
@@ -30,8 +30,8 @@
  * // Initialize on app startup
  * await initializeSchemaPluginSystem();
  *
- * // Custom entities automatically become available
- * // User creates "invoice" schema → "/invoice" appears in slash menu
+ * // Custom entities automatically become available for reference/viewer resolution
+ * // User creates "invoice" schema → invoice nodes render via BaseNode fallback
  * ```
  *
  * @see packages/desktop-app/src/lib/plugins/plugin-registry.ts - Plugin registration
@@ -45,18 +45,6 @@ import { type SchemaNode, isSchemaNode } from '$lib/types/schema-node';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('SchemaPluginLoader');
-
-/**
- * Plugin priority constants
- *
- * Defines the priority order for plugin slash commands in the dropdown.
- * Higher priority commands appear first.
- */
-export const PLUGIN_PRIORITIES = {
-  CORE: 100, // Core types (text, task, date, etc.)
-  CUSTOM_ENTITY: 50, // User-defined custom entity schemas
-  USER_COMMAND: 0 // User-created custom commands
-} as const;
 
 /**
  * Humanize a schema ID into a readable display name
@@ -95,8 +83,9 @@ export function humanizeSchemaId(id: string): string {
 /**
  * Convert a schema node into a plugin definition
  *
- * Creates a minimal plugin that registers the custom entity as a slash command
- * and uses the generic CustomEntityNode component for rendering.
+ * Creates a minimal plugin that registers the custom entity for reference/viewer
+ * resolution via the BaseNode fallback. No slash command is generated — entity types
+ * are not slash-creatable; instances are created via the sidenav's type view.
  *
  * @param schema - Schema node to convert
  * @returns Plugin definition ready for registration
@@ -124,20 +113,10 @@ export function createPluginFromSchema(schema: SchemaNode): PluginDefinition {
     description: description || `Create ${displayName}`,
     version: `${version}.0.0`, // Use schema version as plugin version
     config: {
-      slashCommands: [
-        {
-          id: schemaId,
-          name: displayName,
-          description: description || `Create ${displayName}`,
-          // Always start with empty content — the viewer shows the raw titleTemplate as a
-          // faint placeholder hint when titleTemplate is set, and editable blank otherwise.
-          contentTemplate: '',
-          nodeType: schemaId,
-          priority: PLUGIN_PRIORITIES.CUSTOM_ENTITY,
-          hasTitleTemplate: !!schema.titleTemplate,
-          titleTemplate: schema.titleTemplate
-        }
-      ],
+      // No slash command — entity types (core and user-defined alike) are not
+      // slash-creatable. User-defined types are created via the sidenav's type view
+      // (customSchemas → handleSchemaClick → create instance).
+      slashCommands: [],
       canHaveChildren: true,
       canBeChild: true
     }
@@ -160,7 +139,7 @@ export function createPluginFromSchema(schema: SchemaNode): PluginDefinition {
  * ```typescript
  * // Register an invoice schema
  * await registerSchemaPlugin('invoice');
- * // "/invoice" now appears in slash command dropdown
+ * // Invoice nodes now resolve to a reference/viewer via the plugin registry
  * ```
  */
 export async function registerSchemaPlugin(schemaId: string): Promise<void> {
@@ -199,8 +178,8 @@ export async function registerSchemaPlugin(schemaId: string): Promise<void> {
 /**
  * Unregister a schema plugin
  *
- * Removes the plugin from the registry. The slash command will no longer
- * appear in the dropdown.
+ * Removes the plugin from the registry. Reference/viewer resolution for the
+ * type will no longer be available.
  *
  * @param schemaId - ID of the schema to unregister
  *
@@ -208,7 +187,6 @@ export async function registerSchemaPlugin(schemaId: string): Promise<void> {
  * ```typescript
  * // Remove invoice plugin
  * unregisterSchemaPlugin('invoice');
- * // "/invoice" no longer appears in slash menu
  * ```
  */
 export function unregisterSchemaPlugin(schemaId: string): void {
@@ -233,8 +211,8 @@ export interface InitializationResult {
 /**
  * Initialize schema plugin auto-registration system
  *
- * Registers all existing custom entity schemas on startup so they are
- * available in the slash command picker immediately on launch.
+ * Registers all existing custom entity schemas on startup so their
+ * reference/viewer resolution is available immediately on launch.
  *
  * Dynamic registration for schemas created/deleted at runtime is handled
  * by BrowserSyncService and TauriSyncListener, which call
