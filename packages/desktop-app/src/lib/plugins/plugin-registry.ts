@@ -24,6 +24,7 @@ import type {
 } from './types';
 import type { Node } from '$lib/types';
 import { createLogger } from '$lib/utils/logger';
+import { resolveTitleOrContent } from '$lib/utils/node-display-title';
 
 const log = createLogger('PluginRegistry');
 
@@ -453,20 +454,45 @@ export class PluginRegistry {
   }
 
   /**
-   * Compute a node's tab title via its plugin's getTitle, falling back to
-   * node.title || node.content when the plugin doesn't define one.
+   * The node's current display value using the title-vs-content rule alone — see
+   * `resolveTitleOrContent`'s doc comment for the full rule and the frontend/backend
+   * agreement it depends on. No `plugin.getTitle` override.
    *
-   * node.title is computed and persisted by the backend (interpolated from the node
-   * type's schema title_template, when one exists — see NodeService::compute_title in
-   * the Rust core) — it's already the right display title for any node type without
-   * type-specific title logic, so no client-side schema lookup is needed here.
+   * This is the single call site every row-based, one-node-per-line surface (query
+   * list/kanban/table views, the collections sidebar) should use rather than re-deriving
+   * title-vs-content themselves. It deliberately does NOT apply a type's `getTitle` override
+   * (e.g. the date plugin's "Today"/"Tomorrow" formatting) — those surfaces show plain node
+   * text, not a tab-specific title, and a date node's `id` is only guaranteed to parse as a
+   * date in production, not in every synthetic id these surfaces might encounter.
+   *
+   * `hasTitleTemplate` comes from `findSlashCommand`'s flag — the same one `node-row.svelte`
+   * uses for the identical purpose when rendering a custom-entity node inline.
+   *
+   * @param formatContent - Optional reformatting (e.g. `stripMarkdown`) applied ONLY when the
+   * resolved value came from `content` — never on a title_template-computed title, which is a
+   * property value assembled by the template, not raw markdown/text to reformat. A caller
+   * that unconditionally wraps this method's return value in its own formatter instead would
+   * apply that formatting to a computed title too, corrupting property values containing
+   * formatting-significant characters (underscores, asterisks, backticks).
+   */
+  resolveDisplayTitle(node: Node, formatContent?: (content: string) => string): string {
+    const hasTitleTemplate = !!this.findSlashCommand(node.nodeType)?.hasTitleTemplate;
+    const value = resolveTitleOrContent(node, hasTitleTemplate);
+    return hasTitleTemplate || !formatContent ? value : formatContent(value);
+  }
+
+  /**
+   * Compute a node's tab title. Delegates to the plugin's `getTitle` when one is registered
+   * (e.g. date nodes format "Today"/"Tomorrow" from their id, not from content) — that
+   * override is specific to the tab-title contract, unlike `resolveDisplayTitle` above.
+   * Otherwise falls back to `resolveDisplayTitle`.
    */
   getNodeTitle(node: Node): string | undefined {
     const plugin = this.plugins.get(node.nodeType);
     if (plugin && this.enabledPlugins.has(node.nodeType) && plugin.getTitle) {
       return plugin.getTitle(node);
     }
-    return node.title || node.content || undefined;
+    return this.resolveDisplayTitle(node) || undefined;
   }
 
   /**

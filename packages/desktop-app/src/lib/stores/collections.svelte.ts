@@ -4,6 +4,7 @@ import { createLogger } from '$lib/utils/logger';
 import { onDaemonReconnect } from '$lib/services/daemon-status';
 import { stripMarkdown } from '$lib/services/markdown-utils';
 import { databaseStore } from '$lib/stores/database.svelte';
+import { pluginRegistry } from '$lib/plugins/plugin-registry';
 
 const log = createLogger('CollectionsStore');
 
@@ -439,10 +440,15 @@ class CollectionsStore {
           .filter((node) => !NON_CONTENT_NODE_TYPES.has(node.nodeType))
           .map((node) => ({
             id: node.id,
-            // Prefer the cleaned title; fall back to the node content with its
-            // markdown stripped so an imported header root shows "ACP Integration
-            // Architecture", not the raw "# ACP Integration Architecture".
-            name: node.title || stripMarkdown(node.content),
+            // pluginRegistry.resolveDisplayTitle already picks title vs. content correctly
+            // (title only for title_template-driven schemas — a plain node.title fallback is
+            // stale for everything else, since it's only refreshed by a backend round-trip).
+            // stripMarkdown is passed in as the content formatter, not wrapped around the
+            // whole call, so it cleans an imported header root ("# ACP Integration
+            // Architecture" -> "ACP Integration Architecture") WITHOUT also running over a
+            // title_template-computed name, which is a property value, not markdown — a name
+            // containing an underscore or asterisk would otherwise get silently mangled.
+            name: pluginRegistry.resolveDisplayTitle(node, stripMarkdown),
             nodeType: node.nodeType,
           }))
       );

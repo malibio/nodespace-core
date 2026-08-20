@@ -2,7 +2,7 @@
  * Unit tests for collections store - Collection browser state management
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   collectionsState,
   collectionsData,
@@ -17,6 +17,7 @@ import {
 import type { CollectionInfo } from '$lib/services/collection-service';
 import type { Node } from '$lib/types';
 import { mockCollections, mockMembers } from '../fixtures/collections-fixtures';
+import { pluginRegistry } from '$lib/plugins/index';
 
 // Convert mock data to CollectionInfo format for testing
 function createTestCollectionInfo(item: CollectionItem, parentId?: string): CollectionInfo {
@@ -447,6 +448,140 @@ describe('Collections Store', () => {
 
       const members = collectionsState.selectedCollectionMembers;
       expect(members).toEqual([]);
+    });
+  });
+
+  describe('selectedCollectionMembers title-vs-content (issue #2012)', () => {
+    afterEach(() => {
+      pluginRegistry.unregister('widget-entity');
+    });
+
+    it('shows current content, not a stale cached title, for a non-template type', () => {
+      // sharedNodeStore's cached `title` only refreshes via a backend round-trip; optimistic
+      // content edits patch `content` directly. A member row must reflect current content,
+      // not a title computed for an earlier state.
+      const members = new Map<string, Node[]>([
+        [
+          'col-1',
+          [
+            {
+              id: 'node-1',
+              content: 'Another Task',
+              title: '/',
+              nodeType: 'task',
+              createdAt: new Date().toISOString(),
+              modifiedAt: new Date().toISOString(),
+              version: 1,
+              properties: {}
+            }
+          ]
+        ]
+      ]);
+      collectionsData._setTestData(flattenCollections(mockCollections), members);
+
+      collectionsState.selectCollection('col-1');
+
+      expect(collectionsState.selectedCollectionMembers).toEqual([
+        { id: 'node-1', name: 'Another Task', nodeType: 'task' }
+      ]);
+    });
+
+    it('still shows the computed title for a title_template-driven custom entity', () => {
+      pluginRegistry.register({
+        id: 'widget-entity',
+        name: 'Widget',
+        description: 'Custom entity with a title template',
+        version: '1.0.0',
+        config: {
+          slashCommands: [
+            {
+              id: 'widget-entity',
+              name: 'Widget',
+              description: 'Create Widget',
+              contentTemplate: '',
+              nodeType: 'widget-entity',
+              hasTitleTemplate: true,
+              titleTemplate: '{first_name} {last_name}'
+            }
+          ]
+        }
+      });
+
+      const members = new Map<string, Node[]>([
+        [
+          'col-1',
+          [
+            {
+              id: 'node-1',
+              content: 'raw',
+              title: 'Jane Doe',
+              nodeType: 'widget-entity',
+              createdAt: new Date().toISOString(),
+              modifiedAt: new Date().toISOString(),
+              version: 1,
+              properties: {}
+            }
+          ]
+        ]
+      ]);
+      collectionsData._setTestData(flattenCollections(mockCollections), members);
+
+      collectionsState.selectCollection('col-1');
+
+      expect(collectionsState.selectedCollectionMembers).toEqual([
+        { id: 'node-1', name: 'Jane Doe', nodeType: 'widget-entity' }
+      ]);
+    });
+
+    it('does not run a template-computed title through markdown stripping', () => {
+      // Regression: stripMarkdown must apply only to a content-sourced value, never to a
+      // title_template-computed title — that's a property value, not markdown, and
+      // stripMarkdown's bold/italic/code regexes would otherwise mangle any paired `_`/`*`/
+      // backtick in it (e.g. a name or slug containing an underscore).
+      pluginRegistry.register({
+        id: 'widget-entity',
+        name: 'Widget',
+        description: 'Custom entity with a title template',
+        version: '1.0.0',
+        config: {
+          slashCommands: [
+            {
+              id: 'widget-entity',
+              name: 'Widget',
+              description: 'Create Widget',
+              contentTemplate: '',
+              nodeType: 'widget-entity',
+              hasTitleTemplate: true,
+              titleTemplate: '{first_name}_{last_name}'
+            }
+          ]
+        }
+      });
+
+      const members = new Map<string, Node[]>([
+        [
+          'col-1',
+          [
+            {
+              id: 'node-1',
+              content: 'raw',
+              title: 'Jane_Doe',
+              nodeType: 'widget-entity',
+              createdAt: new Date().toISOString(),
+              modifiedAt: new Date().toISOString(),
+              version: 1,
+              properties: {}
+            }
+          ]
+        ]
+      ]);
+      collectionsData._setTestData(flattenCollections(mockCollections), members);
+
+      collectionsState.selectCollection('col-1');
+
+      expect(collectionsState.selectedCollectionMembers).toEqual([
+        { id: 'node-1', name: 'Jane_Doe', nodeType: 'widget-entity' }
+      ]);
     });
   });
 
