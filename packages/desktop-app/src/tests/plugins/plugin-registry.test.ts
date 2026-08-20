@@ -1551,7 +1551,11 @@ describe('PluginRegistry - Core Functionality', () => {
       expect(plugin.getTitle).toHaveBeenCalledWith(node);
     });
 
-    it('falls back to node.title when plugin has no getTitle', () => {
+    it('prefers content over a stale node.title for a non-template type (issue #2012)', () => {
+      // Regression: a node without a title_template (e.g. task) has its `title` refreshed
+      // only by a backend round-trip, while optimistic content edits patch `content`
+      // directly. A stale title left over from an earlier state (e.g. a slash command typed
+      // before the node converted type) must not win over current content.
       const plugin: PluginDefinition = {
         id: 'task',
         name: 'Task',
@@ -1563,12 +1567,46 @@ describe('PluginRegistry - Core Functionality', () => {
 
       // createTestNode() doesn't copy `title` from options, so set it directly.
       const node = {
-        ...createTestNode({ nodeType: 'task', content: 'raw content' }),
-        title: 'Interpolated Title'
+        ...createTestNode({ nodeType: 'task', content: 'current content' }),
+        title: 'Stale Title'
       };
       const title = registry.getNodeTitle(node);
 
-      expect(title).toBe('Interpolated Title');
+      expect(title).toBe('current content');
+    });
+
+    it('prefers node.title for a title_template-driven custom entity type', () => {
+      // A custom entity schema with a title_template registers hasTitleTemplate on its
+      // slash command (schema-plugin-loader.ts) — that's the signal getNodeTitle uses to
+      // know title is computed and legitimately distinct from content.
+      const plugin: PluginDefinition = {
+        id: 'person',
+        name: 'Person',
+        description: 'Person plugin',
+        version: '1.0.0',
+        config: {
+          slashCommands: [
+            {
+              id: 'person',
+              name: 'Person',
+              description: 'Create Person',
+              contentTemplate: '',
+              nodeType: 'person',
+              hasTitleTemplate: true,
+              titleTemplate: '{first_name} {last_name}'
+            }
+          ]
+        }
+      };
+      registry.register(plugin);
+
+      const node = {
+        ...createTestNode({ nodeType: 'person', content: '' }),
+        title: 'Jane Doe'
+      };
+      const title = registry.getNodeTitle(node);
+
+      expect(title).toBe('Jane Doe');
     });
 
     it('falls back to node.content when node.title is absent', () => {
@@ -1587,7 +1625,7 @@ describe('PluginRegistry - Core Functionality', () => {
       expect(title).toBe('raw content');
     });
 
-    it('falls back to node.title || node.content for an unregistered nodeType', () => {
+    it('falls back to content (no title_template signal) for an unregistered nodeType', () => {
       const node = createTestNode({ nodeType: 'unregistered-type', content: 'some content' });
       const title = registry.getNodeTitle(node);
 
@@ -1613,6 +1651,124 @@ describe('PluginRegistry - Core Functionality', () => {
       const title = registry.getNodeTitle(node);
 
       expect(title).toBe('fallback content');
+    });
+  });
+
+  describe('resolveDisplayTitle (issue #2012)', () => {
+    // Used by row-based surfaces (query list/kanban/table views, the collections sidebar)
+    // instead of getNodeTitle: same title-vs-content rule, but never applies a plugin's
+    // getTitle override (e.g. date's "Today"/"Tomorrow" formatting) — those surfaces show
+    // plain node text, not a tab-specific title.
+
+    it('returns content over a stale title for a non-template type', () => {
+      const plugin: PluginDefinition = {
+        id: 'task',
+        name: 'Task',
+        description: 'Task plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] }
+      };
+      registry.register(plugin);
+
+      const node = {
+        ...createTestNode({ nodeType: 'task', content: 'current content' }),
+        title: 'Stale Title'
+      };
+
+      expect(registry.resolveDisplayTitle(node)).toBe('current content');
+    });
+
+    it('returns title for a title_template-driven custom entity type', () => {
+      const plugin: PluginDefinition = {
+        id: 'person',
+        name: 'Person',
+        description: 'Person plugin',
+        version: '1.0.0',
+        config: {
+          slashCommands: [
+            {
+              id: 'person',
+              name: 'Person',
+              description: 'Create Person',
+              contentTemplate: '',
+              nodeType: 'person',
+              hasTitleTemplate: true,
+              titleTemplate: '{first_name} {last_name}'
+            }
+          ]
+        }
+      };
+      registry.register(plugin);
+
+      const node = { ...createTestNode({ nodeType: 'person', content: '' }), title: 'Jane Doe' };
+
+      expect(registry.resolveDisplayTitle(node)).toBe('Jane Doe');
+    });
+
+    it('ignores a plugin getTitle override, unlike getNodeTitle', () => {
+      const plugin: PluginDefinition = {
+        id: 'date',
+        name: 'Date',
+        description: 'Date plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] },
+        getTitle: vi.fn().mockReturnValue('Today')
+      };
+      registry.register(plugin);
+
+      const node = createTestNode({ nodeType: 'date', content: '2026-07-07' });
+
+      expect(registry.resolveDisplayTitle(node)).toBe('2026-07-07');
+      expect(registry.getNodeTitle(node)).toBe('Today');
+    });
+
+    it('applies formatContent to a content-sourced value', () => {
+      const plugin: PluginDefinition = {
+        id: 'text',
+        name: 'Text',
+        description: 'Text plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] }
+      };
+      registry.register(plugin);
+
+      const node = createTestNode({ nodeType: 'text', content: '# Heading' });
+      const formatContent = vi.fn((c: string) => c.replace(/^#+\s*/, ''));
+
+      expect(registry.resolveDisplayTitle(node, formatContent)).toBe('Heading');
+      expect(formatContent).toHaveBeenCalledWith('# Heading');
+    });
+
+    it('does NOT apply formatContent to a title_template-computed title', () => {
+      // Regression: a caller that wraps the whole return value in a formatter (instead of
+      // passing it through this parameter) would run the formatter over a computed property
+      // value too — e.g. stripMarkdown mangling a name containing an underscore or asterisk.
+      const plugin: PluginDefinition = {
+        id: 'person',
+        name: 'Person',
+        description: 'Person plugin',
+        version: '1.0.0',
+        config: {
+          slashCommands: [
+            {
+              id: 'person',
+              name: 'Person',
+              description: 'Create Person',
+              contentTemplate: '',
+              nodeType: 'person',
+              hasTitleTemplate: true,
+              titleTemplate: '{first_name}_{last_name}'
+            }
+          ]
+        }
+      };
+      registry.register(plugin);
+
+      const node = { ...createTestNode({ nodeType: 'person', content: '' }), title: 'Jane_Doe' };
+      const formatContent = vi.fn((c: string) => c.replace(/_/g, ''));
+
+      expect(registry.resolveDisplayTitle(node, formatContent)).toBe('Jane_Doe');
+      expect(formatContent).not.toHaveBeenCalled();
     });
   });
 
