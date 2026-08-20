@@ -469,8 +469,11 @@ fn strip_spliced_delimiter_tail(s: &str) -> Option<String> {
 /// leaves available inside a JSON string, and the operator naming the array
 /// shape is right there in the same object — so the intended value is the split.
 /// A string with no comma is wrapped as a one-element array rather than left
-/// alone: a single-member `in` is still an array by the schema's own
-/// declaration, and leaving it would keep failing for the same reason.
+/// alone, and the reason is semantic rather than schema conformance: `IN (x)`
+/// and `= x` select the same rows. So even if the model reached for `in` when it
+/// meant `equals`, the wrap produces a query with the same result set — nothing
+/// is masked that would have produced a different answer — whereas leaving it a
+/// bare string just fails the way this exists to prevent.
 ///
 /// Deliberately narrower than its siblings in where it looks, and narrowed by an
 /// ALLOWLIST rather than by the shape it matches.
