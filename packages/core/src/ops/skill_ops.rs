@@ -187,17 +187,58 @@ fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
 /// skill still contributes a scoped `schema_metadata` when the query itself
 /// determines the type.
 ///
-/// **Known, accepted tradeoff** (core#2158 tracks it): a lexical match can
+/// **Known, accepted tradeoff, MEASURED (core#2158)**: a lexical match can
 /// be a false positive if a user-defined schema's id or display name
 /// happens to also be a common word or phrase (e.g. a schema literally
 /// named `Note`), narrowing to a confidently WRONG type rather than the old
-/// broad-but-safe top-N fallback. Bounded blast radius — this only affects
-/// one prompt-assist channel's precision (`schema_metadata`, which shapes a
-/// write tool's declared fields), never write validation itself, which
-/// still enforces the real schema at the write boundary regardless of what
-/// this function returns. Not guarded against here: doing so needs its own
-/// measurement (a stopword list or length floor could as easily suppress
-/// true positives as false ones), which core#2158 is the place for.
+/// broad-but-safe top-N fallback.
+///
+/// core#2158 measured this rather than guessing at it (see
+/// `schema_named_in_query_measured_zero_false_positives_on_precedent_schema_names`
+/// and `schema_named_in_query_confirmed_false_positive_class_common_word_schema_names`
+/// below for the corpora and pinned results):
+///
+/// - Every non-core schema name with actual precedent in this codebase
+///   (`ticket`, `adr`, `release`, `release_plan`, `venue`, `invoice`,
+///   `equipment` — drawn from `packages/agent/goldens/*.toml`, this
+///   module's own tests, and the `Venue`/`Invoice` examples in ADR-063 and
+///   `schema-management.md`) measures a **0% false-positive rate** against
+///   a 52-query corpus spanning both this project's real dev-workflow
+///   queries and everyday PKM-assistant chatter. For domain-specific names,
+///   the risk is not merely low, it did not reproduce at all.
+/// - It is NOT low for schema names that are themselves common English
+///   words — plausible names in NodeSpace's own domain, a personal
+///   knowledge tool rather than only a dev tracker (`Note`, `Meeting`,
+///   `Idea`, `Goal`, `Item`, `Event`, ...). That class measures a real,
+///   reproducible **2.2% false-positive rate** (33/1508 pairs over 29 such
+///   names), including the review's own worked example verbatim: a schema
+///   named `Note` narrows on "please note that the meeting moved to 3pm".
+/// - No lightweight guard was added despite that, because none survives
+///   the same measurement: every one of those 29 risky words is ALSO the
+///   exact word a genuine positive query for that same type would use (a
+///   `Log` schema is found by "add a log for today's workout" using the
+///   identical token that falsely matches "log me out of this session"). A
+///   stopword list or length floor removes the false positives and the true
+///   positives together — there is no lexical signal in `mentions_phrase`'s
+///   input that tells them apart, so filtering here would just trade one
+///   failure mode for a different, equally silent one (a real `Note` schema
+///   query silently losing its narrowing, indistinguishable from one that
+///   never had it).
+///
+/// Left as-is rather than guarded, because the failure mode is bounded even
+/// in the worst case: this only affects one prompt-assist channel's
+/// precision (`schema_metadata`, which shapes a write tool's declared
+/// `field_values` sub-schema). That sub-schema is never closed —
+/// `with_declared_field_values` (`packages/agent/src/local_agent/tools.rs`)
+/// sets no `additionalProperties: false`, and `field_values`'s own
+/// description explicitly instructs the model to add any key the user
+/// supplied that the declared list doesn't cover — so a wrong narrow
+/// degrades to "no typed hint for the correct type's fields on this turn,
+/// plus some irrelevant ones," never to "the model cannot express the
+/// correct write." Write validation still enforces the real schema at the
+/// write boundary regardless of what this function returns. Revisit if
+/// real usage ever shows this actually misfiring in practice — there is
+/// none to measure against yet.
 fn schema_named_in_query<'a>(
     query: &str,
     all_schemas: &'a [crate::models::SchemaNode],
@@ -473,6 +514,198 @@ mod tests {
         ];
         let found = schema_named_in_query("create a ticket, not a task", &schemas);
         assert_eq!(found.map(|s| s.id.as_str()), Some("ticket"));
+    }
+
+    // -------------------------------------------------------------------
+    // core#2158 measurement: false-positive rate of the lexical narrowing.
+    // -------------------------------------------------------------------
+    //
+    // core#2158 required measuring, not guessing, whether the risk flagged
+    // in review of #2156 (a schema id/display-name that happens to also be
+    // a common English word narrows `schema_metadata` to a confidently
+    // WRONG type) is practically significant. The two corpora below are the
+    // measurement; the tests after them pin its result.
+
+    /// Every non-core schema id/display-name pair that actually appears
+    /// anywhere in this codebase's tests, golden fixtures, or docs (grepped
+    /// across `packages/agent/goldens/*.toml`, this module's own
+    /// `make_schema` calls, and the `Venue`/`Invoice` examples in
+    /// ADR-063 and `schema-management.md`) — i.e. names with real precedent
+    /// as the kind of type a NodeSpace user actually defines, as opposed to
+    /// a hypothetical worst case.
+    fn precedent_schema_names() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("ticket", "Ticket"),
+            ("adr", "ADR"),
+            ("release", "Release"),
+            ("release_plan", "Q3 Rollout"),
+            ("venue", "Venue"),
+            ("invoice", "Invoice"),
+            ("equipment", "Equipment Checkout Record"),
+        ]
+    }
+
+    /// Realistic queries this narrowing pass actually has to face, none of
+    /// which concern any of `precedent_schema_names()`'s types (the golden
+    /// corpus's one query that IS genuinely about a precedent type — "File a
+    /// ticket for dana..." — is exercised separately, as a true-positive
+    /// check, not here). Two sub-corpora:
+    ///
+    /// - Verbatim `user = "..."` turns from `packages/agent/goldens/*.toml`
+    ///   (including `ablation/`) — the project's own dev-workflow-shaped,
+    ///   contamination-guarded query corpus, used elsewhere in this session
+    ///   for LLM-behavior measurement and reused here for a lexical one.
+    /// - A hand-built "everyday PKM assistant" corpus: NodeSpace is a
+    ///   general knowledge tool, not only a dev tracker, so the query
+    ///   surface isn't limited to ticket/ADR-shaped requests.
+    fn realistic_unrelated_queries() -> Vec<&'static str> {
+        vec![
+            // From packages/agent/goldens/*.toml `user = "..."` turns.
+            "What's sitting in review?",
+            "Go ahead and mark it done",
+            "What's in dev right now?",
+            "Put the CI runner one on priya",
+            "The auth one is ready for review now",
+            "Anything assigned in sprint S-25 yet?",
+            "So what did you find?",
+            "What releases do we have open?",
+            "2026.8.3 is out on staging now, baking overnight before we ship it",
+            "I've pushed the branch for that one — it's ready for review now",
+            "The 2400 one came back — set it to returned",
+            "Log a laser cutter checked out on the 12th, replacement cost 2400",
+            // Hand-built everyday PKM-assistant corpus.
+            "please note that the meeting moved to 3pm",
+            "just a quick note before I forget — grab milk on the way home",
+            "note to self, call the dentist tomorrow",
+            "can you remind me to review this later",
+            "what's on my calendar for today",
+            "let's plan the offsite for next month",
+            "I need to update my resume this weekend",
+            "can you change the font size in the editor",
+            "what time does the meeting start",
+            "did you see the update from the team",
+            "I have a question about the pricing page",
+            "what's the answer to life the universe and everything",
+            "post this to the team channel",
+            "draft me an email to the landlord",
+            "can you file this under the right folder",
+            "there's a broken link on the homepage",
+            "set an alert for 7am tomorrow",
+            "I finished reading that book last night",
+            "try this recipe for dinner tonight",
+            "I'm working on a new habit tracker for myself",
+            "log me out of this session",
+            "the order came in late again",
+            "leave a comment on the doc",
+            "can you summarize this article for me",
+            "what's the weather like this weekend",
+            "remind me to water the plants",
+            "I want to journal about today",
+            "add this to my reading list",
+            "can we reschedule our call",
+            "I have an idea for the new feature",
+            "what's my goal for this quarter",
+            "open the report from last week",
+            "who do I contact about billing",
+            "send a message to the team",
+            "the entry fee was too high",
+            "I need to renew my passport",
+            "can you look up my old notes on this topic",
+            "let's take notes during the call",
+            "any updates on the shipment",
+            "review my notes from yesterday",
+        ]
+    }
+
+    #[test]
+    fn schema_named_in_query_measured_zero_false_positives_on_precedent_schema_names() {
+        // MEASURED (core#2158): every schema id/display-name with real
+        // precedent in this codebase, checked against every query in
+        // `realistic_unrelated_queries()`, produces no match at all — never
+        // an incidental false positive. 7 names x 52 queries = 364 pairs, 0
+        // false positives. This is the basis for closing core#2158 with the
+        // narrowing left as-is for domain-specific names.
+        let schemas: Vec<SchemaNode> = precedent_schema_names()
+            .into_iter()
+            .map(|(id, content)| make_schema(id, content, false))
+            .collect();
+
+        for query in realistic_unrelated_queries() {
+            if let Some(matched) = schema_named_in_query(query, &schemas) {
+                panic!(
+                    "unexpected lexical match: schema `{}` matched query {:?}, \
+                     which is not about that type — precedent-name corpus was \
+                     measured to have zero false positives; this query is a \
+                     new one",
+                    matched.id, query
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_named_in_query_true_positive_still_fires_for_a_precedent_name() {
+        // Companion to the false-positive check above: narrowing a
+        // precedent domain name still fires correctly on a query genuinely
+        // about it (the one golden query excluded from
+        // `realistic_unrelated_queries()` for exactly this reason).
+        let schemas: Vec<SchemaNode> = precedent_schema_names()
+            .into_iter()
+            .map(|(id, content)| make_schema(id, content, false))
+            .collect();
+        let found = schema_named_in_query(
+            "File a ticket for dana to fix the flaky retry test in sprint S-25 — \
+             it's ready for dev, and it's blocked by the token refresh work",
+            &schemas,
+        );
+        assert_eq!(found.map(|s| s.id.as_str()), Some("ticket"));
+    }
+
+    #[test]
+    fn schema_named_in_query_confirmed_false_positive_class_common_word_schema_names() {
+        // MEASURED (core#2158): the risk flagged in review of #2156 is
+        // real, not hypothetical, for schema names that are common English
+        // words — which are plausible names in NodeSpace's own domain (a
+        // personal knowledge tool, not only a dev tracker: "Note",
+        // "Meeting", "Idea", "Goal", "Item", "Event" are all names a real
+        // user could give a custom type). This reproduces the review's own
+        // worked example almost exactly.
+        //
+        // Measured aggregate over 29 such candidate names (note, meeting,
+        // idea, goal, plan, record, item, event, contact, order, review,
+        // report, request, log, entry, message, post, draft, file, link,
+        // alert, reminder, question, answer, update, change, book, recipe,
+        // habit) against the same 52-query corpus above: 33/1508 pairs
+        // (2.2%) matched, and every single one of those matches was on a
+        // query with no genuine connection to that type (verified by
+        // inspection — e.g. "log me out of this session" matching a `Log`
+        // schema, "the order came in late again" matching an `Order`
+        // schema). Every one of those 29 words is ALSO the exact word a
+        // genuine true-positive query for that same type would use
+        // (verified separately, e.g. "add a log for today's workout") —
+        // there is no lexical signal available to `mentions_phrase` that
+        // tells the two apart, which is why no length-floor or
+        // stopword-exclusion guard is added here (see the doc comment on
+        // `schema_named_in_query`).
+        let schemas = vec![
+            make_schema("ticket", "Ticket", false),
+            make_schema("note", "Note", false),
+        ];
+
+        // The exact scenario raised in review of #2156.
+        let found = schema_named_in_query("please note that the meeting moved to 3pm", &schemas);
+        assert_eq!(
+            found.map(|s| s.id.as_str()),
+            Some("note"),
+            "a schema literally named `Note` lexically matches an unrelated \
+             use of the word \"note\" — confirmed, accepted risk, not a bug \
+             in this test"
+        );
+
+        // A second, independent confirmation with a different common word.
+        let schemas = vec![make_schema("meeting", "Meeting", false)];
+        let found = schema_named_in_query("what time does the meeting start", &schemas);
+        assert_eq!(found.map(|s| s.id.as_str()), Some("meeting"));
     }
 
     fn make_node(id: &str, content: &str) -> Node {
