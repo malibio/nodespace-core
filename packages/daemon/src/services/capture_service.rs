@@ -1,10 +1,10 @@
 //! Opt-in session capture: backfills the `ai-chat` node for a PTY session.
 //!
 //! Under the unified AIChat model (ADR-034), a PTY session is provider mode 2d
-//! of an `ai-chat` node that already exists — it was created up front via the
-//! `/ai-chat` slash command and its id is passed through `LaunchSession`. At
-//! session end, capture **backfills** that node with the session's
-//! transcript/summary/metadata; it does **not** mint a new node.
+//! of an `ai-chat` node that already exists — it was created up front (via the
+//! desktop app's "AI Chats" sidebar section) and its id is passed through
+//! `LaunchSession`. At session end, capture **backfills** that node with the
+//! session's transcript/summary/metadata; it does **not** mint a new node.
 //!
 //! [`finalize_capture`] is called by the agent session handler after the PTY
 //! process exits. It reads capture settings from the daemon config and, when
@@ -34,7 +34,7 @@ use crate::services::settings_service::{CaptureConfig, CaptureContentSetting};
 pub struct CompletedSession {
     pub id: Uuid,
     /// ID of the `ai-chat` node this session is a view onto. The node is
-    /// created up front via `/ai-chat`; capture backfills it. `None` only in
+    /// created up front (before launch); capture backfills it. `None` only in
     /// the defensive/legacy case where no node was associated at launch — in
     /// which case capture is skipped (the unified model always sets this).
     pub node_id: Option<String>,

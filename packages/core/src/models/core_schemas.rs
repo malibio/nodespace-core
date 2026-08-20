@@ -250,8 +250,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
         // by decision, not by oversight.
         //
         // This crate cannot enforce that: slash commands and the surfaces that keep
-        // projects reachable are frontend concerns. The rule and its known exceptions live
-        // next to the plugin registry, in the desktop app's `core-plugins.ts`.
+        // projects reachable are frontend concerns. The rule lives next to the plugin
+        // registry, in the desktop app's `core-plugins.ts`.
         SchemaNode {
             id: "project".to_string(),
             content: "Project".to_string(),

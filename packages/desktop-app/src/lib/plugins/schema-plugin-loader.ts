@@ -119,7 +119,12 @@ export function createPluginFromSchema(schema: SchemaNode): PluginDefinition {
       slashCommands: [],
       canHaveChildren: true,
       canBeChild: true
-    }
+    },
+    // Carried at the plugin level (not on a slash command, since there isn't one) so
+    // row-rendering surfaces can still tell this type's `title` apart from `content` via
+    // PluginRegistry.hasTitleTemplate() — see node-row.svelte and resolveDisplayTitle().
+    hasTitleTemplate: !!schema.titleTemplate,
+    titleTemplate: schema.titleTemplate
     // No node component — custom entities render via BaseNode fallback.
     // No custom viewer — falls back to BaseNodeViewer.
     // No custom reference — falls back to BaseNodeReference.

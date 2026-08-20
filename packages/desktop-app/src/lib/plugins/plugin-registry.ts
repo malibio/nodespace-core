@@ -465,8 +465,10 @@ export class PluginRegistry {
    * text, not a tab-specific title, and a date node's `id` is only guaranteed to parse as a
    * date in production, not in every synthetic id these surfaces might encounter.
    *
-   * `hasTitleTemplate` comes from `findSlashCommand`'s flag — the same one `node-row.svelte`
-   * uses for the identical purpose when rendering a custom-entity node inline.
+   * `hasTitleTemplate` comes from `PluginRegistry.hasTitleTemplate()` — the same accessor
+   * `node-row.svelte` uses for the identical purpose when rendering a custom-entity node
+   * inline. It reads a per-type plugin field, not a slash-command flag, so it applies whether
+   * or not the type is slash-creatable.
    *
    * @param formatContent - Optional reformatting (e.g. `stripMarkdown`) applied ONLY when the
    * resolved value came from `content` — never on a title_template-computed title, which is a
@@ -476,9 +478,37 @@ export class PluginRegistry {
    * formatting-significant characters (underscores, asterisks, backticks).
    */
   resolveDisplayTitle(node: Node, formatContent?: (content: string) => string): string {
-    const hasTitleTemplate = !!this.findSlashCommand(node.nodeType)?.hasTitleTemplate;
+    const hasTitleTemplate = this.hasTitleTemplate(node.nodeType);
     const value = resolveTitleOrContent(node, hasTitleTemplate);
     return hasTitleTemplate || !formatContent ? value : formatContent(value);
+  }
+
+  /**
+   * True when nodeType's schema is title_template-driven — i.e. `title` is a computed
+   * property value, genuinely distinct from `content`, rather than a copy of it. See
+   * `PluginDefinition.hasTitleTemplate`'s doc comment for the full rule.
+   *
+   * Returns false for unknown or disabled plugins.
+   */
+  hasTitleTemplate(nodeType: string): boolean {
+    const plugin = this.plugins.get(nodeType);
+    if (!plugin || !this.enabledPlugins.has(nodeType)) {
+      return false;
+    }
+    return !!plugin.hasTitleTemplate;
+  }
+
+  /**
+   * The raw titleTemplate string (e.g. '{first_name} {last_name}') for nodeType, for
+   * placeholder display while the template hasn't resolved to any value yet. Undefined when
+   * `hasTitleTemplate(nodeType)` is false.
+   */
+  getTitleTemplate(nodeType: string): string | undefined {
+    const plugin = this.plugins.get(nodeType);
+    if (!plugin || !this.enabledPlugins.has(nodeType)) {
+      return undefined;
+    }
+    return plugin.titleTemplate;
   }
 
   /**

@@ -125,12 +125,11 @@
     <!-- Custom schema entities also render here (no lazy-loaded node component) -->
     <!-- Note: on:taskStateChanged below is inert on plain BaseNode (only task-node dispatches
          it); it fires only via the plugin-component branch above. Kept for branch symmetry. -->
-    {@const nodeSlashCmd = pluginRegistry.findSlashCommand(node.nodeType)}
-    {@const nodeHasTitleTemplate = !!nodeSlashCmd?.hasTitleTemplate}
+    {@const nodeHasTitleTemplate = pluginRegistry.hasTitleTemplate(node.nodeType)}
     {@const nodeTitleDisplay = nodeHasTitleTemplate
       ? node.title && /\w/.test(node.title)
         ? node.title
-        : (nodeSlashCmd?.titleTemplate ?? '')
+        : (pluginRegistry.getTitleTemplate(node.nodeType) ?? '')
       : undefined}
     {#key `${node.id}-${node.nodeType}`}
       <BaseNode

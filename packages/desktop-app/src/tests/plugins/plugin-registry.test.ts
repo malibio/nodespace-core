@@ -1576,27 +1576,17 @@ describe('PluginRegistry - Core Functionality', () => {
     });
 
     it('prefers node.title for a title_template-driven custom entity type', () => {
-      // A custom entity schema with a title_template registers hasTitleTemplate on its
-      // slash command (schema-plugin-loader.ts) — that's the signal getNodeTitle uses to
+      // A custom entity schema with a title_template sets hasTitleTemplate/titleTemplate on
+      // the plugin itself (schema-plugin-loader.ts) — that's the signal getNodeTitle uses to
       // know title is computed and legitimately distinct from content.
       const plugin: PluginDefinition = {
         id: 'person',
         name: 'Person',
         description: 'Person plugin',
         version: '1.0.0',
-        config: {
-          slashCommands: [
-            {
-              id: 'person',
-              name: 'Person',
-              description: 'Create Person',
-              contentTemplate: '',
-              nodeType: 'person',
-              hasTitleTemplate: true,
-              titleTemplate: '{first_name} {last_name}'
-            }
-          ]
-        }
+        config: { slashCommands: [] },
+        hasTitleTemplate: true,
+        titleTemplate: '{first_name} {last_name}'
       };
       registry.register(plugin);
 
@@ -1684,19 +1674,9 @@ describe('PluginRegistry - Core Functionality', () => {
         name: 'Person',
         description: 'Person plugin',
         version: '1.0.0',
-        config: {
-          slashCommands: [
-            {
-              id: 'person',
-              name: 'Person',
-              description: 'Create Person',
-              contentTemplate: '',
-              nodeType: 'person',
-              hasTitleTemplate: true,
-              titleTemplate: '{first_name} {last_name}'
-            }
-          ]
-        }
+        config: { slashCommands: [] },
+        hasTitleTemplate: true,
+        titleTemplate: '{first_name} {last_name}'
       };
       registry.register(plugin);
 
@@ -1748,19 +1728,9 @@ describe('PluginRegistry - Core Functionality', () => {
         name: 'Person',
         description: 'Person plugin',
         version: '1.0.0',
-        config: {
-          slashCommands: [
-            {
-              id: 'person',
-              name: 'Person',
-              description: 'Create Person',
-              contentTemplate: '',
-              nodeType: 'person',
-              hasTitleTemplate: true,
-              titleTemplate: '{first_name}_{last_name}'
-            }
-          ]
-        }
+        config: { slashCommands: [] },
+        hasTitleTemplate: true,
+        titleTemplate: '{first_name}_{last_name}'
       };
       registry.register(plugin);
 
@@ -1769,6 +1739,60 @@ describe('PluginRegistry - Core Functionality', () => {
 
       expect(registry.resolveDisplayTitle(node, formatContent)).toBe('Jane_Doe');
       expect(formatContent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('hasTitleTemplate / getTitleTemplate (core#2152)', () => {
+    it('reads a per-type plugin field, not a slash command — true for a type with no slash command at all', () => {
+      const plugin: PluginDefinition = {
+        id: 'venue',
+        name: 'Venue',
+        description: 'Custom entity, no slash command (entity types are not slash-creatable)',
+        version: '1.0.0',
+        config: { slashCommands: [] },
+        hasTitleTemplate: true,
+        titleTemplate: '{name}'
+      };
+      registry.register(plugin);
+
+      expect(registry.hasTitleTemplate('venue')).toBe(true);
+      expect(registry.getTitleTemplate('venue')).toBe('{name}');
+    });
+
+    it('returns false/undefined when hasTitleTemplate is unset', () => {
+      const plugin: PluginDefinition = {
+        id: 'task',
+        name: 'Task',
+        description: 'Task plugin',
+        version: '1.0.0',
+        config: { slashCommands: [] }
+      };
+      registry.register(plugin);
+
+      expect(registry.hasTitleTemplate('task')).toBe(false);
+      expect(registry.getTitleTemplate('task')).toBeUndefined();
+    });
+
+    it('returns false/undefined for an unregistered nodeType', () => {
+      expect(registry.hasTitleTemplate('nonexistent')).toBe(false);
+      expect(registry.getTitleTemplate('nonexistent')).toBeUndefined();
+    });
+
+    it('returns false/undefined for a disabled plugin', () => {
+      const plugin: PluginDefinition = {
+        id: 'venue',
+        name: 'Venue',
+        description: 'Custom entity',
+        version: '1.0.0',
+        config: { slashCommands: [] },
+        hasTitleTemplate: true,
+        titleTemplate: '{name}'
+      };
+      registry.register(plugin);
+      registry.setEnabled('venue', false);
+
+      expect(registry.hasTitleTemplate('venue')).toBe(false);
+      expect(registry.getTitleTemplate('venue')).toBeUndefined();
     });
   });
 

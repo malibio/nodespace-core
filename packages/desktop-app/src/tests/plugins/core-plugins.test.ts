@@ -164,7 +164,7 @@ describe('Core Plugins Integration', () => {
       // Note: Logger output is intentionally silenced during tests
       const stats = registry.getStats();
       expect(stats.pluginsCount).toBe(14); // text, header, task, checkbox, date, code-block, quote-block, ordered-list, horizontal-line, table, query, collection, ai-chat, person
-      expect(stats.slashCommandsCount).toBe(11); // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 0 (removed #1919), collection: 0, date: 0, ai-chat: 0, person: 0 (entity types are not slash-creatable)
+      expect(stats.slashCommandsCount).toBe(11); // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 0 (no slash command), collection: 0, date: 0, ai-chat: 0, person: 0 (entity types are not slash-creatable)
       expect(stats.viewersCount).toBe(5); // date, task, collection, query, and ai-chat have custom viewers
       expect(stats.referencesCount).toBe(14); // all plugins have references
     });
@@ -174,7 +174,7 @@ describe('Core Plugins Integration', () => {
 
       const stats = registry.getStats();
 
-      // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 0 (removed #1919), date: 0, collection: 0, ai-chat: 0, person: 0 (entity types are not slash-creatable) = 11 total
+      // text: 1, header: 3, task: 1, checkbox: 1, code-block: 1, quote-block: 1, ordered-list: 1, horizontal-line: 1, table: 1, query: 0 (no slash command), date: 0, collection: 0, ai-chat: 0, person: 0 (entity types are not slash-creatable) = 11 total
       expect(stats.slashCommandsCount).toBe(11);
     });
 

@@ -177,9 +177,9 @@ impl AgentSessionService for AgentSessionHandler {
         // after the launch response is returned — it does not block session
         // start.
         //
-        // The node already exists (created up front via `/ai-chat`, provider
-        // mode 2d per ADR-034); `node_id` identifies it so capture backfills
-        // that node rather than minting a new one.
+        // The node already exists (created up front, provider mode 2d per
+        // ADR-034); `node_id` identifies it so capture backfills that node
+        // rather than minting a new one.
         //
         // Capture config is read once here (at launch time) so finalize_capture
         // doesn't re-hit the filesystem on every session end. Sessions started

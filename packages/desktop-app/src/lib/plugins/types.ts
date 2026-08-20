@@ -172,10 +172,6 @@ export interface SlashCommandDefinition {
    * Example: For code-block with '```plaintext\n\n```', set to 13 to place cursor after first fence line
    */
   desiredCursorPosition?: number;
-  /** True if the schema has a titleTemplate — viewer shows template as faint hint instead of editable content */
-  hasTitleTemplate?: boolean;
-  /** The raw titleTemplate string (e.g. '{first_name} {last_name}') for placeholder display */
-  titleTemplate?: string;
 }
 
 // Node type configuration
@@ -307,6 +303,21 @@ export interface PluginDefinition {
    * from stored content. Most node types omit this and fall back to node.title || node.content.
    */
   getTitle?: (node: Node) => string | undefined;
+
+  /**
+   * True when this type's schema is title_template-driven — `title` is a computed property
+   * value, genuinely distinct from `content`, rather than a copy of it. Row-rendering surfaces
+   * (query list/kanban/table views, the collections sidebar, the outline's BaseNode fallback)
+   * use this — via `PluginRegistry.hasTitleTemplate()` — to decide whether to prefer `title`
+   * over `content`. A per-type property, not tied to slash-command availability: user-defined
+   * schema types carry it here even though they have no slash command.
+   */
+  hasTitleTemplate?: boolean;
+
+  /** The raw titleTemplate string (e.g. '{first_name} {last_name}') for placeholder display
+   * while the template hasn't resolved to any value yet. Only meaningful when
+   * `hasTitleTemplate` is true. */
+  titleTemplate?: string;
 }
 
 // Registry statistics for debugging

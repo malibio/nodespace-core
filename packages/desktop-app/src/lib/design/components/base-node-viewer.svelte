@@ -1220,7 +1220,10 @@
         // below. Types with an inline editor (person, task) are typed into in place — sending
         // focus to another pane mid-keystroke would interrupt the user.
         if (rendersAsEntityRow(newNodeType)) {
-          handleCustomEntitySlashCommand(promotedNode.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
+          handleCustomEntitySlashCommand(
+            promotedNode.id,
+            pluginRegistry.hasTitleTemplate(newNodeType)
+          ).catch((err) =>
             log.error('Custom entity slash command failed (placeholder path):', err)
           );
         }
@@ -1244,8 +1247,8 @@
         focusManager.focusNodeFromTypeConversion(node.id, cursorPosition, paneId);
         sharedNodeStore.updateNode(node.id, updatePayload, { type: 'viewer', viewerId });
         if (rendersAsEntityRow(newNodeType)) {
-          handleCustomEntitySlashCommand(node.id, !!cmdDef?.hasTitleTemplate).catch((err) =>
-            log.error('Custom entity slash command failed (real-node path):', err)
+          handleCustomEntitySlashCommand(node.id, pluginRegistry.hasTitleTemplate(newNodeType)).catch(
+            (err) => log.error('Custom entity slash command failed (real-node path):', err)
           );
         }
       });

@@ -133,19 +133,27 @@ describe('Schema Plugin Loader - createPluginFromSchema()', () => {
     expect(plugin.node).toBeUndefined();
   });
 
-  it('should not generate a slash command when no titleTemplate is set', () => {
+  it('should not generate a slash command, and reports hasTitleTemplate: false, when no titleTemplate is set', () => {
     const schemaNode = createMockSchemaNode('customer', { description: 'Customer' });
     const plugin = createPluginFromSchema(schemaNode);
     expect(plugin.config.slashCommands).toHaveLength(0);
+    expect(plugin.hasTitleTemplate).toBe(false);
+    expect(plugin.titleTemplate).toBeUndefined();
   });
 
-  it('should not generate a slash command when titleTemplate is set', () => {
+  it('should not generate a slash command, but still carries hasTitleTemplate/titleTemplate at the plugin level, when titleTemplate is set', () => {
+    // No slash command exists to carry this signal anymore (entity types aren't
+    // slash-creatable) — row-rendering surfaces (node-row.svelte, resolveDisplayTitle) read
+    // it via PluginRegistry.hasTitleTemplate()/getTitleTemplate() instead, off the plugin
+    // definition itself.
     const schemaNode: SchemaNode = {
       ...createMockSchemaNode('customer', { description: 'Customer' }),
       titleTemplate: '{first_name} {last_name}'
     };
     const plugin = createPluginFromSchema(schemaNode);
     expect(plugin.config.slashCommands).toHaveLength(0);
+    expect(plugin.hasTitleTemplate).toBe(true);
+    expect(plugin.titleTemplate).toBe('{first_name} {last_name}');
   });
 
   it('should not generate a slash command regardless of schema ID', () => {

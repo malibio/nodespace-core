@@ -16,8 +16,8 @@
  *
  * Callers determine `hasTitleTemplate` themselves, since the answer comes from different
  * places depending on context (a `SchemaFormLoader` instance inside a node viewer;
- * `pluginRegistry.findSlashCommand(nodeType)?.hasTitleTemplate` outside one — see
- * `schema-form-loader.svelte.ts`'s `hasTitleTemplate` getter for why the two agree: the
+ * `pluginRegistry.hasTitleTemplate(nodeType)` outside one — see `schema-form-loader.svelte.ts`'s
+ * `hasTitleTemplate` getter for why the two agree: the
  * frontend's notion of "title_template-driven" is custom-schema-scoped, while the backend's
  * `compute_title()` applies a title_template to any schema carrying one, core or not; they
  * agree only because no core type ships a template today).
