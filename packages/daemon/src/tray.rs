@@ -440,8 +440,16 @@ impl TrayState {
     /// Rather than track liveness in the daemon, dedup is delegated to the app
     /// itself via `tauri-plugin-single-instance`: a genuinely-second launch
     /// detects the running instance, forwards its argv to it, and exits
-    /// immediately, so at most one real UI process ever survives regardless of
-    /// how many times this is called or how the first instance was started.
+    /// immediately, so a real UI process almost never survives alongside an
+    /// existing one regardless of how many times this is called or how the
+    /// first instance was started. Not an absolute guarantee on every
+    /// platform: the plugin's macOS backend claims the single-instance lock
+    /// with a connect-then-bind probe rather than one atomic OS primitive (Windows
+    /// uses a named mutex, Linux a D-Bus name claim — both atomic), so two
+    /// processes launched within that probe's scheduling gap can theoretically
+    /// both see "nobody's home" and both survive. Narrow and outside this
+    /// crate's control; documented here so it isn't mistaken for a promise
+    /// this code makes.
     ///
     /// The requested database is passed two ways so either launch path can
     /// read it: as `INITIAL_DATABASE_ENV`, which a *cold* launch (no other

@@ -221,9 +221,25 @@ class DatabaseStore {
    * first (so they never land in the target), then re-points the routed
    * clients, clears the frontend caches, and resets the workspace so viewers
    * reload from the newly-active database.
+   *
+   * Rejects an `id` that is not in `this.databases` rather than committing to
+   * it — every UI call site already only ever passes a known-registered id
+   * (a button rendered from `databases`, or a fallback drawn from the same
+   * list), so this only ever actually fires for the one caller that doesn't
+   * control its input: the tray's `tray:select-database` relaunch event.
+   * Without this, a database removed (or never registered — a forged relaunch
+   * argv, however unlikely) between the tray click and the event arriving
+   * would clear every cache and reset the workspace before the daemon's
+   * per-request `NOT_FOUND` ever surfaced, leaving the user on a blank
+   * workspace pointed at nothing with no rollback. Mirrors the `registered()`
+   * guard `load()` already applies to this exact same untrusted input.
    */
   async switchTo(id: string): Promise<void> {
     if (id === this.activeDatabaseId) return;
+    if (!this.databases.some((db) => db.id === id)) {
+      log.warn('switchTo called with an unregistered database id; ignoring', { id });
+      return;
+    }
     this.error = null;
     const seq = ++this.switchSeq;
     try {

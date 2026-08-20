@@ -331,6 +331,20 @@ describe('Database Store', () => {
       expect(clearAll).not.toHaveBeenCalled();
     });
 
+    it('ignores a switch to an id that is not in the registered databases list', async () => {
+      // Every UI call site only ever passes an id drawn from `databases`; the
+      // one caller that doesn't control its input is the tray's
+      // `tray:select-database` relaunch event (the database could have been
+      // removed between the tray click and the event arriving). Committing to
+      // it anyway would clear every cache and reset the workspace before the
+      // daemon's per-request NOT_FOUND ever surfaced.
+      await databaseStore.switchTo('does-not-exist');
+
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(clearAll).not.toHaveBeenCalled();
+      expect(databaseStore.activeDatabaseId).toBe('a');
+    });
+
     it('flushes pending saves BEFORE re-pointing the routed clients', async () => {
       const order: string[] = [];
       flushAllPendingSaves.mockImplementationOnce(async () => {
