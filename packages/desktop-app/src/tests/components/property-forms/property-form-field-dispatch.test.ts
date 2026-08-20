@@ -27,7 +27,9 @@ import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/sv
 import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
 import type { Node } from '$lib/types';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { mockTauriCore } from '../../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 // GenericSchemaForm gates its Relationships trigger on this service; stub it so
 // the gate never reaches a daemon. It is a plain function export, not a singleton.

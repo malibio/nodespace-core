@@ -21,9 +21,11 @@ vi.mock('$lib/utils/logger', () => ({
 }));
 
 const mockInvoke = vi.fn();
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args)
-}));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({ invoke: (...args: unknown[]) => mockInvoke(...args) })
+);
 
 // Capture the `sync:status` / `pro:tier-detected` handlers so tests can drive them.
 const listeners = new Map<string, (event: { payload: unknown }) => void>();

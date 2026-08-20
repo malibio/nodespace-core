@@ -13,9 +13,11 @@ vi.mock('$lib/utils/logger', () => ({
 }));
 
 const mockInvoke = vi.fn();
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args)
-}));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({ invoke: (...args: unknown[]) => mockInvoke(...args) })
+);
 
 import SearchPane from '$lib/components/search/search-pane.svelte';
 import { navigationStore, resetTabState } from '$lib/stores/navigation.svelte';

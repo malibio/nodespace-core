@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mockTauriCore } from '../helpers/mock-tauri-core';
 
 vi.mock('$lib/utils/logger', () => ({
 	createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() })
 }));
 
 const mockInvoke = vi.fn();
-vi.mock('@tauri-apps/api/core', () => ({
-	invoke: (...args: unknown[]) => mockInvoke(...args)
-}));
+vi.mock('@tauri-apps/api/core', () =>
+	mockTauriCore({ invoke: (...args: unknown[]) => mockInvoke(...args) })
+);
 
 import { membershipService } from '$lib/services/membership-service';
 

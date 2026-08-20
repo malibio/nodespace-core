@@ -18,9 +18,11 @@ import { tick } from 'svelte';
 import { render, fireEvent } from '@testing-library/svelte';
 
 const mockInvoke = vi.fn();
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args)
-}));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({ invoke: (...args: unknown[]) => mockInvoke(...args) })
+);
 
 import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
 

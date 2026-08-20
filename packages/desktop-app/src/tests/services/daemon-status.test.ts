@@ -23,10 +23,14 @@ const mockIsTauri = vi.fn(() => true);
 // this default alone would narrow it to `string` and reject the boolean the
 // probe tests legitimately return.
 const mockInvoke = vi.fn((_cmd: string): Promise<string | boolean> => new Promise(() => {}));
-vi.mock('@tauri-apps/api/core', () => ({
-  isTauri: () => mockIsTauri(),
-  invoke: (cmd: string) => mockInvoke(cmd)
-}));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({
+    isTauri: () => mockIsTauri(),
+    invoke: (cmd: string) => mockInvoke(cmd)
+  })
+);
 
 // Capture the `daemon-status` handler so tests can drive it.
 let daemonStatusHandler: ((event: { payload: string }) => void) | null = null;

@@ -18,7 +18,9 @@ vi.mock('$lib/services/relationship-viewer-service', () => ({
   loadNodeRelationshipsView: (...args: unknown[]) => loadNodeRelationshipsView(...args)
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 import GenericSchemaForm from '$lib/components/schema/generic-schema-form.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';

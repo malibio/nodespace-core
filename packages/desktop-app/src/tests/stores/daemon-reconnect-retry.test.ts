@@ -33,10 +33,14 @@ const mockIsTauri = vi.fn(() => true);
 // startDaemonStatusListener() doesn't fire a spurious reconnect before
 // goHealthy() drives the push-event path these tests exercise.
 const mockInvoke = vi.fn((_cmd: string) => new Promise<string>(() => {}));
-vi.mock('@tauri-apps/api/core', () => ({
-  isTauri: () => mockIsTauri(),
-  invoke: (cmd: string) => mockInvoke(cmd)
-}));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({
+    isTauri: () => mockIsTauri(),
+    invoke: (cmd: string) => mockInvoke(cmd)
+  })
+);
 
 let daemonStatusHandler: ((event: { payload: string }) => void) | null = null;
 vi.mock('@tauri-apps/api/event', () => ({

@@ -31,7 +31,11 @@ const mockInvoke = vi.fn(
     update_available: false
   })
 );
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }));
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({ invoke: (...a: unknown[]) => mockInvoke(...a) })
+);
 
 // Rest parameter for the same reason as `mockInvoke` above: the call site
 // forwards `openUrl`'s arguments, which a zero-arity inferred signature rejects.
