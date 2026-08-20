@@ -1,0 +1,120 @@
+# derived-from: dev-schema-creation.toml, with BOTH guidance and tool schemas from source.
+name = "prod-paired-add-edit"
+reps = 5
+
+notes = """
+PRODUCTION GUIDANCE + PRODUCTION TOOL SCHEMAS -- paired-add-edit
+
+Both halves read from source at generation time:
+  guidance      packages/agent/src/skill_rules.rs
+  tool schemas  model_facing_tool_definitions(), via `dump_tool_defs`
+
+WHY THIS REPLACES THE prod-guidance-* ARMS
+
+Those spliced production guidance into this case's HAND-AUTHORED tool schemas,
+which differ from production's in a way that mattered: the corpus declares enum
+values under `allowed_values`, production under `coreValues` -- declared
+"REQUIRED and must be non-empty when type=enum" with the lowercase rule inline.
+
+Dropping ENUM_FORMAT in that mispaired arm produced an empty enum, which was
+read as "ENUM_FORMAT is load-bearing". It is not. skill_pipeline.rs's doc
+comment already says create_schema's schema carries it, and that comment is
+correct. The contradicting result came from grepping the corpus's key name
+instead of production's.
+
+Contains 6 of 9 rules (2,163 chars).
+Dropped, each with the schema key that carries it:
+  DROP EDIT_DONT_RECREATE: update_schema's own description states its purpose
+  DROP RENAME_VS_RELABEL: rename_fields' from/to/friendlyName shape is in update_schema
+  DROP TITLE_TEMPLATE_PLACEHOLDERS: title_template is declared in create_schema
+  DROP UNIQUE_FIELD_FLAGS: unique / unique_case_insensitive are declared in create_schema
+
+Every DROP here names the schema key that carries the rule, and the generator
+ABORTS if that key is absent -- so this class of error cannot recur silently.
+
+TOOL SURFACE: create_schema, update_schema, get_node, create_node -- Schema Creation's whitelist, what stage2_tools would
+scope to for this turn.
+
+EXPECTED (from the corpus base, 3/3): create_schema, exactly once, name in the
+user's own words ("architecture decision records", never abbreviated in the
+request), a status field of type enum carrying its values, and the supersedes
+detail captured rather than dropped.
+
+Note the case's own tool_results and expect still speak of `allowed_values`;
+production's key is `coreValues`. Read the enum assertion by intent, not by key
+name, until the corpus is re-authored against production schemas.
+"""
+
+[[turn]]
+label = "create-adr-type"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Schema Creation
+Purpose: Define a new kind of record the workspace does not track yet, when \
+the user describes a category of thing rather than one particular instance.
+
+ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "ADR", do not also create "Ticket" or "Sprint"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in EXISTING SCHEMAS; if it doesn't, omit the relationship rather than creating the other type.
+
+SUCCESS: After create_schema returns a schema object (with fields, type_id, etc.), the schema was created. Respond to the user immediately â do NOT call create_schema again. If create_schema returns an error saying the schema already exists, stop and tell the user the type already exists and they can create instances with create_node.
+
+VALIDATION ERROR: If create_schema returns an error other than "already exists" (e.g. a title_template placeholder missing from fields, an invalid field type), the error names the specific problem â fix exactly that and call create_schema again in this same turn with the corrected payload. Do NOT ask the user to clarify and do NOT give up after one rejection; a validation error is fixable from the error message alone.
+
+RELATIONSHIPS: Use relationships (not fields) when a field references another node type.
+
+The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt â do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:
+- ADR supersedes adr (one): `{"name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one"}`
+- Ticket has_task task (many): `{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}`
+
+EDITING A SCHEMA â call update_schema: When the user wants to add a field, remove a field, rename a field, or change a relationship on an existing schema, call update_schema with the schema_id and only the fields that need changing. Do NOT re-create the whole schema. Use add_fields, remove_fields, rename_fields, or update the description/title_template as needed.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = """
+We need to start tracking architecture decision records — each one has a \
+status, moving from proposed to accepted, and sometimes one supersedes an \
+older one
+"""
+expect = """
+create_schema, exactly ONCE, defining a status field of type enum whose \
+allowed_values include proposed and accepted, plus a field for the supersedes \
+relationship. Failures worth telling apart: an enum declared with no \
+allowed_values, a second create_schema for the superseded record, and any \
+field copied off `ticket` (assignee, sprint) that this request never mentioned.
+"""
+
+  [turn.tool_results]
+  create_schema = '{"ok": true, "type_id": "adr", "note": "Type created. The id is derived from the name: lowercased, spaces to underscores."}'
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = "Define a new entity type with its fields. Use when the user describes a kind of record the workspace does not track yet, not a single instance of an existing kind. The top-level 'name' parameter is REQUIRED — it is the display name of the entity type, in the user's own words. The schema ID is auto-generated as lowercase snake_case from name (e.g. 'Release Plan' → 'release_plan'). After creation, use this ID as node_type when creating instances. The example shows one field per detail the user mentioned, including a pointer at another record (e.g. \"blocks another ticket\") as a field rather than a second type. Example call: {\"name\": \"Ticket\", \"fields\": [{\"name\": \"status\", \"type\": \"enum\", \"required\": true, \"coreValues\": [{\"value\": \"ready_for_dev\", \"label\": \"Ready for Dev\"}, {\"value\": \"in_dev\", \"label\": \"In Dev\"}, {\"value\": \"done\", \"label\": \"Done\"}]}, {\"name\": \"assignee\", \"type\": \"text\"}, {\"name\": \"blocks\", \"type\": \"text\"}]}. FIELDS: Every node already has a built-in content/title — do NOT add a 'name' or 'title' entry to the fields array. EXCEPTION: if title_template references '{name}' (e.g. title_template='{name} ({status})'), you MUST define 'name' as a text field so the template can reference it. Only define type-specific fields. If a field maps to an existing node type, define it as a relationship instead."
+  parameters_schema = { properties = { description = { description = "Brief prose summary of what this entity type represents. This is NOT parsed into fields — define every field explicitly in \"fields\".", type = "string" }, fields = { description = "REQUIRED. Every field this type needs, listed explicitly here, even if empty ([]) — do not include a title or name field, every record already has a title. A detail with no field is silently lost, so work through the user's message and check each detail against this list before calling. Only use for scalar properties (text, number, date, enum, boolean). Do NOT use for references to other node types — use relationships instead.", items = { properties = { coreValues = { description = "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs. Use lowercase values (e.g., 'active' not 'Active'). If predefined values aren't known yet, use type=\"text\" instead; values can be added later with update_schema.", items = { properties = { label = { type = "string" }, value = { type = "string" } }, type = "object" }, type = "array" }, description = { description = "What this field means and how it's used — real semantic content (purpose, expected values, an example), not a short label (that's 'friendlyName'). Prefer more detail over less.", type = "string" }, friendlyName = { description = "The display label shown to the user. Optional — omit it and one is derived from 'name' automatically (e.g. 'due_date' -> 'Due Date'). Set it explicitly only when the derived label would read wrong, e.g. an abbreviation ('poc' -> 'Point of Contact').", type = "string" }, indexed = { description = "Whether to index for search/filter", type = "boolean" }, name = { description = "Field name, lowercase snake_case (e.g. 'status', 'due_date') — the storage key. Not shown to the user; see 'friendlyName' for that.", type = "string" }, required = { description = "Whether every record of this type must carry a value", type = "boolean" }, type = { description = "Field type: text, number, date, enum, array, object, boolean", type = "string" }, unique = { description = "Set true when each instance should have a distinct value for this field (e.g. an email or a ticket key). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides.", type = "boolean" }, unique_case_insensitive = { description = "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field.", type = "boolean" } }, required = ["name", "type"], type = "object" }, type = "array" }, name = { description = "Display name for the entity type, in the user's own words, singular.", type = "string" }, relationships = { description = "Relationships to other node types. Use instead of array fields when referencing existing types (e.g., ticket has_task task).", items = { properties = { cardinality = { description = "Cardinality: 'one' or 'many' (default)", enum = ["one", "many"], type = "string" }, description = { description = "What this relationship represents", type = "string" }, direction = { description = "Direction: 'out' (this→target, default) or 'in' (target→this)", enum = ["out", "in"], type = "string" }, name = { description = "Relationship name, lowercase snake_case (e.g. 'supersedes', 'blocks', 'assigned_to')", type = "string" }, targetType = { description = "Target node type ID — MUST be an existing type from the EXISTING SCHEMAS list (e.g., 'task', 'ticket', 'adr'). Do NOT invent types that don't exist yet.", type = "string" } }, required = ["name", "targetType", "direction", "cardinality"], type = "object" }, type = "array" }, title_template = { description = "Template for auto-generating node titles. Use {field_name} placeholders. RULE: every {field_name} token MUST have a matching entry in the fields array — if you write '{name}' here, you MUST add {\"name\": \"name\", \"type\": \"text\"} to fields. Missing fields cause a validation error.", type = "string" } }, required = ["name", "fields"], type = "object" }
+
+  [[turn.tool]]
+  name = "update_schema"
+  description = "Modify an existing schema type: add/remove/rename fields, relabel a field's display name without renaming it, add/remove relationships, update description or title_template. Use rename_fields to rename a field's storage key — it migrates all existing node property data to the new key and updates the schema definition; the same rename_fields list also handles a display-only relabel (see its own description for the difference)."
+  parameters_schema = { properties = { add_fields = { description = "Fields to add", items = { properties = { coreValues = { description = "REQUIRED and must be non-empty when type=\"enum\" — an enum field with no values always fails validation. Array of {value, label} pairs.", items = { properties = { label = { type = "string" }, value = { type = "string" } }, type = "object" }, type = "array" }, description = { description = "What this field means and how it's used — real semantic content (purpose, expected values, an example), not a short label (that's 'friendlyName'). Prefer more detail over less.", type = "string" }, friendlyName = { description = "The display label shown to the user. Optional — omit it and one is derived from 'name' automatically. Set it explicitly only when the derived label would read wrong.", type = "string" }, name = { description = "Field name, lowercase snake_case — the storage key. Not shown to the user; see 'friendlyName' for that.", type = "string" }, type = { description = "text, number, date, enum, boolean", type = "string" }, unique = { description = "Set true when each instance should have a distinct value for this field (e.g. an email or SKU). ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides.", type = "boolean" }, unique_case_insensitive = { description = "Like 'unique', but case-insensitive — use for fields like email or username where case shouldn't matter. ADVISORY ONLY — does not block or reject duplicate writes; it only lets the system suggest an existing likely-duplicate node when a new value collides. Do not set both 'unique' and 'unique_case_insensitive' on the same field.", type = "boolean" } }, required = ["name", "type"], type = "object" }, type = "array" }, add_relationships = { description = "Relationships to add", items = { properties = { cardinality = { enum = ["one", "many"], type = "string" }, direction = { enum = ["out", "in"], type = "string" }, name = { type = "string" }, targetType = { type = "string" } }, required = ["name", "targetType", "direction", "cardinality"], type = "object" }, type = "array" }, description = { description = "New description of the SCHEMA TYPE ITSELF, not of any one field — a summary of what this entity type represents. Optional.", type = "string" }, remove_fields = { description = "Field names to remove", items = { type = "string" }, type = "array" }, remove_relationships = { description = "Relationship names to remove", items = { type = "string" }, type = "array" }, rename_fields = { description = "Two operations, told apart by 'from'/'to': DIFFERENT values rename the field's storage key (rekeys all existing node data; breaking for title_template/query filters). SAME value + 'friendlyName' set relabels the display only (no data touched). The two can combine in one entry. Renaming to an existing field name is rejected. Processed before add_fields/remove_fields.", items = { additionalProperties = false, properties = { friendlyName = { description = "New display label for this field. Optional when 'from' != 'to' (an identity rename that also wants an updated label). REQUIRED when 'from' == 'to' — that combination with no friendlyName changes nothing and is rejected.", type = "string" }, from = { description = "Current field name", type = "string" }, to = { description = "New field name — pass the SAME value as 'from' for a display-only relabel that changes friendlyName without renaming anything or migrating data.", type = "string" } }, required = ["from", "to"], type = "object" }, type = "array" }, schema_id = { description = "ID of the schema to update (e.g. 'ticket', 'adr')", type = "string" }, title_template = { description = "New title template using {field_name} placeholders (e.g. '{name} ({status})'). All referenced fields must exist in the schema.", type = "string" } }, required = ["schema_id"], type = "object" }
+
+  [[turn.tool]]
+  name = "get_node"
+  description = "Get a node by ID. In the default json format, returns the node's current values in 'properties', plus 'available_properties' — every field this node's type defines, each with its type, any allowed values, and 'set' indicating whether this node currently has a value for it. A field with \"set\": false exists and can be written; it simply has no value yet. Use format=markdown instead to get the node and all its descendants as a readable document; that format returns the document text alone, without either of those fields."
+  parameters_schema = { properties = { format = { description = "Output format: json (default) returns node fields, markdown returns the node and all descendants as a readable document", enum = ["json", "markdown"], type = "string" }, id = { description = "Node ID to retrieve", type = "string" } }, required = ["id"], type = "object" }
+
+  [[turn.tool]]
+  name = "create_node"
+  description = "Create one new record of a type that already exists. Use for a single instance, never to define a new kind of record. Always pass 'content' as the record's title and nothing else — facts about it belong in 'field_values', never appended to the title. Always pass 'field_values' with every particular the user supplied, checked against the type's own field list — it is the only way those values are stored, and a call without them creates an empty record that still reports as saved. If the schema has a title_template (shown in EXISTING SCHEMAS), include those template fields in 'field_values' — the service composes the displayed title from them automatically. The example's user said: \"open a ticket for dana to rotate the signing keys on deploy in S-24, it's in dev, and it depends on the vault migration\". Note depends_on: the type lists no field for it, so it is carried under a key named after the user's own wording rather than dropped. Example call: {\"node_type\": \"ticket\", \"content\": \"Rotate signing keys on deploy\", \"field_values\": {\"status\": \"in_dev\", \"assignee\": \"dana\", \"sprint\": \"S-24\", \"depends_on\": \"the vault migration\"}}"
+  parameters_schema = { properties = { content = { description = "The record's title and nothing else: the shortest phrase naming what this record IS. Facts ABOUT it — who owns it, what state it is in, what it depends on — are field_values entries, never appended to the title.", type = "string" }, field_values = { description = "The values the user supplied. Not limited to the listed fields: if the user supplies a particular no listed field covers, add it here rather than dropping it — extra keys are stored as given. Name such a key after the user's own noun for it (lowercase, singular, snake_case), and prefix it by type: bare on a type from EXISTING SCHEMAS (e.g. {\"weight\": \"40kg\"}), but `custom:`-prefixed on a built-in type — text, task, date (e.g. {\"custom:weight\": \"40kg\"}), where unprefixed names are reserved for built-in fields.", type = "object" }, node_type = { description = "Node type: 'text', 'task', or a custom schema ID (e.g. 'ticket', 'adr'). For a custom schema ID, copy the id exactly from the EXISTING SCHEMAS block — character for character, including underscores — never shorten, singularize, paraphrase, or guess it from the user's wording. If the type is not listed there, it does not exist yet — do not invent an id for it.", type = "string" }, parent_id = { description = "Optional parent node ID", type = "string" } }, required = ["node_type", "content"], type = "object" }

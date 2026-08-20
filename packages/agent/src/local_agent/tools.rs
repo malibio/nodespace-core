@@ -1115,8 +1115,8 @@ fn def_create_schema() -> ToolDefinition {
         name: "create_schema".into(),
         description: "Define a new entity type with its fields. Use when the user describes a kind of \
             record the workspace does not track yet, not a single instance of an existing kind. The \
-            top-level 'name' parameter is REQUIRED — it is the display name of the entity type (e.g. \
-            'Ticket', 'ADR'). \
+            top-level 'name' parameter is REQUIRED — it is the display name of the entity type, in \
+            the user's own words. \
             The schema ID is auto-generated as lowercase snake_case from name (e.g. 'Release Plan' → 'release_plan'). \
             After creation, use this ID as node_type when creating instances. The example shows one \
             field per detail the user mentioned, including a pointer at another record (e.g. \"blocks \
@@ -1134,7 +1134,18 @@ fn def_create_schema() -> ToolDefinition {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Display name for the entity type, singular (e.g. \"Ticket\", \"ADR\")."
+                    // No worked example here, deliberately. This description
+                    // used to read `(e.g. "Ticket", "ADR")`, and the model
+                    // adopted "ADR" as the created type's actual name on a
+                    // request whose text said "architecture decision records"
+                    // and never abbreviated it — 3/3, with the abbreviation
+                    // appearing nowhere else in the prompt. Genericising the
+                    // *guidance*'s own worked example changed nothing and
+                    // deleting it changed nothing; a prompt dump located the
+                    // only occurrence here, in the schema. An example naming a
+                    // plausible type supplies a candidate answer to a question
+                    // it was not addressing. Say what the value IS instead.
+                    "description": "Display name for the entity type, in the user's own words, singular."
                 },
                 "description": {
                     "type": "string",

@@ -161,6 +161,100 @@
 # Verified at production fidelity by minimal-at-fidelity.toml -- 9 tools, 3
 # candidates, 5/5.
 #
+# ===========================================================================
+# CORRECTION (appended after sections 5-7 were written)
+# ===========================================================================
+#
+# Sections 5 and 6 below are SUPERSEDED. Both rest on arms that paired
+# production GUIDANCE with the corpus's HAND-AUTHORED tool schemas, and the
+# mismatch changed the results. Read sections 5A and 6A instead; the originals
+# are kept because a retracted measurement is still evidence about method.
+#
+# ---------------------------------------------------------------------------
+# 5A. THE RULE DOES NOT SURVIVE PROPER PAIRING
+# ---------------------------------------------------------------------------
+#
+# `prod-paired-*.toml` pair both halves from source: guidance from
+# skill_rules.rs, tool schemas from model_facing_tool_definitions() via
+# `dump_tool_defs`. Tool surface is Schema Creation's whitelist.
+#
+#   arm                        rules  chars   name   coreValues
+#   prod-paired-current            9  3,491   OK     {value,label} pairs -- CORRECT
+#   prod-paired-trimmed            5  1,794   OK     {label} only, `value` MISSING
+#   + UNIQUE_FIELD_FLAGS           6  2,500   OK     still missing
+#   + TITLE_TEMPLATE_PLACEHOLDERS  6  2,105   OK     CORRECT
+#   + EDIT_DONT_RECREATE           6  2,163   OK     CORRECT
+#   + RENAME_VS_RELABEL            6  2,105   OK     CORRECT
+#
+# THREE UNRELATED RULES EACH INDEPENDENTLY RESTORE `value`. None mentions
+# enums. One rule (UNIQUE_FIELD_FLAGS) does not, and it is the LONGEST of the
+# four -- so it is not simply mass either.
+#
+# This is the same signature as section 3: two unrelated rules restored
+# `supersedes` while the rule most directly about completeness did not. There
+# the shape hypothesis was refuted; here the semantic one is too. What "which
+# rules to keep" depends on is NOT recoverable by reading the rules.
+#
+# CONSEQUENCE: the KEEP/DROP rule in section 4 is NOT VALIDATED against
+# production. It held on the corpus's own guidance across 8 cases, and that
+# result stands for the corpus. It does not license editing skill_rules.rs.
+# No trim was applied.
+#
+# ---------------------------------------------------------------------------
+# 6A. THE TWO DEFECTS, CORRECTED
+# ---------------------------------------------------------------------------
+#
+# (a) core#2182 was WRONG and is closed. #2183 established that the evidence
+#     came from goldens/dev-unseen-schema.toml, which declares `value` as a
+#     bare `type = "string"`. The model emitting "cut,soak" was COMPLYING with
+#     the schema in front of it. Production already carried the
+#     ["string","number","boolean","array"] union. The defect was in the
+#     measurement corpus, not the shipping schema.
+#
+#     Same error as the coreValues/allowed_values mixup: a hand-authored
+#     fixture measured, the result attributed to production. #2183 did land a
+#     repair (repair_scalar_in_operator_values) as an explicit BACKSTOP, not as
+#     the mechanism.
+#
+# (b) The "ADR" contamination is REAL and is FIXED in this branch. Located by
+#     prompt dump, not by the mispaired arms, which is why it survives the
+#     correction above. Two occurrences in create_schema, both removed:
+#       - the `name` parameter description: (e.g. "Ticket", "ADR")
+#       - the tool's top-level description: (e.g. 'Ticket', 'ADR')
+#     Before: trimmed arms produced name "ADR" 3/3 on a request that says
+#     "architecture decision records" and never abbreviates.
+#     After: "Architecture Decision Record" 3/3 in both paired arms.
+#
+#     A schema's illustrative example supplies a candidate answer to a question
+#     it was not addressing. This is the mirror of what #1932 guards: there,
+#     eval prompts must not share text with guidance; here, a SCHEMA supplied a
+#     name the model adopted.
+#
+# ---------------------------------------------------------------------------
+# 7A. WHAT IS ACTUALLY ESTABLISHED
+# ---------------------------------------------------------------------------
+#
+# HOLDS:
+#   - The tool-surface fidelity gap (section 0) and everything measured at
+#     fidelity in section 1. Those arms use real tool definitions.
+#   - Inertness does not generalise (section 2).
+#   - Neither shape nor semantics explains which rule works (sections 3, 5A).
+#   - The "ADR" schema-example contamination, and its fix.
+#   - Off-topic prose in an emptied guidance slot measured WORSE than an empty
+#     slot -- malformed output, 3/3.
+#
+# DOES NOT HOLD:
+#   - Any recommendation to trim skill_rules.rs. Not measured validly.
+#   - core#2182 as filed.
+#   - The prod-guidance-* arms (kept, marked superseded by prod-paired-*).
+#
+# METHOD NOTE, twice earned: measuring a hand-authored fixture and attributing
+# the result to production is the recurring error in this spike. It produced a
+# wrong issue (#2182) and a wrong trim recommendation. Any arm that speaks to
+# production must take BOTH its guidance and its tool schemas from source --
+# which is what build_prod_paired.py does, and why it aborts if a DROP claim
+# cannot be verified against the real schema.
+#
 # ---------------------------------------------------------------------------
 # 5. THE RULE ON PRODUCTION'S OWN GUIDANCE
 # ---------------------------------------------------------------------------

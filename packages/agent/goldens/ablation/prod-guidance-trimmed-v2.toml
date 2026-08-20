@@ -3,6 +3,20 @@ name = "prod-guidance-trimmed-v2"
 reps = 5
 
 notes = """
+SUPERSEDED -- see FINDINGS.toml section 5A and prod-paired-*.toml.
+
+This arm spliced production GUIDANCE into this case's HAND-AUTHORED tool
+schemas. They differ where it mattered: the corpus declares enum values under
+`allowed_values`, production under `coreValues` (declared "REQUIRED and must be
+non-empty when type=enum", lowercase rule inline). Conclusions drawn here about
+which production rules to keep are void -- they measured production prose
+against a schema that lacks what production's has.
+
+Kept because a retracted measurement is still evidence about method: measuring a
+hand-authored fixture and attributing the result to production is the recurring
+error in this spike, and it also produced a wrong issue (core#2182, closed by
+core#2183).
+
 PRODUCTION GUIDANCE -- trimmed-v2
 
 Every prior arm used the corpus's hand-authored guidance. This one swaps in the
