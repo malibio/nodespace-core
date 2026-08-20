@@ -4,6 +4,7 @@ import { createLogger } from '$lib/utils/logger';
 import { onDaemonReconnect } from '$lib/services/daemon-status';
 import { stripMarkdown } from '$lib/services/markdown-utils';
 import { databaseStore } from '$lib/stores/database.svelte';
+import { pluginRegistry } from '$lib/plugins/plugin-registry';
 
 const log = createLogger('CollectionsStore');
 
@@ -439,10 +440,12 @@ class CollectionsStore {
           .filter((node) => !NON_CONTENT_NODE_TYPES.has(node.nodeType))
           .map((node) => ({
             id: node.id,
-            // Prefer the cleaned title; fall back to the node content with its
-            // markdown stripped so an imported header root shows "ACP Integration
-            // Architecture", not the raw "# ACP Integration Architecture".
-            name: node.title || stripMarkdown(node.content),
+            // pluginRegistry.resolveDisplayTitle already picks title vs. content correctly
+            // (title only for title_template-driven schemas — a plain node.title fallback is
+            // stale for everything else, since it's only refreshed by a backend round-trip).
+            // stripMarkdown then cleans the result so an imported header root shows "ACP
+            // Integration Architecture", not the raw "# ACP Integration Architecture".
+            name: stripMarkdown(pluginRegistry.resolveDisplayTitle(node)),
             nodeType: node.nodeType,
           }))
       );

@@ -9,6 +9,7 @@
 <script lang="ts">
   import type { SchemaField } from '$lib/types/schema-node';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { TableRow as UiTableRow, TableCell } from '$lib/components/ui/table';
 
   let {
@@ -41,17 +42,20 @@
     for (const col of columns) {
       const fieldSchema = fieldSchemaMap.get(col.field);
       // Resolution order:
-      // 1. For 'content' column: prefer node.title (computed by title_template) over raw content
+      // 1. For 'content' column: the node's current display value (pluginRegistry
+      //    .resolveDisplayTitle — title only for title_template-driven schemas, content
+      //    otherwise; see node-display-title.ts). node.title alone is stale for non-template
+      //    types, since it's only refreshed by a backend round-trip while optimistic edits
+      //    patch content directly.
       // 2. camelCase top-level (typed core fields like task.dueDate serialized from Rust)
       // 3. snake_case top-level (fallback)
       // 4. node.properties[field] (user-defined fields on custom schema nodes)
       const camelKey = toCamelCase(col.field);
       const props = node.properties as Record<string, unknown> | undefined;
       const rawValue =
-        (col.field === 'content' && node.title ? node.title : undefined) ??
-        nodeRecord[camelKey] ??
-        nodeRecord[col.field] ??
-        props?.[col.field];
+        col.field === 'content'
+          ? pluginRegistry.resolveDisplayTitle(node)
+          : (nodeRecord[camelKey] ?? nodeRecord[col.field] ?? props?.[col.field]);
 
       if (rawValue === null || rawValue === undefined) {
         map.set(col.field, '');
@@ -85,10 +89,11 @@
     return map;
   });
 
-  // For title_template nodes, prefer the computed title over raw content
+  // Current display title (title_template-driven types) or content (everything else) —
+  // see pluginRegistry.resolveDisplayTitle / node-display-title.ts.
   const nodeContent = $derived.by(() => {
     const node = sharedNodeStore.getNode(id);
-    return node?.title ?? node?.content ?? '';
+    return (node && pluginRegistry.resolveDisplayTitle(node)) ?? '';
   });
 
   // Reactive existence check — re-evaluates when the node is deleted from the store

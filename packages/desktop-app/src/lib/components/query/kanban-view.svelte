@@ -29,6 +29,7 @@
   import { untrack } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { createLogger } from '$lib/utils/logger';
   import type { Node } from '$lib/types';
   import type { SchemaNode } from '$lib/types/schema-node';
@@ -176,7 +177,7 @@
   }
 
   function titleOf(node: Node): string {
-    return node.title || node.content || 'Untitled';
+    return pluginRegistry.resolveDisplayTitle(node) || 'Untitled';
   }
 
   /** The column a node currently belongs to (for the move control's value). */
