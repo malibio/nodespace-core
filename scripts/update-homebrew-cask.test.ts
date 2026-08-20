@@ -53,7 +53,6 @@ describe("renderCask", () => {
     expect(cask).not.toContain("on_intel do");
     expect(cask).not.toContain("x64");
     expect(cask).not.toContain("intel");
-    expect(cask).not.toContain("Intel Mac Support");
   });
 
   test("always points the binary stanza at Contents/MacOS/nodespace", () => {

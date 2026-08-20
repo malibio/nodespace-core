@@ -485,9 +485,10 @@ jobs:
     # failure, before running -- but only build-tauri-macos-arm's result
     # gates execution below, since scripts/update-homebrew-cask.ts only
     # cares about the ARM .dmg, the one macOS artifact the cask ships. A
-    # Windows build failure must not block the cask sync. The script also
-    # tolerates a release that ships no second macOS architecture and
-    # renders an honest single-arch cask rather than failing.
+    # Windows build failure must not block the cask sync. The script hard-
+    # fails (exit 1, feeding notify-failure below) if the release is
+    # missing its Apple Silicon .dmg -- there's no other macOS
+    # architecture left to fall back to.
     if: >-
       always() &&
       github.event_name == 'release' &&
