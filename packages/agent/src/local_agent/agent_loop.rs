@@ -7717,9 +7717,11 @@ mod tests {
         );
     }
 
-    /// The separator the model adds is punctuation, not part of a stored value,
-    /// and a single member is still an array by the schema's own declaration —
-    /// leaving it a bare string would keep failing for the reason this exists.
+    /// The separator the model adds is punctuation, not part of a stored value.
+    /// A single member is wrapped rather than left alone because `IN (x)` and
+    /// `= x` select the same rows, so the wrap is safe whichever operator the
+    /// model meant — where leaving it a bare string keeps failing for the reason
+    /// this exists.
     #[test]
     fn in_operator_values_are_trimmed_and_single_values_are_wrapped() {
         // Wrapped in `filters` because that is the only slot the repair walks —
