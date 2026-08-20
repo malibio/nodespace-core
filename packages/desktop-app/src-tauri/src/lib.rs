@@ -170,6 +170,98 @@ impl ShutdownToken {
     }
 }
 
+/// A database id from a relaunch that arrived before the frontend had
+/// registered its `tray:select-database` listener.
+///
+/// Tauri does not buffer or replay an event emitted while it has zero current
+/// listeners (confirmed against the `tauri` event-emission source — it looks
+/// up registered handlers for the event name at the instant `emit` runs and
+/// nothing more), and the listener only exists once `app-shell.svelte` has
+/// mounted and its `listen()` IPC round-trip has resolved — a relaunch in that
+/// narrow window (webview still booting) would otherwise focus the window but
+/// silently drop the switch. `handle_relaunch` stashes here in addition to
+/// emitting; the frontend pulls it once via
+/// [`take_pending_tray_database_selection`] right after registering the
+/// listener, so the switch lands either way `switchTo` is idempotent against a
+/// value the live event also happened to deliver.
+///
+/// A plain module-level `Mutex` rather than Tauri-managed state: the
+/// single-instance plugin's relaunch callback can fire before this app's own
+/// `app.manage(..)` calls inside `.setup()` have run (both start during
+/// `Builder::run`, and the plugin is deliberately registered first), so
+/// managed state would need its own readiness check; a `static` has none.
+static PENDING_TRAY_DATABASE_SELECTION: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
+
+/// One-shot read of a database id [`handle_relaunch`] stashed before the
+/// frontend's `tray:select-database` listener existed to receive the live
+/// event. Consumes the value so a later, unrelated call never re-applies a
+/// stale selection.
+#[tauri::command]
+fn take_pending_tray_database_selection() -> Option<String> {
+    PENDING_TRAY_DATABASE_SELECTION.lock().unwrap().take()
+}
+
+/// Handle a relaunch forwarded by `tauri-plugin-single-instance`: the daemon's
+/// tray always spawns a fresh UI process (it cannot reliably tell whether one
+/// is already alive), so every click after the first arrives here instead of
+/// as a second window.
+///
+/// Always focuses the running window — cross-process activation
+/// (`NSRunningApplication::activate` on macOS, the equivalent on Windows/Linux)
+/// is exactly what `WebviewWindow::set_focus` does under the hood, so a plain
+/// "Open NodeSpace" click while the app is already running now does something:
+/// it raises the window instead of silently no-op'ing. If the relaunch also
+/// named a specific database (`--database <id>`, set by the tray only when the
+/// user picked one from the submenu), forward it to the frontend — both as a
+/// live event and stashed for the pull-based fallback above — so it can
+/// switch in place via `databaseStore.switchTo` — the same path an in-app
+/// switcher click already uses.
+fn handle_relaunch<R: tauri::Runtime>(app: &tauri::AppHandle<R>, argv: &[String]) {
+    use tauri::{Emitter, Manager};
+
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("single-instance relaunch: no main window to focus");
+        return;
+    };
+    if let Err(e) = window.unminimize() {
+        tracing::warn!(error = %e, "failed to unminimize the main window on relaunch");
+    }
+    if let Err(e) = window.show() {
+        tracing::warn!(error = %e, "failed to show the main window on relaunch");
+    }
+    if let Err(e) = window.set_focus() {
+        tracing::warn!(error = %e, "failed to focus the main window on relaunch");
+    }
+
+    if let Some(id) = parse_relaunch_database_arg(argv) {
+        *PENDING_TRAY_DATABASE_SELECTION.lock().unwrap() = Some(id.clone());
+        if let Err(e) = window.emit("tray:select-database", id) {
+            tracing::warn!(error = %e, "failed to emit tray:select-database");
+        }
+    }
+}
+
+/// Extract the database id from a relaunch's argv, as passed by the daemon's
+/// tray via `--database <id>` (the CLI counterpart of
+/// `nodespace_daemon::tray::INITIAL_DATABASE_ENV`, forwarded here because the
+/// environment of the just-exited relaunch process is not visible to the
+/// already-running instance) when the user picks a specific database while
+/// the app is already running. `None` when the relaunch carried no database
+/// request (a plain "Open NodeSpace") or the flag's value is missing or blank.
+fn parse_relaunch_database_arg(argv: &[String]) -> Option<String> {
+    let value = argv
+        .iter()
+        .position(|a| a == "--database")
+        .and_then(|i| argv.get(i + 1))?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use tauri::{menu::*, Emitter, Manager};
@@ -189,7 +281,28 @@ pub fn run() {
     // the same way `graceful_shutdown` always has.
     let shutdown_token_for_setup = ShutdownToken::new();
 
-    let app = tauri::Builder::default()
+    // Single-instance guard: the daemon's tray always spawns a fresh UI
+    // process when a database is picked (see `nodespace_daemon::tray::
+    // TrayState::open_ui`) — it has no reliable way to know whether a UI
+    // process from an earlier launch is still alive, and none at all when the
+    // app was started outside the tray. Rather than the daemon tracking
+    // liveness, this plugin makes any second launch detect the running
+    // instance, forward its argv to it, and exit immediately, so a real UI
+    // process almost never survives alongside an existing one regardless of
+    // launch path. Must be registered before any other plugin (upstream
+    // requirement). Note this plugin's macOS backend claims the lock with a
+    // connect-then-bind probe rather than one atomic OS primitive (unlike its
+    // Windows/Linux backends), so it is not an absolute guarantee there — see
+    // the doc comment on `TrayState::open_ui` in the daemon crate.
+    let mut builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            handle_relaunch(app, &argv);
+        }));
+    }
+
+    let app = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
@@ -510,6 +623,7 @@ pub fn run() {
             frontend_log_enabled,
             frontend_log,
             check_daemon_status,
+            take_pending_tray_database_selection,
             update_check::check_for_update_command,
             commands::pro_sync::pro_tier,
             commands::pro_sync::pro_current_status,
@@ -731,4 +845,125 @@ pub(crate) fn graceful_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle
 
     shutdown_token.cancel();
     tracing::info!("Shutdown: complete");
+}
+
+#[cfg(test)]
+mod relaunch_tests {
+    use super::parse_relaunch_database_arg;
+
+    #[test]
+    fn parses_database_id_from_argv() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+            "db-123".to_string(),
+        ];
+        assert_eq!(
+            parse_relaunch_database_arg(&argv),
+            Some("db-123".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_without_the_flag() {
+        let argv = vec!["/path/to/nodespace-app".to_string()];
+        assert_eq!(parse_relaunch_database_arg(&argv), None);
+    }
+
+    #[test]
+    fn returns_none_when_the_flag_has_no_value() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+        ];
+        assert_eq!(parse_relaunch_database_arg(&argv), None);
+    }
+
+    #[test]
+    fn returns_none_for_a_blank_value() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+            "   ".to_string(),
+        ];
+        assert_eq!(parse_relaunch_database_arg(&argv), None);
+    }
+
+    /// A flag value that happens to look like another flag is still just a
+    /// value — parsing is positional (whatever follows `--database`), not a
+    /// search for the next `--`-prefixed token.
+    #[test]
+    fn takes_the_very_next_token_even_if_flag_shaped() {
+        let argv = vec![
+            "/path/to/nodespace-app".to_string(),
+            "--database".to_string(),
+            "--not-actually-a-flag".to_string(),
+        ];
+        assert_eq!(
+            parse_relaunch_database_arg(&argv),
+            Some("--not-actually-a-flag".to_string())
+        );
+    }
+
+    /// `handle_relaunch`'s early-return branch (no "main" window to focus)
+    /// must not panic — this is the same shape of guard `graceful_shutdown`
+    /// and `handle_run_event` already use `MockRuntime` to exercise. Doesn't
+    /// touch `PENDING_TRAY_DATABASE_SELECTION` (the function returns before
+    /// ever reaching it), so it's safe to run in parallel with the test below
+    /// that does.
+    #[test]
+    fn handle_relaunch_without_a_main_window_does_not_panic() {
+        let app = tauri::test::mock_app();
+        super::handle_relaunch(
+            &app.handle().clone(),
+            &["--database".to_string(), "x".to_string()],
+        );
+    }
+
+    /// Both halves of the pull-based-fallback contract live in one test:
+    /// `PENDING_TRAY_DATABASE_SELECTION` is a process-wide `static`, so a
+    /// separate "stashes nothing" test would race with a separate "stashes
+    /// and is consumed" test under the default parallel test runner and
+    /// flake (mirrors `resolve_ui_binary_honors_env_var` in the daemon
+    /// crate's tray tests, which does the same for its own process-wide env
+    /// var). Covers: a plain relaunch (no `--database` — the "Open
+    /// NodeSpace" case) stashes nothing, so an unrelated later pull never
+    /// sees a stale "open nothing in particular" mistaken for a real
+    /// request; a relaunch naming a database stashes it (in addition to
+    /// emitting the live event, not exercised here — that needs a real
+    /// listener); a first pull observes it; a second pull observes nothing
+    /// (consumed, not re-delivered).
+    #[test]
+    fn handle_relaunch_pull_based_fallback_stash_and_consume_cycle() {
+        let app = tauri::test::mock_app();
+        tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("failed to build mock window");
+        let handle = app.handle().clone();
+
+        super::handle_relaunch(&handle, &["/path/to/nodespace-app".to_string()]);
+        assert_eq!(
+            super::take_pending_tray_database_selection(),
+            None,
+            "a plain relaunch (no --database) must not stash anything"
+        );
+
+        super::handle_relaunch(
+            &handle,
+            &[
+                "/path/to/nodespace-app".to_string(),
+                "--database".to_string(),
+                "db-456".to_string(),
+            ],
+        );
+        assert_eq!(
+            super::take_pending_tray_database_selection(),
+            Some("db-456".to_string())
+        );
+        assert_eq!(
+            super::take_pending_tray_database_selection(),
+            None,
+            "a second pull must not re-deliver an already-consumed selection"
+        );
+    }
 }

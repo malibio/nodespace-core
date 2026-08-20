@@ -46,6 +46,7 @@
     startDaemonStatusListener,
     refreshDaemonStatus
   } from '$lib/services/daemon-status';
+  import { databaseStore } from '$lib/stores/database.svelte';
 
   // Logger instance for AppShell component
   const log = createLogger('AppShell');
@@ -227,6 +228,7 @@
     let cleanupProSync: (() => void) | null = null;
     let unregisterProConfirmed: (() => void) | null = null;
     let unlistenTier: Promise<() => void> | null = null;
+    let unlistenSelectDatabase: Promise<() => void> | null = null;
 
     if (
       typeof window !== 'undefined' &&
@@ -264,6 +266,17 @@
       unlistenTier = listen('pro:tier-detected', () => {
         schemasData.loadSchemas();
         collectionsData.loadCollections();
+      });
+
+      // Picking a database from the tray while the app is already running
+      // relaunches a second process; `tauri-plugin-single-instance` detects
+      // this one is already up, focuses its window (Rust side), and forwards
+      // the requested database here instead of the relaunch spawning a second
+      // window. Switch through the same path an in-app switcher click uses.
+      unlistenSelectDatabase = listen<string>('tray:select-database', (event) => {
+        databaseStore.switchTo(event.payload).catch((err) => {
+          log.error('Failed to switch database from tray selection:', err);
+        });
       });
 
       // Show a warning if the nodespace CLI is not on $PATH after skill install.
@@ -612,6 +625,9 @@
       }
       if (unlistenTier) {
         (await unlistenTier)();
+      }
+      if (unlistenSelectDatabase) {
+        (await unlistenSelectDatabase)();
       }
       cleanupProSync?.();
       unregisterProConfirmed?.();
