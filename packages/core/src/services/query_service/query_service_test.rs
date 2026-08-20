@@ -140,6 +140,50 @@ mod tests {
         );
     }
 
+    /// A scalar `in` value fails loudly rather than matching nothing.
+    ///
+    /// #2182 was reported as a silent zero-result — the failure mode that is
+    /// indistinguishable from a genuinely empty search and therefore invisible
+    /// to the user. It is not: `build_filter_condition` rejects a non-array `in`
+    /// value outright, so the tool call errors and the model has to recover.
+    /// Pinned as a test because the distinction decides how much machinery a
+    /// malformed `in` filter justifies, and reading it back off the code is
+    /// exactly the step that got skipped when the issue was written.
+    ///
+    /// The agent-side repair (`repair_scalar_in_operator_values`) exists so this
+    /// error is not reached in the first place; this asserts what it is
+    /// protecting against, from the other side of the boundary.
+    #[tokio::test]
+    async fn test_property_filter_in_rejects_a_scalar_value() {
+        let (query_service, _node_service, _temp) = create_test_services().await;
+
+        let query = QueryDefinition {
+            target_type: "task".to_string(),
+            filters: vec![QueryFilter {
+                filter_type: FilterType::Property,
+                operator: FilterOperator::In,
+                property: Some("status".to_string()),
+                // What the model emits today: the members comma-joined into one
+                // string instead of an array.
+                value: Some(json!("open,in_progress")),
+                case_sensitive: None,
+                relationship_type: None,
+                node_id: None,
+            }],
+            sorting: None,
+            limit: None,
+        };
+
+        let err = query_service
+            .execute(&query)
+            .await
+            .expect_err("a scalar `in` value must error, not quietly match nothing");
+        assert!(
+            err.to_string().contains("In requires array value"),
+            "the error must name the actual defect; got: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn test_property_filter_in() {
         let (query_service, node_service, _temp) = create_test_services().await;

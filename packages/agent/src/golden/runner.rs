@@ -58,6 +58,15 @@ pub struct ObservedCall {
     pub name: String,
     /// The repaired arguments JSON, exactly as it would reach the tool.
     pub arguments_json: String,
+    /// The arguments as the model emitted them, before repair, when repair
+    /// changed something — `None` when the emission was already clean.
+    ///
+    /// #2182: without this the two are indistinguishable in the output, and a
+    /// case where the model still emits a malformation that production quietly
+    /// repairs reads as a clean pass. That is the difference between "the
+    /// prompt fixed it" and "the repair fixed it", which is exactly what an
+    /// arm measuring a prompt change has to be able to tell apart.
+    pub raw_arguments_json: Option<String>,
 }
 
 /// Everything a single turn produced.
@@ -85,7 +94,17 @@ impl TurnOutput {
         }
         self.calls
             .iter()
-            .map(|c| format!("{}({})", c.name, c.arguments_json))
+            .map(|c| match &c.raw_arguments_json {
+                // Both halves, because they answer different questions: the
+                // repaired args are what the tool ran, the emitted ones are
+                // what the prompt actually produced. An arm tuning the prompt
+                // is judged on the second.
+                Some(raw) => format!(
+                    "{}({})  [emitted, before repair: {}]",
+                    c.name, c.arguments_json, raw
+                ),
+                None => format!("{}({})", c.name, c.arguments_json),
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -267,10 +286,13 @@ fn parse_output(chunks: &[StreamingChunk]) -> TurnOutput {
     let calls = pending
         .into_iter()
         .map(|(_, name, mut arguments_json)| {
+            let emitted = arguments_json.clone();
             repair_tool_call_arguments(&mut arguments_json);
+            let raw_arguments_json = (arguments_json != emitted).then_some(emitted);
             ObservedCall {
                 name,
                 arguments_json,
+                raw_arguments_json,
             }
         })
         .collect();
@@ -384,9 +406,53 @@ mod tests {
             calls: vec![ObservedCall {
                 name: "resolve_query".into(),
                 arguments_json: r#"{"request":"x"}"#.into(),
+                raw_arguments_json: None,
             }],
         };
         assert_eq!(called.summary(), r#"resolve_query({"request":"x"})"#);
+    }
+
+    /// #2182: a repaired call must not read as a clean one. The summary is the
+    /// only thing the human judging an arm sees, so when repair moved something
+    /// the emission has to appear beside the result — otherwise "the prompt
+    /// produced correct arguments" and "the prompt produced a malformation
+    /// production silently fixed" are the same line of output.
+    #[test]
+    fn summary_shows_the_emission_when_repair_changed_it() {
+        let chunks = vec![
+            tool_start("c0", "search_nodes"),
+            tool_args(
+                "c0",
+                r#"{"filters":[{"operator":"in","property":"stage","value":"cut,soak"}]}"#,
+            ),
+        ];
+        let output = parse_output(&chunks);
+        let summary = output.summary();
+        assert!(
+            summary.contains(r#""value":["cut","soak"]"#),
+            "the repaired args are what the tool ran; got {summary}"
+        );
+        assert!(
+            summary.contains(r#"[emitted, before repair: {"filters":[{"operator":"in","property":"stage","value":"cut,soak"}]}]"#),
+            "the raw emission is what the prompt produced and must stay visible; got {summary}"
+        );
+    }
+
+    /// The converse: a clean emission must not grow a second half. An arm's
+    /// output is compared byte-for-byte between reps, and an unconditional
+    /// annotation would be noise on every line that has nothing to report.
+    #[test]
+    fn summary_stays_single_valued_when_nothing_was_repaired() {
+        let chunks = vec![
+            tool_start("c0", "search_nodes"),
+            tool_args("c0", r#"{"node_type":"release","query":""}"#),
+        ];
+        let summary = parse_output(&chunks).summary();
+        assert_eq!(
+            summary,
+            r#"search_nodes({"node_type":"release","query":""})"#
+        );
+        assert!(!summary.contains("before repair"));
     }
 
     #[test]
@@ -397,10 +463,12 @@ mod tests {
                 ObservedCall {
                     name: "resolve_query".into(),
                     arguments_json: "{}".into(),
+                    raw_arguments_json: None,
                 },
                 ObservedCall {
                     name: "update_node".into(),
                     arguments_json: "{}".into(),
+                    raw_arguments_json: None,
                 },
             ],
         };

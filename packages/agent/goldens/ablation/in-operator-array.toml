@@ -1,82 +1,76 @@
-name = "dev-unseen-schema"
-reps = 5
+name = "in-operator-array"
+# derived-from: ../dev-unseen-schema.toml — differs by exactly one change:
+# turn 1's `search_nodes.filters.items.properties.value` is declared the way
+# PRODUCTION declares it (`tools.rs` ~443: a type union naming `array`, and a
+# description saying "Use array for 'in' operator") instead of the parent
+# case's bare `type = "string"`. Everything else — both turns' system prompts,
+# the user messages, the tool results, turn 2 entirely — is byte-identical.
+reps = 3
 
 notes = """
-PRODUCTION-SHAPED. Dev-workflow domain. THE GENERALISATION TEST.
+ABLATION ARM. Built by replacing exactly one declaration in dev-unseen-schema.toml.
 
-Every other case in this corpus uses `ticket` or `adr` — the same types the
-worked examples show. That measures whether the model can follow a pattern it
-has just been given. It does NOT measure whether the model can act on a type
-it has never seen, which is the real workload: users invent their own schemas,
-and none of them will resemble this corpus's examples.
+core#2182: when the model chooses the `in` operator, does it send `value` as an
+array?
 
-So this case uses `release` with a lifecycle enum {cut,soak,shipped,rolled_back}
-— vocabulary that appears in no worked example, no tool description, and no
-candidate instruction anywhere in the prompt. The worked example in
-create_node still says `ticket`/`status`/`in_dev`, deliberately: the model
-must map from an example about one type onto a request about a different one.
+WHY THE PARENT CASE COULD NOT ANSWER THIS
 
-`soak` is the load-bearing word. It is not a status the model can guess from
-general knowledge the way `shipped` or `done` might be, and the user's phrasing
-("it's baking on staging") does not contain it. The only way to produce `soak`
-is to read the allowed values off the node-types block and match the user's
-description to one — which is inference over supplied context rather than
-recall.
+dev-unseen-schema.toml declares `value` as a bare `type = "string"`. So the
+comma-joined `"cut,soak"` the issue reports is, on that case, SCHEMA-COMPLIANT
+OUTPUT: the corpus asked for a string and the model sent a string. Measuring the
+issue's question there measures the corpus's own defect, not production's.
 
-A corpus that only works on schemas resembling its own examples has taught
-pattern-matching. This case is the guard against that, one domain over from the
-invoice-examples trap.
+Production declares the union `["string", "number", "boolean", "array"]` with
+"Use array for 'in' operator." in the description. This arm carries that exact
+declaration so the question being asked is production's.
 
-SECOND UNSEEN ELEMENT
+WHAT THIS ARM IS AND IS NOT EVIDENCE FOR
 
-`build` is a field with no counterpart in any example, holding a value format
-(2026.8.3) nothing in the prompt demonstrates. It measures the same question
-on the field axis rather than the enum axis.
+It is a FIDELITY fix to the measurement, not a fix to the defect. The fix for
+the defect is `repair_scalar_in_operator_values` in `agent_loop.rs`, which is a
+transform on the emitted arguments and changes NO prompt bytes — it therefore
+cannot be what moves this arm's result, and cannot regress a sibling case.
 
-CONTAMINATION GUARD (#1932)
+That separation is why the runner now prints the raw emission beside the
+repaired arguments whenever repair changed something. Without it, this arm's
+output would read as a clean pass in the exact case where the model still emits
+a malformation and production quietly fixes it — which is the ONE distinction
+this arm exists to make. Read the `[emitted, before repair: …]` half, not the
+first half, when judging whether the DECLARATION moved anything.
 
-Deliberately distinct even from the rest of THIS corpus, which is the point of
-the case.
+WHY NOT A PROSE ARM
 
-PROVISIONAL ON #2123 — THIS CASE IS NOT PRODUCTION-SHAPED TODAY
+Measured already, and recorded on core#2182: a third statement of the rule
+("an operator taking several values takes them as a list") changed nothing on
+this case at 3 reps and made dev-status-change-enum WORSE — the model emitted
+Gemma's internal call syntax as raw text rather than a JSON tool call. Two
+channels already state the rule. A third is not free.
 
-Uses `field_values`, not `properties`, because a parameter named `properties`
-is silently deleted by the Gemma-4 template. See dev-status-change-enum.toml's
-notes for the measurement.
+RESULT, measured via `./target/release/golden_runner --reps 3` (3/3 identical):
 
-Production says `properties`; this case says `field_values`. So it does not
-reproduce production's tool surface and must not be read as validated
-production shape. Provisional on #2123 being fixed BY RENAMING, in which case
-it becomes correct as written. Fixed any other way, it needs rewriting and
-re-measuring rather than re-annotating.
+  turn 1   search_nodes({"node_type":"release","query":"open"})
 
-MEASURED — per-case results recorded on #2122.
+NO FILTERS AT ALL. So no `in`, no `value`, and the declaration under test was
+never exercised — this arm cannot answer the question it was built to ask, and
+the honest reading is "did not reach the measurement", not "passed".
 
-DIVERGENCE FROM PRODUCTION: `filters.items.properties.value`
+That is still a finding, and the more useful of the two: on the phrasing the
+issue names, the locked model does not reach for a multi-value filter, it
+reaches for a keyword query. It also means the issue's reported output
+("value":"cut,soak") did not come from goldens/dev-unseen-schema.toml as
+committed. Something in the prompt that produced it pushed the model toward
+filters first — most likely the filter-construction rule from the third,
+uncommitted arm.
 
-This case declares `value` as a bare `type = "string"`. Production declares the
-union `["string", "number", "boolean", "array"]` with "Use array for 'in'
-operator." So for any question about a MULTI-VALUE filter, this case does not
-reproduce production's tool surface and must not be read as validated
-production shape — the same caveat the `field_values`/`properties` note above
-makes, on a different field.
+turn 2 unchanged (`{"stage":"soak"}`, 3/3).
 
-This was measured, not assumed. Two arms differing only in that declaration
-(`ablation/in-operator-array-elicited.toml` and `-string-declared.toml`), 3 reps
-each and byte-identical within each arm: production's union yields
-`"value":["cut","soak"]`, this case's bare string yields `"value":"cut,soak"`.
-A report of the comma-joined form measured HERE is therefore the model
-complying with this file, not a production defect.
-
-Left as-is rather than quietly corrected: changing it changes what the model
-sees, which invalidates this case's own recorded #2122 results and obliges a
-re-measurement that is not this file's question. Whoever next needs a
-multi-value filter on this case should change the declaration AND re-run the
-case, rather than reading the current results as covering it.
+Continued in in-operator-array-elicited.toml, which changes only the user
+message so a multi-value filter is actually elicited.
 """
 
 # ---------------------------------------------------------------------------
-# Turn 1 — find the release. Unseen type, unseen enum.
+# Turn 1 — find the release. THE ARM'S QUESTION. Only this turn's `value`
+# declaration differs from dev-unseen-schema.toml.
 # ---------------------------------------------------------------------------
 [[turn]]
 label = "turn1-find-release"
@@ -110,9 +104,13 @@ fields onto a new type):
 """
 user = "What releases do we have open?"
 expect = """
-search_nodes(node_type="release") — the unseen type id, taken off the entity \
-types block rather than from any example. A filter on `stage` is welcome but \
-not the measurement; the type id is.
+search_nodes(node_type="release"). THE ARM'S MEASUREMENT is what `value` looks \
+like IF the model chooses the `in` operator to express "open" as more than one \
+stage: an array (["cut","soak"]) is the pass, the comma-joined string \
+("cut,soak") is the failure core#2182 reports. Read the `[emitted, before \
+repair: …]` half — the first half is post-repair and would show an array \
+either way. A filter the model declines to write at all is neither result; \
+say so rather than scoring it.
 """
 
   [turn.tool_results]
@@ -158,11 +156,20 @@ not the measurement; the type id is.
           [turn.tool.parameters_schema.properties.filters.items.properties.property]
           type = "string"
 
+          # THE ARM'S ONE CHANGE, relative to dev-unseen-schema.toml, which
+          # declares this `type = "string"` with no description. Copied from
+          # production's own declaration in `tools.rs` so the arm asks
+          # production's question: both the type union naming `array` and the
+          # sentence pointing `in` at it are present, exactly as they are in
+          # the shipping tool schema.
           [turn.tool.parameters_schema.properties.filters.items.properties.value]
-          type = "string"
+          type = ["string", "number", "boolean", "array"]
+          description = "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator."
 
 # ---------------------------------------------------------------------------
-# Turn 2 — the write. `soak` cannot be guessed; it must be read.
+# Turn 2 — the write. UNCHANGED from dev-unseen-schema.toml — not this arm's
+# question. Kept only so turn 1 is measured inside the same two-turn shape,
+# and so a reader can confirm nothing else drifted.
 # ---------------------------------------------------------------------------
 [[turn]]
 label = "turn2-stage-to-soak"
@@ -199,14 +206,10 @@ fields onto a new type):
 """
 user = "2026.8.3 is out on staging now, baking overnight before we ship it"
 expect = """
-update_node(id="b8c4e260-...", field_values={"stage": "soak"}). `soak` is the \
-measurement: the user never says the word, it is not guessable from general \
-knowledge the way "shipped" would be, and it appears in no example anywhere \
-in the prompt. Producing it requires reading the allowed values off the \
-node-types block and matching the description to one. "staging", "baking", \
-"testing" or any prettified form is the failure — and so is `shipped`, which \
-is the plausible-sounding wrong answer since the user mentions shipping as a \
-LATER step.
+update_node(id="b8c4e260-...", field_values={"stage": "soak"}). Not this arm's \
+question — unchanged from dev-unseen-schema.toml, and present only so turn 1 \
+is measured in the same shape. A change here relative to the parent case would \
+mean something other than the one intended declaration drifted.
 """
 
   [turn.tool_results]
@@ -230,11 +233,6 @@ LATER step.
       type = "string"
       description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
 
-      # Declared sub-properties, mirroring the `release` type's own fields —
-      # the pattern dev-instance-creation.toml established. This case is its
-      # hardest test: the type is one no example or instruction mentions, so
-      # the declarations are generated from the schema rather than recognised
-      # from training.
       [turn.tool.parameters_schema.properties.field_values]
       type = "object"
       description = "The change itself: field keys to new values. Send only the keys that change."

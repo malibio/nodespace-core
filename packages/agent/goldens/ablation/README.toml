@@ -58,3 +58,34 @@
 # Tool ARGUMENTS are less stable than tool NAMES across sessions — the same
 # case produced node_type "equipment" in one session and "Product" in another,
 # each 3/3 internally. Record which fields were stable, not only the tally.
+#
+# ---------------------------------------------------------------------------
+# AN ARM CAN FAIL TO REACH ITS OWN QUESTION
+# ---------------------------------------------------------------------------
+#
+# Removing or changing a declaration only measures anything if the model
+# actually exercises it. core#2182's first arm declared `value` the way
+# production does, to ask what shape an `in` filter's value arrives in — and
+# the model answered the user's question with a keyword query and no filters
+# at all, 3 of 3. Nothing wrong with the arm's construction; the case simply
+# never reached the declaration under test.
+#
+# That reads as a pass if you only check "did the turn look right". It is not
+# one. Before spending model time, ask what the output looks like when the
+# feature under test is NOT exercised, and make sure that is distinguishable
+# from the pass. Where it is not, change the elicitation (there, a user message
+# naming two values) rather than reporting the untested arm.
+#
+# ---------------------------------------------------------------------------
+# REPAIRED OUTPUT IS NOT EMITTED OUTPUT
+# ---------------------------------------------------------------------------
+#
+# The runner applies production's argument repairs, which is correct — it is
+# measuring what production would do. But an arm that changes a prompt or a
+# schema is judged on what the MODEL produced, and a repair can silently
+# convert a failing emission into a passing line.
+#
+# So the runner prints `[emitted, before repair: …]` beside the result whenever
+# repair changed something. When that annotation is present, the first half is
+# production's behaviour and the second half is the arm's result. Judging a
+# prompt change on the first half attributes the repair's work to the prompt.

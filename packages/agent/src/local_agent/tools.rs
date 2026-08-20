@@ -440,6 +440,27 @@ fn def_search_nodes() -> ToolDefinition {
                             // not the untyped leaf. Kept because a schema that
                             // states its accepted types is correct on its own
                             // terms, not as a claimed fix.
+                            //
+                            // #2182 is the counter-example, and it cuts the
+                            // other way: for the `in` operator this union IS
+                            // what produces the right shape. Two arms differing
+                            // only in this declaration
+                            // (`goldens/ablation/in-operator-array-elicited`
+                            // and `-string-declared`), 3 reps each, byte-
+                            // identical within each arm: with `array` in the
+                            // union the model emits `["cut","soak"]`; with the
+                            // bare `"string"` the earlier corpus case used, it
+                            // emits `"cut,soak"`. The malformation that issue
+                            // reported was the model complying with a schema
+                            // that asked for a string — so do not narrow this
+                            // union on the theory that the model ignores it.
+                            //
+                            // `agent_loop::repair_scalar_in_operator_values`
+                            // backstops the failing shape anyway, because a
+                            // declaration is not a guarantee and the downstream
+                            // contract is strict (`QueryService` rejects a
+                            // non-array `in` value outright rather than
+                            // matching nothing).
                             "value": {
                                 "type": ["string", "number", "boolean", "array"],
                                 "description": "Value to compare against. Use string for dates (YYYY-MM-DD), string/number for others. Use array for 'in' operator."
