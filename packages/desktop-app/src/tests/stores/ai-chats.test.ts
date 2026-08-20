@@ -49,12 +49,36 @@ describe('aiChatsData', () => {
   });
 
   describe('loadAiChats', () => {
-    it('queries ai-chat nodes with a bounded limit', async () => {
+    it('queries ai-chat nodes with no fetch-side limit', async () => {
       mockQueryNodes.mockResolvedValue([]);
 
       await aiChatsData.loadAiChats();
 
-      expect(mockQueryNodes).toHaveBeenCalledWith({ nodeType: 'ai-chat', limit: 50 });
+      // No `limit` on the query: the backend has no order-by, so a fetch-side
+      // limit would ask SQLite for an arbitrary (effectively insertion-order)
+      // subset with no ORDER BY, and sorting that subset afterward could not
+      // recover chats the LIMIT had already excluded. The display cap is
+      // applied client-side, after sorting (see the "more than DISPLAY_LIMIT"
+      // test below).
+      expect(mockQueryNodes).toHaveBeenCalledWith({ nodeType: 'ai-chat' });
+    });
+
+    it('caps the displayed list to DISPLAY_LIMIT after sorting, not before', async () => {
+      // 52 chats returned in an arbitrary (non-recency) order — id order —
+      // with only the LAST one actually being the most recent. A limit-then-
+      // sort implementation would have already dropped it from the fetch;
+      // this proves the real implementation sorts the full set first.
+      const nodes: Node[] = [];
+      for (let i = 0; i < 52; i++) {
+        nodes.push(makeChat(`chat-${i}`, `Chat ${i}`, `2026-01-01T00:00:${String(i).padStart(2, '0')}.000Z`));
+      }
+      mockQueryNodes.mockResolvedValue(nodes);
+
+      await aiChatsData.loadAiChats();
+
+      expect(aiChatsData.state.chats).toHaveLength(50);
+      // The most-recently-modified chat (chat-51) must survive the cap.
+      expect(aiChatsData.state.chats[0].id).toBe('chat-51');
     });
 
     it('sorts results most-recently-modified first, regardless of fetch order', async () => {
@@ -171,6 +195,61 @@ describe('aiChatsData', () => {
       const result = await aiChatsData.createChat();
 
       expect(result).not.toBeNull();
+      expect(aiChatsData.createError).toBe('');
+    });
+
+    it('discards a create that resolves after invalidateForDatabaseSwitch, without writing into the list', async () => {
+      let resolveCreate: (node: Node) => void = () => {};
+      mockCreateSchemaInstance.mockReturnValue(
+        new Promise<Node>((resolve) => {
+          resolveCreate = resolve;
+        })
+      );
+
+      const createPromise = aiChatsData.createChat();
+
+      // A database switch lands while the create is still in flight.
+      aiChatsData.invalidateForDatabaseSwitch();
+
+      resolveCreate(makeChat('stale-db-chat', '', '2026-06-01T00:00:00.000Z'));
+      const result = await createPromise;
+
+      expect(result).toBeNull();
+      expect(aiChatsData.state.chats).toEqual([]);
+      // The node genuinely exists (in the database that was left) — this is
+      // a discard, not a failure, so no error should be surfaced either.
+      expect(aiChatsData.createError).toBe('');
+    });
+
+    it('discards a create that FAILS after invalidateForDatabaseSwitch, without surfacing its error', async () => {
+      let rejectCreate: (err: Error) => void = () => {};
+      mockCreateSchemaInstance.mockReturnValue(
+        new Promise<Node>((_resolve, reject) => {
+          rejectCreate = reject;
+        })
+      );
+
+      const createPromise = aiChatsData.createChat();
+      aiChatsData.invalidateForDatabaseSwitch();
+      rejectCreate(new Error('boom in old database'));
+
+      const result = await createPromise;
+
+      expect(result).toBeNull();
+      // The failure belonged to a database this store no longer represents —
+      // must not bleed its error into the newly-active database's banner.
+      expect(aiChatsData.createError).toBe('');
+    });
+  });
+
+  describe('invalidateForDatabaseSwitch', () => {
+    it('clears a stale createError left over from the previous database', async () => {
+      mockCreateSchemaInstance.mockRejectedValue(new Error('duplicate in old database'));
+      await aiChatsData.createChat();
+      expect(aiChatsData.createError).toContain('duplicate in old database');
+
+      aiChatsData.invalidateForDatabaseSwitch();
+
       expect(aiChatsData.createError).toBe('');
     });
   });

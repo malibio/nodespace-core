@@ -21,13 +21,17 @@ import type { Node } from '$lib/types';
 const log = createLogger('AiChatsStore');
 
 /**
- * Cap on how many ai-chat nodes are fetched for the sidebar. The backend
- * query has no order-by (see `NodeQuery`), so this bounds the fetch — the
- * result is sorted client-side by `modifiedAt` — rather than being the
- * on-screen row count; the list itself scrolls past that, matching how
- * Collections / Schema Types handle overflow.
+ * Cap on how many ai-chat nodes are shown in the sidebar, applied AFTER
+ * sorting. The backend query has no order-by (see `NodeQuery`), so the fetch
+ * itself is unbounded — passing `limit` to `queryNodes` would ask SQLite for
+ * an arbitrary (effectively insertion-order) subset with no ORDER BY clause,
+ * and sorting that subset afterward could not recover chats the LIMIT had
+ * already excluded, silently hiding genuinely-recent ones. Fetching
+ * everything and slicing after the sort mirrors `collectionsData.loadCollections()`,
+ * which also fetches its full list with no limit. The list itself scrolls
+ * past this cap, matching how Collections / Schema Types handle overflow.
  */
-const LOAD_LIMIT = 50;
+const DISPLAY_LIMIT = 50;
 
 export interface AiChatListItem {
   id: string;
@@ -60,16 +64,30 @@ class AiChatsStore {
   /** Message from the most recent failed create, cleared on the next attempt. */
   createError = $state('');
 
+  /**
+   * Bumped whenever the store stops representing the database it did —
+   * `invalidateForDatabaseSwitch()`. An in-flight `createChat()` captures
+   * this before awaiting and discards its result if the value changed, so a
+   * create issued against the previous database cannot write its node into
+   * the store representing the newly-active one (mirrors
+   * `collectionsData`'s `#generation` guard around `createCollection`).
+   */
+  #generation = 0;
+
   /** Load ai-chat nodes from the backend, most-recently-modified first. */
   async loadAiChats(): Promise<void> {
     this.state = { ...this.state, loading: true, error: null };
 
     try {
-      const nodes = await backendAdapter.queryNodes({ nodeType: 'ai-chat', limit: LOAD_LIMIT });
+      // No `limit` on the fetch: see DISPLAY_LIMIT's comment — the backend
+      // query has no order-by, so limiting before the client-side sort could
+      // silently exclude the true most-recent chats.
+      const nodes = await backendAdapter.queryNodes({ nodeType: 'ai-chat' });
       const chats = [...nodes]
         .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+        .slice(0, DISPLAY_LIMIT)
         .map(toListItem);
-      log.debug('Loaded AI chats', { count: chats.length });
+      log.debug('Loaded AI chats', { count: chats.length, totalFetched: nodes.length });
       this.state = { ...this.state, chats, loading: false };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load AI chats';
@@ -85,18 +103,23 @@ class AiChatsStore {
    *
    * Returns the created node, or null on failure (`createError` is set for
    * the caller to surface; the caller re-enables its own button once this
-   * resolves).
+   * resolves) or when a database switch invalidated this create while it was
+   * in flight (silently discarded — the node is still persisted, in the
+   * database that was left, so there is nothing to report or retry here).
    */
   async createChat(): Promise<Node | null> {
     if (this.createBusy) return null;
+    const generation = this.#generation;
     this.createBusy = true;
     this.createError = '';
 
     try {
       const created = await createSchemaInstance('ai-chat');
+      if (generation !== this.#generation) return null;
       this.state = { ...this.state, chats: [toListItem(created), ...this.state.chats] };
       return created;
     } catch (err) {
+      if (generation !== this.#generation) return null;
       const message = err instanceof Error ? err.message : 'Failed to create chat';
       log.error('Failed to create AI chat', { error: message });
       this.createError = message;
@@ -106,9 +129,21 @@ class AiChatsStore {
     }
   }
 
-  /** Reset to initial state (test use only — no production caller needs this,
-   * same as `collectionsData.reset()`; `loadAiChats` overwrites `chats`
-   * wholesale so no explicit reset is needed on database switch). */
+  /**
+   * Invalidate any create issued against a database this store no longer
+   * represents, and drop a stale create-error banner left over from it. Call
+   * before reloading for a newly-active database (mirrors
+   * `collectionsData.forgetLocallyCreated()`); `loadAiChats` itself
+   * overwrites `chats` wholesale so no separate list reset is needed.
+   */
+  invalidateForDatabaseSwitch(): void {
+    this.#generation++;
+    this.createError = '';
+  }
+
+  /** Reset to initial state (test use only — no production caller needs
+   * this; production database switches use `invalidateForDatabaseSwitch()`
+   * followed by `loadAiChats()`, which replaces `chats` wholesale). */
   reset(): void {
     this.state = { ...initialState };
     this.createBusy = false;
