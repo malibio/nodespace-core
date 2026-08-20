@@ -51,6 +51,28 @@ it becomes correct as written. Fixed any other way, it needs rewriting and
 re-measuring rather than re-annotating.
 
 MEASURED — per-case results recorded on #2122.
+
+DIVERGENCE FROM PRODUCTION: `filters.items.properties.value`
+
+This case declares `value` as a bare `type = "string"`. Production declares the
+union `["string", "number", "boolean", "array"]` with "Use array for 'in'
+operator." So for any question about a MULTI-VALUE filter, this case does not
+reproduce production's tool surface and must not be read as validated
+production shape — the same caveat the `field_values`/`properties` note above
+makes, on a different field.
+
+This was measured, not assumed. Two arms differing only in that declaration
+(`ablation/in-operator-array-elicited.toml` and `-string-declared.toml`), 3 reps
+each and byte-identical within each arm: production's union yields
+`"value":["cut","soak"]`, this case's bare string yields `"value":"cut,soak"`.
+A report of the comma-joined form measured HERE is therefore the model
+complying with this file, not a production defect.
+
+Left as-is rather than quietly corrected: changing it changes what the model
+sees, which invalidates this case's own recorded #2122 results and obliges a
+re-measurement that is not this file's question. Whoever next needs a
+multi-value filter on this case should change the declaration AND re-run the
+case, rather than reading the current results as covering it.
 """
 
 # ---------------------------------------------------------------------------

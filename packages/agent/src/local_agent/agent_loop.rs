@@ -137,6 +137,15 @@ pub fn canonical_args(args_json: &str) -> String {
             // for a newly observed malformation reached the execution path but
             // silently not the identity, and the two sides would disagree about
             // whether a call and its retry were the same call.
+            //
+            // Note what changing this set implies. This identity is PERSISTED by
+            // the cross-turn write guard, so adding a repair means identities
+            // recorded before the change no longer match the ones computed after
+            // it, and a write guarded under the old spelling is not recognised
+            // under the new one. That is acceptable here — the window is one
+            // conversation and the failure mode is a duplicate-write prompt the
+            // model can still resolve — but it is a real consequence, not a pure
+            // refactor, and a future repair added to the set inherits it.
             repair_parsed_tool_arguments(&mut v);
             v.to_string()
         })
@@ -463,16 +472,41 @@ fn strip_spliced_delimiter_tail(s: &str) -> Option<String> {
 /// alone: a single-member `in` is still an array by the schema's own
 /// declaration, and leaving it would keep failing for the same reason.
 ///
-/// Deliberately narrower than its siblings in where it looks. Those recurse into
-/// every object at every depth because the malformations they fix are shapes the
-/// model reproduces anywhere; this one keys on `operator == "in"`, a token that
-/// only appears in a filter item, so it fires only on an object that carries it.
-/// That also means it needs no user-data denylist: `content` and `field_values`
-/// hold no `operator` sibling, so a user's prose containing a comma is never in
-/// range. Recursion still walks nested values so a filter inside `filters` (or
-/// any future nesting) is reached.
+/// Deliberately narrower than its siblings in where it looks, and narrowed by an
+/// ALLOWLIST rather than by the shape it matches.
+///
+/// The tempting version keys on `operator == "in"` alone and recurses
+/// everywhere, on the reasoning that `operator` is a filter-item token so user
+/// data can never carry it. That reasoning is wrong, and this comment used to
+/// make the claim: `field_values` holds the fields of a *user-defined* schema,
+/// and `create_schema` reserves no field names — so a type with fields named
+/// `operator` and `value` produces `{"operator":"in","value":"Acme Corp, Ltd"}`
+/// inside a WRITE tool's payload, and a shape-keyed repair silently rewrites the
+/// user's own data to `["Acme Corp","Ltd"]`. Verified against the real function
+/// before this was changed, not reasoned about.
+///
+/// So the entry point descends only into `filters`, the one parameter whose
+/// contents are the model's structural choices rather than the user's data. That
+/// is the inversion `repair_spliced_object_values`' own comment recommends for
+/// when a denylist would otherwise have to grow: a tool added later with a
+/// free-text parameter is out of range automatically, instead of being in range
+/// until someone remembers to exclude it.
 fn repair_scalar_in_operator_values(args: &mut serde_json::Value) {
-    match args {
+    let Some(obj) = args.as_object_mut() else {
+        return;
+    };
+    if let Some(filters) = obj.get_mut("filters") {
+        repair_in_operator_values_within_filters(filters);
+    }
+}
+
+/// Apply the `in`-value repair inside the `filters` subtree.
+///
+/// Recursive within that subtree only. The nesting it has to cross today is just
+/// `filters` → array → item, but walking it generally costs nothing and keeps a
+/// future grouped or nested filter shape covered without a matching fix here.
+fn repair_in_operator_values_within_filters(filters: &mut serde_json::Value) {
+    match filters {
         serde_json::Value::Object(obj) => {
             let is_in_filter = obj
                 .get("operator")
@@ -486,12 +520,12 @@ fn repair_scalar_in_operator_values(args: &mut serde_json::Value) {
                 }
             }
             for value in obj.values_mut() {
-                repair_scalar_in_operator_values(value);
+                repair_in_operator_values_within_filters(value);
             }
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                repair_scalar_in_operator_values(item);
+                repair_in_operator_values_within_filters(item);
             }
         }
         _ => {}
@@ -509,6 +543,19 @@ fn repair_scalar_in_operator_values(args: &mut serde_json::Value) {
 /// there is no intended list in it to recover, and an empty `IN ()` would match
 /// nothing while looking like a working filter, which is the one outcome this
 /// must not manufacture.
+///
+/// THE TRADEOFF, stated because it is real and cuts the other way from the bug
+/// this fixes: a single stored value that legitimately contains a comma
+/// (`"Acme, Inc."`) is split into two members that match nothing. That failure
+/// is SILENT — well-formed SQL returning zero rows — where the malformation
+/// being repaired is loud. It is accepted on the grounds that a comma is the
+/// only separator a JSON string leaves available for a list, so the split is the
+/// only reading available; that the caller-side allowlist keeps this inside
+/// `filters`, where the values are enum members and identifiers rather than
+/// prose; and that the alternative is failing every multi-value filter to
+/// protect a comma-bearing one. Reconsider it if filters ever routinely compare
+/// against free text — the honest fix then is a real array on the wire, not a
+/// cleverer split.
 fn split_in_operator_values(s: &str) -> Option<Vec<serde_json::Value>> {
     let values: Vec<serde_json::Value> = s
         .split(',')
@@ -7672,28 +7719,42 @@ mod tests {
     /// leaving it a bare string would keep failing for the reason this exists.
     #[test]
     fn in_operator_values_are_trimmed_and_single_values_are_wrapped() {
-        let mut spaced = serde_json::json!({"operator": "in", "value": "cut, soak , shipped"});
-        repair_scalar_in_operator_values(&mut spaced);
+        // Wrapped in `filters` because that is the only slot the repair walks —
+        // a bare filter-shaped object is deliberately out of range, and the test
+        // has to exercise the real entry point rather than a shape that would
+        // only work if the scoping were absent.
+        let repaired_value = |raw: serde_json::Value| {
+            let mut args = serde_json::json!({
+                "filters": [{"operator": "in", "property": "stage", "value": raw}]
+            });
+            repair_scalar_in_operator_values(&mut args);
+            args["filters"][0]["value"].clone()
+        };
+
         assert_eq!(
-            spaced["value"],
+            repaired_value(serde_json::json!("cut, soak , shipped")),
             serde_json::json!(["cut", "soak", "shipped"])
         );
 
-        let mut single = serde_json::json!({"operator": "in", "value": "soak"});
-        repair_scalar_in_operator_values(&mut single);
-        assert_eq!(single["value"], serde_json::json!(["soak"]));
+        assert_eq!(
+            repaired_value(serde_json::json!("soak")),
+            serde_json::json!(["soak"])
+        );
 
         // A trailing comma is a typo, not a filter on the empty string.
-        let mut trailing = serde_json::json!({"operator": "in", "value": "cut,soak,"});
-        repair_scalar_in_operator_values(&mut trailing);
-        assert_eq!(trailing["value"], serde_json::json!(["cut", "soak"]));
+        assert_eq!(
+            repaired_value(serde_json::json!("cut,soak,")),
+            serde_json::json!(["cut", "soak"])
+        );
     }
 
-    /// The repair keys on `operator == "in"`, so nothing else in the payload is
-    /// in range: another operator's value keeps its scalar shape, an `in` that
-    /// already sent an array is untouched, and a value with no members left
-    /// after splitting stays exactly as sent rather than becoming an empty
-    /// `IN ()` that matches nothing while looking like a working filter.
+    /// Within `filters`, only a scalar `in` value is in range: another
+    /// operator's value keeps its scalar shape, an `in` that already sent an
+    /// array is untouched, a non-string value is left alone, and a value with no
+    /// members left after splitting stays exactly as sent rather than becoming
+    /// an empty `IN ()` that matches nothing while looking like a working
+    /// filter. The `content` and `field_values` entries are covered by their own
+    /// test — here they only confirm siblings of `filters` are not walked.
     #[test]
     fn in_operator_repair_leaves_everything_else_untouched() {
         let original = serde_json::json!({
@@ -7705,9 +7766,6 @@ mod tests {
                 {"operator": "in", "property": "stage", "value": " , "},
                 {"operator": "in", "property": "count", "value": 3},
             ],
-            // No `operator` sibling, so user prose is never in range — the
-            // denylist the value-rewriting sibling repair needs is unnecessary
-            // here by construction.
             "content": "cut, soak",
             "field_values": {"notes": "cut,soak"}
         });
@@ -7717,6 +7775,55 @@ mod tests {
             v, original,
             "only a scalar string under an `in` operator, carrying at least one \
              member, is this repair's to rewrite"
+        );
+    }
+
+    /// The repair rewrites *values*, so it must never reach the user's own data.
+    ///
+    /// `field_values` carries the fields of a user-DEFINED schema and
+    /// `create_schema` reserves no field names, so a type with fields called
+    /// `operator` and `value` produces exactly the shape a filter item has. A
+    /// repair keyed on that shape alone would silently rewrite a stored company
+    /// name into two members — inside a write tool, and with no error anywhere.
+    /// Scoping the entry point to the `filters` slot is what makes it safe, and
+    /// this pins that: the previous version of this test looked like it covered
+    /// the case but its entries carried no `operator` key, so it asserted a
+    /// property the code did not have.
+    #[test]
+    fn in_operator_repair_never_touches_user_authored_field_values() {
+        let original = serde_json::json!({
+            "id": "node-1",
+            "field_values": {
+                "operator": "in",
+                "value": "Acme Corp, Ltd",
+                "nested": {"operator": "in", "value": "a,b"}
+            },
+            "content": "cut,soak"
+        });
+        let mut v = original.clone();
+        repair_scalar_in_operator_values(&mut v);
+        assert_eq!(
+            v, original,
+            "a user-defined field named `operator` must not turn their stored \
+             value into a list"
+        );
+
+        // A top-level object shaped like a filter item is likewise out of range:
+        // only the `filters` parameter is this repair's to walk.
+        let mut bare = serde_json::json!({"operator": "in", "value": "a,b"});
+        let bare_before = bare.clone();
+        repair_scalar_in_operator_values(&mut bare);
+        assert_eq!(bare, bare_before);
+
+        // And the slot that IS in range still works, so the scoping did not
+        // silently disable the repair.
+        let mut scoped = serde_json::json!({
+            "filters": [{"operator": "in", "property": "stage", "value": "cut,soak"}]
+        });
+        repair_scalar_in_operator_values(&mut scoped);
+        assert_eq!(
+            scoped["filters"][0]["value"],
+            serde_json::json!(["cut", "soak"])
         );
     }
 
