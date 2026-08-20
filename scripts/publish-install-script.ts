@@ -50,11 +50,17 @@ export const WEBSITE_REPO = "NodeSpaceAI/nodespace-website";
 // separately), and install.sh's own direct-download path already degrades
 // to a clear error message on unsupported platforms rather than assuming
 // every target always exists.
-const REQUIRED_HEADLESS_TARGETS = [
+//
+// Exported: update-homebrew-formula.ts's own required-target set is this
+// same list (the `nodespace-cli` Homebrew formula ships prebuilt binaries
+// for exactly the targets install.sh does). Sharing one list rather than
+// maintaining two prevents them silently drifting apart the way the cask
+// and this pin once did independently of each other.
+export const REQUIRED_HEADLESS_TARGETS = [
   "aarch64-apple-darwin",
   "aarch64-unknown-linux-gnu",
   "x86_64-unknown-linux-gnu",
-];
+] as const;
 
 export function normalizeTag(version: string): string {
   return version.startsWith("v") ? version : `v${version}`;
