@@ -27,17 +27,17 @@
  *                                                                 # (loud) on mismatch
  *
  * `--push` requires HOMEBREW_TAP_TOKEN: a PAT (or fine-grained token) with
- * `contents: write` on NodeSpaceAI/homebrew-nodespace, set as a repo secret
- * once this is wired into the release flow. `secrets.GITHUB_TOKEN` is scoped
- * to nodespace-core only and cannot push cross-repo.
+ * `contents: write` on NodeSpaceAI/homebrew-nodespace, set as a repo secret.
+ * `secrets.GITHUB_TOKEN` is scoped to nodespace-core only and cannot push
+ * cross-repo.
  *
- * Where this hooks in: after `scripts/release.ts` creates a release and
- * `release.yml` finishes uploading assets (DMGs included), run
- *   bun run scripts/update-homebrew-cask.ts <version> --push
- * See release.yml's `upload-checksums` job for the shape of "wait for assets,
- * then do one more thing" — this script is a natural sibling job there, or a
- * manual step run right after `bun run release:watch` reports the build
- * finished, until it is wired into CI directly.
+ * Where this hooks in: release.yml's `sync-homebrew-cask` job runs this
+ * script with `--push` on the `release` event, gated on `build-tauri-macos-arm`
+ * (deliberately not on `build-tauri`, so a Windows build failure cannot
+ * block the cask sync — see that job's comments for why). If it fails, the
+ * workflow's `notify-failure` job opens an issue. `homebrew-drift-check.yml`
+ * is an independent scheduled backstop that catches a stale cask even if
+ * the sync job itself was skipped or failed silently.
  */
 
 import { $ } from "bun";
@@ -65,18 +65,26 @@ export interface ReleaseAsset {
   url: string;
 }
 
+// Apple Silicon (arm64) is the only supported macOS target: there is no way
+// to verify x86_64 (Intel) macOS builds, and shipping a build nobody can
+// test is worse than not shipping it at all (same reasoning
+// publish-install-script.ts's REQUIRED_HEADLESS_TARGETS comment documents
+// for excluding x86_64-apple-darwin there). This is reversible -- re-adding
+// an architecture later means restoring a suffix map (like the
+// `ARCH_SUFFIX: Record<"arm" | "intel", string>` this file used to have)
+// and a second rendering branch in renderCask() (on_arm/on_intel).
 export interface ArchDigest {
-  arch: "arm" | "intel";
+  arch: "arm";
   fileName: string;
   sha256: string;
 }
 
-// The per-architecture .dmg filename suffix release.yml / tauri-action
-// produce -- e.g. NodeSpace_0.2.0_aarch64.dmg. Used both to look up the real
-// release asset (with the resolved version) and to build the cask's url
-// stanza (with Ruby's `#{version}` interpolation, so a future manual glance
-// at the file matches how casks are conventionally written).
-const ARCH_SUFFIX: Record<"arm" | "intel", string> = { arm: "aarch64", intel: "x64" };
+// The Apple Silicon .dmg filename suffix release.yml / tauri-action produce
+// -- e.g. NodeSpace_0.2.0_aarch64.dmg. Used both to look up the real release
+// asset (with the resolved version) and to build the cask's url stanza
+// (with Ruby's `#{version}` interpolation, so a future manual glance at the
+// file matches how casks are conventionally written).
+const ARCH_SUFFIX_AARCH64 = "aarch64";
 
 export function normalizeVersion(version: string): string {
   return version.replace(/^v/, "");
@@ -107,46 +115,59 @@ export async function downloadAndHash(url: string, destPath: string): Promise<st
 }
 
 export interface ArchDigestResult {
-  arm?: ArchDigest;
-  intel?: ArchDigest;
-  missing: string[];
+  arm: ArchDigest;
 }
 
-/** Resolves per-architecture .dmg digests from the actual published release
- * assets. Missing architectures are reported, not fatal — a release that
- * only ships one macOS architecture (as v0.2.0 does — see
- * NodeSpaceAI/nodespace-core#2154) still produces a valid, honest cask. */
+/** Resolves the Apple Silicon .dmg digest from the actual published release
+ * assets. There is no other macOS architecture to fall back to, so a
+ * missing arm asset is a hard error, not a warning -- see the file header
+ * comment on why Apple Silicon is the only target. */
 export async function resolveArchDigests(
   version: string,
   workDir: string,
 ): Promise<ArchDigestResult> {
   const v = normalizeVersion(version);
   const assets = await fetchReleaseAssets(version);
-  const wanted: Record<"arm" | "intel", string> = {
-    arm: `NodeSpace_${v}_${ARCH_SUFFIX.arm}.dmg`,
-    intel: `NodeSpace_${v}_${ARCH_SUFFIX.intel}.dmg`,
-  };
+  const fileName = `NodeSpace_${v}_${ARCH_SUFFIX_AARCH64}.dmg`;
 
-  const result: ArchDigestResult = { missing: [] };
-  for (const [arch, fileName] of Object.entries(wanted) as ["arm" | "intel", string][]) {
-    const asset = assets.find((a) => a.name === fileName);
-    if (!asset) {
-      result.missing.push(fileName);
-      continue;
-    }
-    const sha256 = await downloadAndHash(asset.url, join(workDir, fileName));
-    result[arch] = { arch, fileName, sha256 };
+  const asset = assets.find((a) => a.name === fileName);
+  if (!asset) {
+    throw new Error(
+      `release v${v} is missing its Apple Silicon build (${fileName}) -- cannot render a cask ` +
+        "with no macOS artifact to point at.",
+    );
   }
-  return result;
+  const sha256 = await downloadAndHash(asset.url, join(workDir, fileName));
+  return { arm: { arch: "arm", fileName, sha256 } };
 }
 
 const CASK_HEADER = (version: string) => `cask "nodespace" do
   version "${version}"`;
 
+// Matches the platform-support note already published in
+// NodeSpaceAI/homebrew-nodespace's Casks/nodespace.rb word for word -- kept
+// here so a fresh render from this generator reproduces that file
+// byte-for-byte instead of drifting from the wording that's actually live.
+// If this note ever needs to change, update it in both places together.
+const ARCH_NOTE = `  # Apple Silicon (arm64) is the only supported macOS target. This is an
+  # intentional decision, not a leftover workaround: there is no way to
+  # verify x86_64 (Intel) macOS builds, and shipping a build nobody can
+  # test is worse than not shipping it at all. It's reversible if that
+  # changes -- Intel Mac users can build nodespace-core from source in
+  # the meantime.`;
+
+const NAME_BLOCK = `  name "NodeSpace"
+  desc "AI-native local-first knowledge management"
+  homepage "https://nodespace.app/"`;
+
 // Stanza order matters to `brew style`/`brew audit --cask`: livecheck comes
 // right after name/desc/homepage, before depends_on -- verified against
 // `brew style --fix`'s own canonical reordering.
 const LIVECHECK_BLOCK = `
+  # Explicit github_latest strategy: without this, brew's default livecheck
+  # falls back to scanning ALL repo tags, which picks up unrelated
+  # \`review-*\` tooling tags (e.g. review-20260813-095222) instead of the
+  # actual latest published release -- see NodeSpaceAI/nodespace-core#2114.
   livecheck do
     url :url
     strategy :github_latest
@@ -168,60 +189,31 @@ end
 // too (matching the resolved digest's fileName, just not hardcoded to the
 // current version) -- conventional cask style, and means a reader diffing
 // this file sees the same pattern regardless of which version generated it.
-const urlFileName = (arch: "arm" | "intel") => `NodeSpace_#{version}_${ARCH_SUFFIX[arch]}.dmg`;
+const ARM_URL_FILENAME = `NodeSpace_#{version}_${ARCH_SUFFIX_AARCH64}.dmg`;
 
-/** Renders the full Casks/nodespace.rb content for the digests actually
- * available. Two architectures -> on_arm/on_intel branches; exactly one ->
- * a single top-level url/sha256 scoped with `depends_on arch:`. Never
- * renders a URL for an architecture with no confirmed digest. */
+/** Renders the full Casks/nodespace.rb content for the resolved Apple
+ * Silicon digest -- the only architecture this generator targets (see the
+ * comment on ArchDigest above for why). resolveArchDigests() throws before
+ * returning if that digest isn't available, so there is no "missing
+ * architecture" case to render around here -- a cask is only ever rendered
+ * for a confirmed, downloaded, hashed asset. */
 export function renderCask(version: string, digests: ArchDigestResult): string {
   const v = normalizeVersion(version);
-  if (!digests.arm && !digests.intel) {
-    throw new Error(
-      `no per-architecture digest available for v${v} — cannot render a cask (missing: ${digests.missing.join(", ")})`,
-    );
-  }
-
-  const nameBlock = `  name "NodeSpace"
-  desc "AI-native local-first knowledge management"
-  homepage "https://nodespace.app/"`;
-
-  if (digests.arm && digests.intel) {
-    return `${CASK_HEADER(v)}
-
-  on_arm do
-    sha256 "${digests.arm.sha256}"
-
-    url "https://github.com/${CORE_REPO}/releases/download/v#{version}/${urlFileName("arm")}"
-  end
-  on_intel do
-    sha256 "${digests.intel.sha256}"
-
-    url "https://github.com/${CORE_REPO}/releases/download/v#{version}/${urlFileName("intel")}"
-  end
-
-${nameBlock}
-${LIVECHECK_BLOCK}
-
-  depends_on macos: :${MIN_MACOS}
-${CASK_FOOTER(CASK_BINARY_PATH)}`;
-  }
-
-  const only = (digests.arm ?? digests.intel) as ArchDigest;
-  const archNote =
-    only.arch === "arm"
-      ? `  # v${v} ships an Apple Silicon build only -- ${digests.missing.join(", ")} is not\n  # in this release. See NodeSpaceAI/nodespace-core#2154.\n`
-      : `  # v${v} ships an Intel build only -- ${digests.missing.join(", ")} is not\n  # in this release.\n`;
+  const { arm } = digests;
 
   return `${CASK_HEADER(v)}
-  sha256 "${only.sha256}"
+  sha256 "${arm.sha256}"
 
-${archNote}  url "https://github.com/${CORE_REPO}/releases/download/v#{version}/${urlFileName(only.arch)}"
-${nameBlock}
+${ARCH_NOTE}
+  url "https://github.com/${CORE_REPO}/releases/download/v#{version}/${ARM_URL_FILENAME}"
+${NAME_BLOCK}
 ${LIVECHECK_BLOCK}
 
+  # release.yml builds with MACOSX_DEPLOYMENT_TARGET=14.0 (Metal GPU
+  # embeddings require Sonoma+ -- see #990).
   depends_on macos: :${MIN_MACOS}
-  depends_on arch:  :${only.arch === "arm" ? "arm64" : "x86_64"}
+  # arm64-only by design -- see the platform-support note above the \`url\` line.
+  depends_on arch:  :arm64
 ${CASK_FOOTER(CASK_BINARY_PATH)}`;
 }
 
@@ -372,11 +364,6 @@ async function main(): Promise<void> {
   const workDir = mkdtempSync(join(tmpdir(), "nodespace-cask-assets-"));
   try {
     const digests = await resolveArchDigests(command, workDir);
-    if (digests.missing.length > 0) {
-      console.warn(
-        `⚠ missing release assets, cask will omit those architectures: ${digests.missing.join(", ")}`,
-      );
-    }
     const content = renderCask(command, digests);
     console.log("--- Casks/nodespace.rb ---");
     console.log(content);
