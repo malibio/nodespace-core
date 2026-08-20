@@ -1,0 +1,198 @@
+# derived-from: dev-relationship-creation.toml -- subtree minimised per the KEEP/DROP rule.
+name = "dev-relationship-creation-minimal"
+reps = 5
+
+notes = """
+MINIMAL-SUBTREE SWEEP -- dev-relationship-creation
+
+The editorial rule applied here, chosen by what a schema CAN and CANNOT state:
+
+  KEEP  a sentence stating something no parameter schema and no EXISTING SCHEMAS
+        block can express -- an ontological distinction (kind vs instance,
+        reference-as-field) or an instruction to act on something ABSENT from
+        the declared surface (a value with no matching field).
+  DROP  a sentence a schema already carries -- argument shape, required-ness,
+        enum membership, key spelling, "call X now", or a restatement of the
+        tool description.
+
+Kept for this case: "DIRECTION: from_id is the record that ACTS, to_id is the record acted upon."
+
+EVIDENCE THIS RULE RESTS ON (dev-schema-creation, 3 reps each, byte-identical):
+
+  whole subtree, 786 chars              supersedes PRESENT
+  ONE TYPE rule alone, 2 sentences      PRESENT
+  ONE TYPE rule alone, 1 terse clause   PRESENT
+  ENUM rule alone, 2 sentences          PRESENT
+  FIELDS rule alone                     ABSENT
+  FIELDS expanded to 2 sentences        ABSENT
+  an irrelevant 2-sentence rule         MALFORMED OUTPUT
+  no subtree at all                     ABSENT
+
+Terse-but-on-topic works; long-but-off-topic does not, and off-topic prose in the
+slot is worse than an empty slot. Confirmed at production fidelity (9 tools, 3
+candidates) by ablation/minimal-at-fidelity.toml, 5/5.
+
+BASE RESULT: create_relationship, correct direction
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — surface both ADRs, so both ids are real.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-list-adrs"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Search
+Purpose: Find, list, or filter existing records by title, type, or stored \
+field value.
+
+DIRECTION: from_id is the record that ACTS, to_id is the record acted upon.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+"""
+user = "Show me our ADRs"
+expect = """
+search_nodes(node_type="adr", query="") — an empty query listing the type, \
+not a free-text search for the word "ADRs".
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "1d7e4b03-8f26-4c91-a35d-9e2b7f4a6c18", "title": "ADR-04: Cache invalidation by TTL", "node_type": "adr", "properties": {"status": "accepted"}}, {"id": "6b09c5d2-3a14-4f78-9e26-8d51a3c7b904", "title": "ADR-12: Cache invalidation by event", "node_type": "adr", "properties": {"status": "accepted"}}], "count": 2}
+  """
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `adr`), never the quoted display name that follows it (e.g. \"ADR\")."
+
+# ---------------------------------------------------------------------------
+# Turn 2 — the link. Direction is the measurement.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-supersedes-link"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Relationships
+Purpose: Record that one existing record stands in a named relation to \
+another — supersedes, blocks, belongs to.
+
+DIRECTION: from_id is the record that ACTS, to_id is the record acted upon.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+"""
+user = "ADR-12 replaces the old caching one"
+expect = """
+create_relationship(from_id=<ADR-12: 6b09c5d2-...>, to_id=<ADR-04: \
+1d7e4b03-...>, relationship_type="supersedes"). Two failures worth telling \
+apart: reversed ids record the opposite fact while reporting success, and \
+update_node writing the `supersedes` text field instead expresses the link in \
+the wrong channel — that tool is on the surface precisely so the choice is \
+real.
+"""
+
+  [turn.tool_results]
+  create_relationship = '{"ok": true}'
+
+  [[turn.tool]]
+  name = "create_relationship"
+  description = """
+  Record a named relationship between two existing records, given both ids. \
+  Use this whenever the user describes one record standing in a relation to \
+  another — superseding, blocking, belonging to — rather than writing that \
+  relation into a text field.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["from_id", "to_id", "relationship_type"]
+
+      [turn.tool.parameters_schema.properties.from_id]
+      type = "string"
+      description = "Id of the record that acts — the one doing the superseding, blocking, or belonging. Copied exactly from a tool result."
+
+      [turn.tool.parameters_schema.properties.to_id]
+      type = "string"
+      description = "Id of the record acted upon — the one being superseded, blocked, or belonged to. Copied exactly from a tool result."
+
+      [turn.tool.parameters_schema.properties.relationship_type]
+      type = "string"
+      description = "The relation's name, lowercase snake_case (e.g. supersedes, blocks, belongs_to)."
+
+  [[turn.tool]]
+  name = "update_node"
+  description = """
+  Update an existing node's own fields. Use for a value the record holds about \
+  itself, not for a relation between two records — a link between two \
+  existing records is create_relationship.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+
+      [turn.tool.parameters_schema.properties.id]
+      type = "string"
+      description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
+
+      # Declared sub-properties mirroring the `ticket` type's own fields — the
+      # pattern dev-instance-creation.toml established after eight
+      # wording-level arms failed to carry a value the schema did not declare.
+      # Applied here for consistency and to check it does not regress a case
+      # that already passed.
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The change itself: field keys to new values. When a field lists allowed values, use one of those values exactly."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["proposed", "accepted", "superseded"]
+        description = "The ADR's status."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.supersedes]
+        type = "string"
+        description = "Which ADR this one replaces, when recorded as a field on the ADR itself rather than as a relationship between two records."

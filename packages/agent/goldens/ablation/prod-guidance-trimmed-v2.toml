@@ -1,0 +1,154 @@
+# derived-from: dev-schema-creation.toml, guidance swapped for production text.
+name = "prod-guidance-trimmed-v2"
+reps = 5
+
+notes = """
+PRODUCTION GUIDANCE -- trimmed-v2
+
+Every prior arm used the corpus's hand-authored guidance. This one swaps in the
+REAL text from packages/agent/src/skill_rules.rs, extracted at generation time so
+it cannot drift from source, onto a case whose correct answer is already measured
+(dev-schema-creation: create_schema "Architecture Decision Record" with BOTH
+status (enum, [proposed, accepted]) and supersedes (text), 3/3).
+
+Contains 4 of 10 production rules (1,456 chars): ONE_SCHEMA_PER_REQUEST, FIELDS_FROM_REQUEST_ONLY, ENUM_FORMAT, TARGET_TYPE_MUST_EXIST
+
+WHY MEASURE PRODUCTION TEXT SEPARATELY
+
+The KEEP/DROP rule was derived and validated on the corpus's guidance, which is
+shorter and differently worded than production's. Applying it to source without
+testing it there would repeat the exact error this investigation exists to
+correct -- a conclusion measured on one prompt and applied to a different one.
+
+KEEP/DROP as applied here:
+  KEEP  ontological distinctions, and rules that act on something ABSENT from the
+        declared surface (derive fields from the request not from EXISTING
+        SCHEMAS; omit a relationship whose target does not exist).
+  DROP  anything a parameter schema already carries -- title_template, unique
+        flags, rename_fields' from/to/friendlyName shape, update_schema's
+        purpose, and "success means stop" restatements of the tool result.
+"""
+
+[[turn]]
+label = "create-adr-type"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Schema Creation
+Purpose: Define a new kind of record the workspace does not track yet, when \
+the user describes a category of thing rather than one particular instance.
+
+ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "ADR", do not also create "Ticket" or "Sprint"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in EXISTING SCHEMAS; if it doesn't, omit the relationship rather than creating the other type.
+
+FIELD SOURCE: derive every field from what the user's OWN request describes wanting to track â never from another schema shown in EXISTING SCHEMAS. That block lists types that already exist so you don't recreate them; it is not a shape to copy fields from for a new, different type. A new type about releases does not inherit fields from an unrelated ticket or adr schema just because one is listed there.
+
+ENUMS: Use lowercase values with readable labels, e.g. `{"value": "in_progress", "label": "In Progress"}`.
+
+The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt â do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:
+- ADR supersedes adr (one): `{"name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one"}`
+- Ticket has_task task (many): `{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}`
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = """
+We need to start tracking architecture decision records — each one has a \
+status, moving from proposed to accepted, and sometimes one supersedes an \
+older one
+"""
+expect = """
+create_schema, exactly ONCE, defining a status field of type enum whose \
+allowed_values include proposed and accepted, plus a field for the supersedes \
+relationship. Failures worth telling apart: an enum declared with no \
+allowed_values, a second create_schema for the superseded record, and any \
+field copied off `ticket` (assignee, sprint) that this request never mentioned.
+"""
+
+  [turn.tool_results]
+  create_schema = '{"ok": true, "type_id": "adr", "note": "Type created. The id is derived from the name: lowercased, spaces to underscores."}'
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = """
+  Define a new entity type with its fields. Use when the user describes a kind \
+  of record the workspace does not track yet, not a single instance of an \
+  existing kind. The example shows one field per detail the user mentioned, \
+  including "blocks another ticket" as a field rather than a second type. \
+  Example call: {"name": "Ticket", "fields": [{"name": "status", "type": \
+  "enum", "allowed_values": ["ready_for_dev", "in_dev", "done"]}, {"name": \
+  "assignee", "type": "text"}, {"name": "blocks", "type": "text"}]}
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["name", "fields"]
+
+      [turn.tool.parameters_schema.properties.name]
+      type = "string"
+      description = "Display name for the type, singular (e.g. \"Ticket\", \"ADR\")."
+
+      # Deliberately plain. An earlier version spelled out the obligation here
+      # ("work through the user's message detail by detail ... a detail with no
+      # field is silently lost") and measured NO effect, 3/3. The worked
+      # example in the tool description is what moved it — see the notes.
+      [turn.tool.parameters_schema.properties.fields]
+      type = "array"
+      description = "Every field this type needs, listed explicitly. Do not include a title or name field — every record already has a title."
+
+        [turn.tool.parameters_schema.properties.fields.items]
+        type = "object"
+        required = ["name", "type"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.name]
+          type = "string"
+          description = "Field name, lowercase snake_case (e.g. status, due_date)."
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.type]
+          type = "string"
+          enum = ["text", "number", "date", "enum", "boolean"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.required]
+          type = "boolean"
+          description = "Whether every record of this type must carry a value."
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.allowed_values]
+          type = "array"
+          description = "Required and non-empty when type is \"enum\": every legal value for the field, lowercase snake_case (e.g. [\"proposed\", \"accepted\"])."
+
+            [turn.tool.parameters_schema.properties.fields.items.properties.allowed_values.items]
+            type = "string"
+
+  [[turn.tool]]
+  name = "create_node"
+  description = """
+  Create one new record of a type that already exists. Use for a single \
+  instance, never to define a new kind of record.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["node_type", "content"]
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Type id, copied exactly from EXISTING SCHEMAS."
+
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "The record's title."
+
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "Field values for this record."

@@ -1,0 +1,230 @@
+# derived-from: dev-status-change-enum.toml -- subtree minimised per the KEEP/DROP rule.
+name = "dev-status-change-enum-minimal"
+reps = 5
+
+notes = """
+MINIMAL-SUBTREE SWEEP -- dev-status-change-enum
+
+The editorial rule applied here, chosen by what a schema CAN and CANNOT state:
+
+  KEEP  a sentence stating something no parameter schema and no EXISTING SCHEMAS
+        block can express -- an ontological distinction (kind vs instance,
+        reference-as-field) or an instruction to act on something ABSENT from
+        the declared surface (a value with no matching field).
+  DROP  a sentence a schema already carries -- argument shape, required-ness,
+        enum membership, key spelling, "call X now", or a restatement of the
+        tool description.
+
+Nothing survives the KEEP test for this case: every rule its subtree states is already carried by a parameter schema or by EXISTING SCHEMAS, so the subtree is dropped entirely.
+
+EVIDENCE THIS RULE RESTS ON (dev-schema-creation, 3 reps each, byte-identical):
+
+  whole subtree, 786 chars              supersedes PRESENT
+  ONE TYPE rule alone, 2 sentences      PRESENT
+  ONE TYPE rule alone, 1 terse clause   PRESENT
+  ENUM rule alone, 2 sentences          PRESENT
+  FIELDS rule alone                     ABSENT
+  FIELDS expanded to 2 sentences        ABSENT
+  an irrelevant 2-sentence rule         MALFORMED OUTPUT
+  no subtree at all                     ABSENT
+
+Terse-but-on-topic works; long-but-off-topic does not, and off-topic prose in the
+slot is worse than an empty slot. Confirmed at production fidelity (9 tools, 3
+candidates) by ablation/minimal-at-fidelity.toml, 5/5.
+
+BASE RESULT: turn1 search_nodes exact enum in_dev; turn2 update_node real uuid + ready_for_review
+"""
+
+# ---------------------------------------------------------------------------
+# Turn 1 — find the ticket. Exists so turn 2's id is a real tool result.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn1-find-ticket"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Search
+Purpose: Find, list, or filter existing records by title, type, or stored \
+field value.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = "Which tickets are still in dev?"
+expect = """
+search_nodes(node_type="ticket", ...) filtering status to the exact enum \
+member "in_dev" — not "in dev", not "In Dev". A title-text query instead of a \
+status filter is the miss worth noting.
+"""
+
+  [turn.tool_results]
+  search_nodes = """
+  {"results": [{"id": "7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", "title": "Token refresh returns 401 after idle", "node_type": "ticket", "properties": {"status": "in_dev", "assignee": "dana", "sprint": "S-24"}}], "count": 1}
+  """
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields. Use when the node you need is not already \
+  identified in this conversation.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      # The type id is the unquoted token, not the quoted display name beside
+      # it. Naming both halves of the line is what makes the distinction
+      # actionable — "copied exactly" alone left the model sending "Ticket".
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id. Use the unquoted id at the start of the EXISTING SCHEMAS line (e.g. `ticket`), never the quoted display name that follows it (e.g. \"Ticket\")."
+
+      [turn.tool.parameters_schema.properties.filters]
+      type = "array"
+      description = "Field filters. Use the field name and value exactly as listed for the type."
+
+        [turn.tool.parameters_schema.properties.filters.items]
+        type = "object"
+        required = ["type", "operator", "property", "value"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.type]
+          type = "string"
+          enum = ["property"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.operator]
+          type = "string"
+          enum = ["equals", "contains", "gt", "lt", "gte", "lte", "in", "exists"]
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.property]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.filters.items.properties.value]
+          type = "string"
+
+# ---------------------------------------------------------------------------
+# Turn 2 — the write. The case's real subject.
+# ---------------------------------------------------------------------------
+[[turn]]
+label = "turn2-status-to-ready-for-review"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+- adr "ADR" -> title: text, required; status: enum {proposed,accepted,superseded}, required; supersedes: text
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Node Update
+Purpose: Change a field on an existing record — status, assignee, dates, or \
+any stored value — when the user describes a new state for something that \
+already exists.
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- ticket "Ticket" -> title: text, required; status: enum {ready_for_dev,in_dev,ready_for_review,in_review,done}, required; assignee: text; sprint: text [title_template: {title}]
+"""
+user = "I've pushed the branch for that one — it's ready for review now"
+expect = """
+update_node carrying BOTH the id from turn 1's real tool result \
+("7f3a1c92-4b6e-4d18-9a05-2e7c8b4f1d63", not the ticket's title) AND \
+field_values={"status": "ready_for_review"} — the exact enum member, not \
+"review" / "In Review" / "ready for review". Two distinct failures worth \
+telling apart: a title in `id` means the id never reached the model, and an \
+absent or empty `field_values` means the write silently changes nothing.
+"""
+
+  [turn.tool_results]
+  update_node = '{"ok": true, "updated": ["status"]}'
+
+  [[turn.tool]]
+  name = "update_node"
+  description = """
+  Update an existing node's fields immediately — call this directly with the \
+  node id you already have from a previous tool result. Do not ask the user \
+  to confirm or supply the id. An id on its own changes nothing: every call \
+  must also carry the change itself in field_values.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["id"]
+
+      [turn.tool.parameters_schema.properties.id]
+      type = "string"
+      description = "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title."
+
+      [turn.tool.parameters_schema.properties.content]
+      type = "string"
+      description = "New title text. Only when the user is renaming the node."
+
+      # Single-line, deliberately: `normalize_case_text` applies to the case's
+      # own prompt fields, not to strings nested inside a tool's JSON Schema —
+      # a `"""` block here reaches the model with its TOML indent and a
+      # trailing newline embedded in the description. Verified with --check.
+      # Declared sub-properties mirroring the `ticket` type's own fields — the
+      # pattern dev-instance-creation.toml established after eight
+      # wording-level arms failed to carry a value the schema did not declare.
+      # Applied here for consistency and to check it does not regress a case
+      # that already passed.
+      [turn.tool.parameters_schema.properties.field_values]
+      type = "object"
+      description = "The change itself: field keys to new values, e.g. {\"status\": \"done\"}. Required whenever the request changes the node's state rather than its title. Use a field the type defines, copied exactly. When a field lists allowed values, use one of those values exactly. Send only the keys that change."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.status]
+        type = "string"
+        enum = ["ready_for_dev", "in_dev", "ready_for_review", "in_review", "done"]
+        description = "The ticket's workflow state."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.assignee]
+        type = "string"
+        description = "Who the work is assigned to."
+
+        [turn.tool.parameters_schema.properties.field_values.properties.sprint]
+        type = "string"
+        description = "The sprint identifier."
+
+  [[turn.tool]]
+  name = "search_nodes"
+  description = """
+  Find, list, and filter nodes by title, type, or stored field value. Returns \
+  each node's id and fields. Use when the node you need is not already \
+  identified in this conversation.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["query"]
+
+      [turn.tool.parameters_schema.properties.query]
+      type = "string"
+      description = "Free-text title match. Empty string lists every node of node_type."
+
+      [turn.tool.parameters_schema.properties.node_type]
+      type = "string"
+      description = "Restrict to one type id, copied exactly from EXISTING SCHEMAS."
