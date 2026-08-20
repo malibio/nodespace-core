@@ -196,7 +196,14 @@ const RESOLVE_QUERY_MATCH_LIMIT: usize = 10;
 /// `{`, then tracks brace depth (ignoring braces inside string literals) to
 /// find its matching close, rather than requiring the whole response to be
 /// bare JSON.
-fn extract_json_object(text: &str) -> Option<&str> {
+///
+/// `pub` so the decomposition measurement harness
+/// (`tests/live_resolve_query_decomposition_shapes.rs`) can classify raw model
+/// output through the *same* extraction production uses. That harness exists to
+/// describe production's behavior, which it can only do by sharing this code —
+/// a re-implementation there would be a second thing to keep in step, and the
+/// measurement would quietly start describing the copy instead.
+pub fn extract_json_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let bytes = text.as_bytes();
     let mut depth = 0i32;
@@ -2204,9 +2211,13 @@ impl GraphToolExecutor {
             // `multiple_matches` over every node of the type, with nothing on
             // the wire to say why. That is how the bare-date malformation went
             // unnoticed until it was measured.
+            // Logs what the MODEL emitted, not the post-repair slice. When this
+            // fires the repairs above did not rescue it, so the repaired text
+            // is the less informative of the two — the raw emission is what
+            // names the shape a future repair would have to cover.
             tracing::warn!(
                 error = %e,
-                raw = %truncate(&json_slice, 512),
+                raw = %truncate(&text, 512),
                 "resolve_query: decomposition output did not parse as JSON — \
                  falling back to an empty resolution"
             );
@@ -2237,11 +2248,15 @@ impl GraphToolExecutor {
         //
         // That gap was measured rather than assumed — 33 decompositions across
         // the corpus in `tests/live_resolve_query_decomposition_shapes.rs` — and
-        // every one of the four came back inert here: zero over-quoted keys,
-        // zero leaked special-token keys, zero `deny_unknown_fields` drops, and
-        // zero scalar-valued `in` filters. Notably the model DOES emit `in`
-        // (6 of 21 filters, on multi-value enum phrasings) even though this
-        // prompt never instructs it — but always with a proper JSON array. So
+        // every one of the four came back inert here: across the 21 filters
+        // that were classifiable, zero over-quoted keys, zero leaked
+        // special-token keys, zero `deny_unknown_fields` drops, and zero
+        // scalar-valued `in` filters. "Classifiable" is the honest denominator
+        // and is narrower than 33: a decomposition that does not parse yields no
+        // filters to inspect, so the bare-date cases below contributed none.
+        // Notably the model DOES emit `in` (6 of those 21 filters, on
+        // multi-value enum phrasings) even though this prompt never instructs
+        // it — but always with a proper JSON array. So
         // do not port those repairs here on the theory that the shapes might
         // appear; nothing on this path was observed to produce them, and a
         // repair for a shape nothing emits is a liability, not a safeguard.
@@ -4092,6 +4107,44 @@ mod tests {
         assert!(matches!(repaired, Cow::Borrowed(_)));
         let parsed: Value = serde_json::from_str(&repaired).unwrap();
         assert_eq!(parsed["filters"][0]["value"], json!(2400));
+    }
+
+    /// The scan indexes bytes but slices `&str`, so a multi-byte codepoint
+    /// anywhere in the payload must not land a slice boundary mid-character.
+    /// It cannot: every byte of a multi-byte sequence is >= 0x80, so it never
+    /// satisfies `is_ascii_digit()` and never becomes a slice index. Asserted
+    /// rather than argued, because the failure mode is a panic on real user
+    /// text — request strings reach this output by way of the model, and
+    /// nothing upstream restricts them to ASCII.
+    #[test]
+    fn quote_bare_date_literals_is_utf8_safe_around_multibyte_text() {
+        let raw =
+            r#"{"query": "Rêve — 日本 🎉", "filters":[{"operator":"lt","value":2026-08-19}]}"#;
+        let parsed: Value = serde_json::from_str(&quote_bare_date_literals(raw)).unwrap();
+        assert_eq!(parsed["query"], json!("Rêve — 日本 🎉"));
+        assert_eq!(parsed["filters"][0]["value"], json!("2026-08-19"));
+    }
+
+    /// A date at the very end of the input, with no trailing byte to inspect.
+    /// The bounds check must treat "nothing follows" as acceptable rather than
+    /// indexing past the end.
+    #[test]
+    fn quote_bare_date_literals_handles_date_at_end_of_input() {
+        assert_eq!(quote_bare_date_literals("2026-08-19"), "\"2026-08-19\"");
+        // One byte short of a full date must not panic or match.
+        assert_eq!(quote_bare_date_literals("2026-08-1"), "2026-08-1");
+    }
+
+    /// An escaped quote inside a string must not be read as the string's end —
+    /// otherwise the scanner falls out of string context early and would treat
+    /// the remaining text as bare.
+    #[test]
+    fn quote_bare_date_literals_respects_escaped_quotes_in_strings() {
+        let raw = r#"{"query": "he said \"2026-08-19\" loudly", "filters":[]}"#;
+        let repaired = quote_bare_date_literals(raw);
+        assert!(matches!(repaired, Cow::Borrowed(_)));
+        let parsed: Value = serde_json::from_str(&repaired).unwrap();
+        assert_eq!(parsed["query"], json!(r#"he said "2026-08-19" loudly"#));
     }
 
     /// A longer digit-dash run is not a `YYYY-MM-DD` this can honestly claim.

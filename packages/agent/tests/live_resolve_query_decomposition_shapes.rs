@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use nodespace_agent::agent_types::{ChatInferenceEngine, ModelFamily};
 use nodespace_agent::local_agent::inference::LlamaChatInferenceEngine;
-use nodespace_agent::local_agent::tools::GraphToolExecutor;
+use nodespace_agent::local_agent::tools::{extract_json_object, GraphToolExecutor};
 use nodespace_agent::AgentToolExecutor;
 use nodespace_core::db::SqliteStore;
 use nodespace_core::schema::handle_create_schema;
@@ -346,41 +346,6 @@ fn decomposition_responses(dump: &PathBuf) -> Vec<String> {
         .collect()
 }
 
-/// Extract the first balanced `{...}` object, mirroring what
-/// `exec_resolve_query` does to the same text. Reproduced rather than shared
-/// because the production helper is private; keeping it identical is what makes
-/// the classification describe production's behavior and not this test's.
-fn extract_json_object(text: &str) -> Option<&str> {
-    let start = text.find('{')?;
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (i, c) in text[start..].char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match c {
-            '"' => in_string = true,
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&text[start..start + i + c.len_utf8()]);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// Drive the real `exec_resolve_query` across the corpus, capture every
 /// decomposition's raw output, and print a shape tally.
 ///
@@ -471,6 +436,9 @@ async fn measure_decomposition_filter_shapes() {
                 // Every decomposition emitted since the previous request.
                 for raw in after.iter().skip(before) {
                     tally.total_decompositions += 1;
+                    // Production's own helper, imported rather than
+                    // reimplemented: this classification is only a claim about
+                    // production if it extracts the same slice production does.
                     let slice = extract_json_object(raw).unwrap_or(raw);
                     match serde_json::from_str::<Value>(slice) {
                         Ok(parsed) => {
