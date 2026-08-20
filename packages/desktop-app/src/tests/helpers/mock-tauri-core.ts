@@ -28,6 +28,19 @@
  * of this change — see the tier's own "NIGHTLY and NON-BLOCKING, CI-only"
  * note in vitest.webkit.config.ts).
  *
+ * CAVEAT: only `invoke`/`isTauri` get a safe override here — every other
+ * export is the REAL implementation from `vi.importActual`. A few of those
+ * (`checkPermissions`, `requestPermissions`, `addPluginListener`,
+ * `PluginListener.unregister()`, `Resource.close()`) call `invoke` through a
+ * closure-private reference inside the real module, not through the exported
+ * `invoke` binding this file overrides — so overriding `invoke` here does
+ * NOT redirect them. Nothing in `src/lib` imports those today, so this is
+ * currently inert, and if it ever does fire it fails loudly (a thrown
+ * exception from the missing `window.__TAURI_INTERNALS__`), not silently
+ * like the bug this file exists to close. If a test starts exercising one of
+ * those, mock it directly via an override rather than assuming this helper
+ * covers it.
+ *
  * Usage:
  * ```ts
  * import { mockTauriCore } from '../helpers/mock-tauri-core';
