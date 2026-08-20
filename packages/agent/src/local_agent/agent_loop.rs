@@ -7726,7 +7726,8 @@ mod tests {
     #[test]
     fn canonical_args_applies_the_in_operator_repair() {
         let malformed = r#"{"filters":[{"operator":"in","property":"stage","value":"cut,soak"}]}"#;
-        let repaired = r#"{"filters":[{"operator":"in","property":"stage","value":["cut","soak"]}]}"#;
+        let repaired =
+            r#"{"filters":[{"operator":"in","property":"stage","value":["cut","soak"]}]}"#;
         assert_eq!(
             canonical_args(malformed),
             canonical_args(repaired),

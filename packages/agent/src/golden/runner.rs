@@ -448,7 +448,10 @@ mod tests {
             tool_args("c0", r#"{"node_type":"release","query":""}"#),
         ];
         let summary = parse_output(&chunks).summary();
-        assert_eq!(summary, r#"search_nodes({"node_type":"release","query":""})"#);
+        assert_eq!(
+            summary,
+            r#"search_nodes({"node_type":"release","query":""})"#
+        );
         assert!(!summary.contains("before repair"));
     }
 
