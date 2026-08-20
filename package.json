@@ -87,6 +87,8 @@
     "release:help": "bun run scripts/release.ts --help",
     "homebrew:sync": "bun run scripts/update-homebrew-cask.ts",
     "homebrew:drift-check": "bun run scripts/update-homebrew-cask.ts drift-check",
+    "homebrew:sync-formula": "bun run scripts/update-homebrew-formula.ts",
+    "homebrew:formula-drift-check": "bun run scripts/update-homebrew-formula.ts drift-check",
     "prepare": "husky",
     "audit": "bun scripts/audit-npm.ts"
   },

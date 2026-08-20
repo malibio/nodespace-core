@@ -38,16 +38,21 @@
  * workflow's `notify-failure` job opens an issue. `homebrew-drift-check.yml`
  * is an independent scheduled backstop that catches a stale cask even if
  * the sync job itself was skipped or failed silently.
+ *
+ * The actual "clone the tap, write the file, commit, push" mechanics live
+ * in homebrew-tap-push.ts, shared with update-homebrew-formula.ts (the same
+ * kind of sync job for the sibling `nodespace-cli` Homebrew formula).
  */
 
 import { $ } from "bun";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pushFilesToTap, TAP_REPO } from "./homebrew-tap-push";
 
 export const CORE_REPO = "NodeSpaceAI/nodespace-core";
-export const TAP_REPO = "NodeSpaceAI/homebrew-nodespace";
+export { TAP_REPO };
 
 // The .app bundle's CLI binary lives at Contents/MacOS/nodespace in the
 // current Tauri packaging layout (verified by mounting the real v0.2.0 .dmg
@@ -265,42 +270,17 @@ export async function checkTapDrift(): Promise<DriftCheckResult> {
 }
 
 async function pushCaskUpdate(version: string, caskContent: string, token: string): Promise<void> {
-  const workDir = mkdtempSync(join(tmpdir(), "homebrew-nodespace-push-"));
-  try {
-    const authUrl = `https://x-access-token:${token}@github.com/${TAP_REPO}.git`;
-    try {
-      await $`git clone --depth 1 ${authUrl} ${workDir}`.quiet();
-    } catch (err) {
-      // Defense in depth: git itself redacts credentials from its own
-      // stderr on an auth failure (verified against a real bad-token
-      // clone), but scrub `token` out of whatever the shell wrapper's
-      // error carries anyway, in case its message ever echoes the
-      // command it ran -- this must never surface the raw token.
-      const message = (err instanceof Error ? err.message : String(err)).replaceAll(
-        token,
-        "***",
-      );
-      throw new Error(`git clone of ${TAP_REPO} failed: ${message}`);
-    }
-    writeFileSync(join(workDir, "Casks", "nodespace.rb"), caskContent);
-
-    await $`git -C ${workDir} add Casks/nodespace.rb`.quiet();
-    const staged = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
-    if (staged.exitCode === 0) {
-      console.log("Tap cask already matches -- nothing to push.");
-      return;
-    }
-
-    const v = normalizeVersion(version);
-    await $`git -C ${workDir} -c user.name="nodespace-release-bot" -c user.email="release-bot@nodespace.app" commit -m ${`Update cask to v${v} (automated release sync)`}`.quiet();
-    await $`git -C ${workDir} push origin HEAD:main`.quiet();
-    console.log(`Pushed cask update for v${v} to ${TAP_REPO}.`);
-  } finally {
-    // Also closes the residual window where a temp credential URL sits in
-    // workDir/.git/config in cleartext -- removed as soon as this function
-    // returns or throws, on every path.
-    rmSync(workDir, { recursive: true, force: true });
-  }
+  const v = normalizeVersion(version);
+  const pushed = await pushFilesToTap(
+    [{ relPath: "Casks/nodespace.rb", content: caskContent }],
+    `Update cask to v${v} (automated release sync)`,
+    token,
+  );
+  console.log(
+    pushed
+      ? `Pushed cask update for v${v} to ${TAP_REPO}.`
+      : "Tap cask already matches -- nothing to push.",
+  );
 }
 
 function usage(): void {
