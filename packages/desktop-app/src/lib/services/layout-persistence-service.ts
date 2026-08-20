@@ -18,6 +18,7 @@ export interface PersistedLayoutState {
   sidebarCollapsed: boolean;
   collectionsExpanded?: boolean; // Added in version 2
   schemaTypesExpanded?: boolean; // Added in version 3
+  aiChatsExpanded?: boolean; // Added in version 4
 }
 
 /**
@@ -57,15 +58,16 @@ export class LayoutPersistenceService {
   private static saveImmediate(state: LayoutState): void {
     try {
       const persisted: PersistedLayoutState = {
-        version: 3,
+        version: 4,
         sidebarCollapsed: state.sidebarCollapsed,
         collectionsExpanded: state.collectionsExpanded,
-        schemaTypesExpanded: state.schemaTypesExpanded
+        schemaTypesExpanded: state.schemaTypesExpanded,
+        aiChatsExpanded: state.aiChatsExpanded
       };
 
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(persisted));
       log.debug(
-        `State saved: sidebarCollapsed=${state.sidebarCollapsed}, collectionsExpanded=${state.collectionsExpanded}, schemaTypesExpanded=${state.schemaTypesExpanded}`
+        `State saved: sidebarCollapsed=${state.sidebarCollapsed}, collectionsExpanded=${state.collectionsExpanded}, schemaTypesExpanded=${state.schemaTypesExpanded}, aiChatsExpanded=${state.aiChatsExpanded}`
       );
     } catch (error) {
       log.error('Failed to save state:', error);
@@ -104,7 +106,7 @@ export class LayoutPersistenceService {
       const migrated = this.migrate(parsed);
 
       log.debug(
-        `State loaded: sidebarCollapsed=${migrated.sidebarCollapsed}, collectionsExpanded=${migrated.collectionsExpanded}, schemaTypesExpanded=${migrated.schemaTypesExpanded}`
+        `State loaded: sidebarCollapsed=${migrated.sidebarCollapsed}, collectionsExpanded=${migrated.collectionsExpanded}, schemaTypesExpanded=${migrated.schemaTypesExpanded}, aiChatsExpanded=${migrated.aiChatsExpanded}`
       );
       return migrated;
     } catch (error) {
@@ -147,6 +149,10 @@ export class LayoutPersistenceService {
     // Version 3 adds schemaTypesExpanded (defaults to false)
     if (s.version === 2) {
       s = { ...s, version: 3, schemaTypesExpanded: false };
+    }
+    // Version 4 adds aiChatsExpanded (defaults to false)
+    if (s.version === 3) {
+      s = { ...s, version: 4, aiChatsExpanded: false };
     }
     return s;
   }

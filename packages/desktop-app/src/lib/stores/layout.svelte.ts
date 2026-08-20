@@ -8,6 +8,7 @@ export interface LayoutState {
   activePane: string;
   collectionsExpanded: boolean;
   schemaTypesExpanded: boolean;
+  aiChatsExpanded: boolean;
 }
 
 export interface NavigationItem {
@@ -24,6 +25,7 @@ const initialLayoutState: LayoutState = {
   activePane: 'today',
   collectionsExpanded: false,
   schemaTypesExpanded: false,
+  aiChatsExpanded: false,
 };
 
 const initialNavigationItems: NavigationItem[] = [
@@ -105,6 +107,7 @@ class LayoutStore {
         activePane: 'today', // Keep activePane at default for now (not persisted)
         collectionsExpanded: persisted.collectionsExpanded ?? false,
         schemaTypesExpanded: persisted.schemaTypesExpanded ?? false,
+        aiChatsExpanded: persisted.aiChatsExpanded ?? false,
       };
     }
 
@@ -139,6 +142,11 @@ class LayoutStore {
     this.#persist();
   }
 
+  setAiChatsExpanded(expanded: boolean): void {
+    this.state = { ...this.state, aiChatsExpanded: expanded };
+    this.#persist();
+  }
+
   /** Mark a single navigation item active (and all others inactive). */
   setActiveNavItem(itemId: string): void {
     this.navigationItems = this.navigationItems.map((item) => ({
@@ -159,3 +167,5 @@ export const setCollectionsExpanded = (expanded: boolean): void =>
 export const toggleCollectionsExpanded = (): void => layoutStore.toggleCollectionsExpanded();
 export const setSchemaTypesExpanded = (expanded: boolean): void =>
   layoutStore.setSchemaTypesExpanded(expanded);
+export const setAiChatsExpanded = (expanded: boolean): void =>
+  layoutStore.setAiChatsExpanded(expanded);

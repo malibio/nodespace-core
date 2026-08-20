@@ -61,6 +61,11 @@ vi.mock('$lib/stores/schemas.svelte', () => ({
   schemasData: { loadSchemas: (...a: unknown[]) => loadSchemas(...a) }
 }));
 
+const loadAiChats = vi.fn((..._a: unknown[]) => undefined);
+vi.mock('$lib/stores/ai-chats.svelte', () => ({
+  aiChatsData: { loadAiChats: (...a: unknown[]) => loadAiChats(...a) }
+}));
+
 const clearAllTabs = vi.fn((..._a: unknown[]) => undefined);
 const addTab = vi.fn((..._a: unknown[]) => undefined);
 vi.mock('$lib/stores/navigation.svelte', () => ({
@@ -294,6 +299,7 @@ describe('Database Store', () => {
       expect(addTab).toHaveBeenCalledOnce();
       expect(loadCollections).toHaveBeenCalledOnce();
       expect(loadSchemas).toHaveBeenCalledOnce();
+      expect(loadAiChats).toHaveBeenCalledOnce();
       // The hide-empty exemptions are per-database (collection ids are derived
       // from the name), so they are dropped before the new database loads —
       // otherwise a same-named empty collection would be un-hidden there.
