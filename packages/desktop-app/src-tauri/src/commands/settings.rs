@@ -16,7 +16,7 @@ use nodespace_proto::nodespace::{
     OpenAiCompatConfig as ProtoOpenAiCompatConfig, SetOpenAiCompatConfigsRequest,
     UpdateCaptureSettingsRequest,
 };
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// Settings response sent to the frontend.
 #[derive(serde::Serialize)]
@@ -80,8 +80,6 @@ pub async fn update_display_settings(
     render_markdown: Option<bool>,
     theme: Option<String>,
 ) -> Result<(), String> {
-    use tauri::Emitter;
-
     let mut prefs = crate::preferences::load_preferences(&app).await?;
 
     if let Some(rm) = render_markdown {
@@ -99,15 +97,17 @@ pub async fn update_display_settings(
 
     crate::preferences::save_preferences(&app, &prefs).await?;
 
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit(
-            "settings-changed",
-            serde_json::json!({
-                "renderMarkdown": prefs.display.render_markdown,
-                "theme": prefs.display.theme,
-            }),
-        );
-    }
+    // Display preferences aren't database-scoped — route to the focused
+    // window (see `window_routing`).
+    crate::window_routing::emit_routed(
+        &app,
+        "settings-changed",
+        serde_json::json!({
+            "renderMarkdown": prefs.display.render_markdown,
+            "theme": prefs.display.theme,
+        }),
+        None,
+    );
 
     Ok(())
 }
