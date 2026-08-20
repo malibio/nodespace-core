@@ -195,8 +195,8 @@ fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
 ///
 /// core#2158 measured this rather than guessing at it (see
 /// `schema_named_in_query_measured_zero_false_positives_on_precedent_schema_names`
-/// and `schema_named_in_query_confirmed_false_positive_class_common_word_schema_names`
-/// below for the corpora and pinned results):
+/// and `schema_named_in_query_measured_false_positive_rate_on_risky_common_word_names`
+/// below for the corpora and pinned aggregate results):
 ///
 /// - Every non-core schema name with actual precedent in this codebase
 ///   (`ticket`, `adr`, `release`, `release_plan`, `venue`, `invoice`,
@@ -661,38 +661,94 @@ mod tests {
         assert_eq!(found.map(|s| s.id.as_str()), Some("ticket"));
     }
 
+    /// 29 plausible-but-unprecedented schema names — common English words
+    /// that are nonetheless names a NodeSpace user could reasonably give a
+    /// custom type, since NodeSpace is a personal knowledge tool, not only
+    /// a dev tracker. Companion corpus to `precedent_schema_names()`, used
+    /// to measure the risk class review of #2156 flagged rather than the
+    /// class that's actually seen precedent.
+    fn risky_schema_names() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("note", "Note"),
+            ("meeting", "Meeting"),
+            ("idea", "Idea"),
+            ("goal", "Goal"),
+            ("plan", "Plan"),
+            ("record", "Record"),
+            ("item", "Item"),
+            ("event", "Event"),
+            ("contact", "Contact"),
+            ("order", "Order"),
+            ("review", "Review"),
+            ("report", "Report"),
+            ("request", "Request"),
+            ("log", "Log"),
+            ("entry", "Entry"),
+            ("message", "Message"),
+            ("post", "Post"),
+            ("draft", "Draft"),
+            ("file", "File"),
+            ("link", "Link"),
+            ("alert", "Alert"),
+            ("reminder", "Reminder"),
+            ("question", "Question"),
+            ("answer", "Answer"),
+            ("update", "Update"),
+            ("change", "Change"),
+            ("book", "Book"),
+            ("recipe", "Recipe"),
+            ("habit", "Habit"),
+        ]
+    }
+
     #[test]
-    fn schema_named_in_query_confirmed_false_positive_class_common_word_schema_names() {
+    fn schema_named_in_query_measured_false_positive_rate_on_risky_common_word_names() {
         // MEASURED (core#2158): the risk flagged in review of #2156 is
         // real, not hypothetical, for schema names that are common English
-        // words — which are plausible names in NodeSpace's own domain (a
-        // personal knowledge tool, not only a dev tracker: "Note",
-        // "Meeting", "Idea", "Goal", "Item", "Event" are all names a real
-        // user could give a custom type). This reproduces the review's own
-        // worked example almost exactly.
-        //
-        // Measured aggregate over 29 such candidate names (note, meeting,
-        // idea, goal, plan, record, item, event, contact, order, review,
-        // report, request, log, entry, message, post, draft, file, link,
-        // alert, reminder, question, answer, update, change, book, recipe,
-        // habit) against the same 52-query corpus above: 33/1508 pairs
-        // (2.2%) matched, and every single one of those matches was on a
-        // query with no genuine connection to that type (verified by
-        // inspection — e.g. "log me out of this session" matching a `Log`
-        // schema, "the order came in late again" matching an `Order`
-        // schema). Every one of those 29 words is ALSO the exact word a
-        // genuine true-positive query for that same type would use
-        // (verified separately, e.g. "add a log for today's workout") —
-        // there is no lexical signal available to `mentions_phrase` that
-        // tells the two apart, which is why no length-floor or
-        // stopword-exclusion guard is added here (see the doc comment on
-        // `schema_named_in_query`).
+        // words. Each of the 29 `risky_schema_names()` is checked in
+        // isolation (one schema at a time — matching
+        // `precedent_schema_names()`'s "no other type is around to create
+        // ambiguity" setup, so this measures the same thing the doc
+        // comment's "29 names x 52 queries = 1508 pairs" describes, not a
+        // differently-shaped measurement) against every query in
+        // `realistic_unrelated_queries()`, none of which concern that
+        // schema. Total false positives are counted and pinned here, not
+        // just reported in prose, so a future change to `mentions_phrase`
+        // that shifts this rate has to update this assertion deliberately.
+        let queries = realistic_unrelated_queries();
+        let mut false_positives = 0usize;
+        for (id, content) in risky_schema_names() {
+            let schemas = vec![make_schema(id, content, false)];
+            for query in &queries {
+                if schema_named_in_query(query, &schemas).is_some() {
+                    false_positives += 1;
+                }
+            }
+        }
+        let total_pairs = risky_schema_names().len() * queries.len();
+        assert_eq!(
+            (false_positives, total_pairs),
+            (33, 1508),
+            "false-positive count or corpus size drifted from the measured \
+             core#2158 baseline (33/1508, 2.2%) — if `mentions_phrase` or \
+             either corpus changed intentionally, re-measure and update \
+             both this assertion and the doc comment on \
+             `schema_named_in_query`"
+        );
+    }
+
+    #[test]
+    fn schema_named_in_query_confirmed_false_positive_class_common_word_schema_names() {
+        // Two concrete, easy-to-read instances of the false-positive class
+        // the aggregate test above measures — including the exact scenario
+        // raised in review of #2156, and a mixed schema list (alongside an
+        // unrelated precedent name) rather than an isolated one, so this
+        // doubles as a check that the risk isn't an artifact of testing
+        // risky names in isolation.
         let schemas = vec![
             make_schema("ticket", "Ticket", false),
             make_schema("note", "Note", false),
         ];
-
-        // The exact scenario raised in review of #2156.
         let found = schema_named_in_query("please note that the meeting moved to 3pm", &schemas);
         assert_eq!(
             found.map(|s| s.id.as_str()),
@@ -702,10 +758,20 @@ mod tests {
              in this test"
         );
 
-        // A second, independent confirmation with a different common word.
         let schemas = vec![make_schema("meeting", "Meeting", false)];
         let found = schema_named_in_query("what time does the meeting start", &schemas);
         assert_eq!(found.map(|s| s.id.as_str()), Some("meeting"));
+
+        // Every one of the 29 risky words is ALSO the exact word a genuine
+        // true-positive query for that same type would use — there is no
+        // lexical signal available to `mentions_phrase` that tells the two
+        // apart, which is why no length-floor or stopword-exclusion guard
+        // is added here (see the doc comment on `schema_named_in_query`).
+        let schemas = vec![make_schema("log", "Log", false)];
+        let false_positive = schema_named_in_query("log me out of this session", &schemas);
+        let true_positive = schema_named_in_query("add a log for today's workout", &schemas);
+        assert_eq!(false_positive.map(|s| s.id.as_str()), Some("log"));
+        assert_eq!(true_positive.map(|s| s.id.as_str()), Some("log"));
     }
 
     fn make_node(id: &str, content: &str) -> Node {
