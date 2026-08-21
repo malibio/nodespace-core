@@ -13,7 +13,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { assertExpectation, type Expectation } from "./agent-matrix.ts";
+import fixture, {
+  actionTools,
+  assertExpectation,
+  type Expectation,
+  type MatrixScenario,
+} from "./agent-matrix.ts";
+import type { TurnRecord } from "../types.ts";
 
 describe("assertExpectation", () => {
   describe("noTools", () => {
@@ -439,5 +445,122 @@ describe("assertExpectation", () => {
       );
       expect(result.passed).toBe(true);
     });
+  });
+});
+
+/**
+ * Fixture-level invariants, as distinct from the scoring logic above.
+ *
+ * These pin properties the eval's validity rests on but which no assertion in
+ * `assertExpectation` can see, because they are facts about the SCENARIO SET
+ * rather than about one turn's verdict. Each has a failure mode that is silent
+ * at run time: the eval still produces a plausible number, and it is wrong.
+ */
+describe("fixture invariants", () => {
+  const all = fixture.groups.flat() as MatrixScenario[];
+
+  /** A turn record carrying just the tool names a scenario would have called. */
+  function turn(toolsCalled: string[]): TurnRecord {
+    return {
+      toolsOffered: toolsCalled.join(","),
+      toolsCalled,
+      reply: "",
+      latencyMs: 0,
+    };
+  }
+
+  // `id` is the key baseline diffing joins on. A duplicate does not throw — the
+  // second row silently overwrites the first in any id-keyed comparison, so a
+  // scenario's result is attributed to a different scenario.
+  test("scenario ids are unique", () => {
+    const ids = all.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  // The dev-workflow re-theme changed every prompt's DOMAIN while keeping the
+  // mechanics. Preserving the ids is what lets a pre-re-theme baseline still
+  // join against a post-re-theme run for the scenarios that carried over;
+  // renaming one would read as "scenario removed, scenario added" and silently
+  // drop it from the diff instead of showing a domain-driven score change.
+  test("the pre-existing scenario ids all survived the re-theme", () => {
+    const ids = new Set(all.map((s) => s.id));
+    for (const id of [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8a",
+      "8b",
+      "8c",
+      "8d",
+      "8e",
+      "9",
+      "10a",
+      "10b",
+      "10c",
+    ]) {
+      expect(ids.has(id)).toBe(true);
+    }
+  });
+
+  // A scenario whose target tool is filtered out as a routing tool can never be
+  // observed firing, so it is unwinnable by construction and scores a correct
+  // model as a failure. `create_relationship`/`get_related_nodes` arrived with
+  // the relationship group and are the first target tools added since
+  // ROUTING_TOOLS was written — exactly when this can go wrong unnoticed.
+  test("no scenario targets a tool that actionTools() strips", () => {
+    for (const s of all) {
+      const e = s.expect;
+      const targets =
+        e.kind === "toolOnce" || e.kind === "noRetry"
+          ? [e.tool]
+          : e.kind === "toolSequence"
+            ? e.tools
+            : [];
+      for (const t of targets) {
+        expect(actionTools([t])).toEqual([t]);
+      }
+    }
+  });
+
+  // `minProperties` asserts against `fieldCount`, which the tool layer reports
+  // only for calls carrying schema FIELD VALUES. create_relationship's payload
+  // is two ids and a relation name — none of them field values — so asserting
+  // minProperties on it would fail every correct call.
+  test("minProperties is never asserted on create_relationship", () => {
+    for (const s of all) {
+      const e = s.expect;
+      if (e.kind === "toolOnce" && e.tool === "create_relationship") {
+        expect(e.minProperties).toBeUndefined();
+      }
+      if (e.kind === "toolSequence") {
+        const target = e.propertiesOn ?? e.tools[e.tools.length - 1];
+        if (target === "create_relationship") {
+          expect(e.minProperties).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  // Every scenario is scored through the fixture's own `score()`, not through
+  // assertExpectation directly. This checks that wiring end to end for one
+  // passing and one failing shape, so a fixture that stopped reading `expect`
+  // (or started reading a differently-named field) fails here rather than
+  // scoring every scenario identically.
+  test("score() reads each scenario's own expectation", () => {
+    const greeting = all.find((s) => s.id === "1");
+    const link = all.find((s) => s.id === "11c");
+    if (!greeting || !link) throw new Error("expected scenarios 1 and 11c");
+
+    const noToolTurn = [turn([])];
+    expect(fixture.score(greeting, noToolTurn).passed).toBe(true);
+    expect(fixture.score(link, noToolTurn).passed).toBe(false);
+
+    const linkTurn = [turn(["create_relationship"])];
+    expect(fixture.score(link, linkTurn).passed).toBe(true);
+    expect(fixture.score(greeting, linkTurn).passed).toBe(false);
   });
 });

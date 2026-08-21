@@ -15,11 +15,46 @@
  * assertions check for the TARGET tool tolerating routing calls, never raw
  * tool count.
  *
+ * THE DOMAIN IS PART OF THE MEASUREMENT, NOT DECORATION
+ *
+ * Model-lock decisions (ADR-046, ADR-056) and every model re-evaluation since
+ * are scored off this matrix, so whatever domain the scenarios are written in
+ * is the domain native-model selection is actually being decided on. That made
+ * the original scenario set — equipment checkouts, album and venue trackers —
+ * an active problem rather than a cosmetic one: it selected models on their
+ * ability to track laser cutters, while the product's claim is context
+ * infrastructure for AI-native development.
+ *
+ * The scenarios are therefore written in NodeSpace's own working domain:
+ * feature write-ups and their sign-off state, the calls a team makes about how
+ * a system is built, planning cycles, work tied to the decision that
+ * constrains it. See ../../../../nodespace-docs/strategy/{vision,beliefs,
+ * principles}.md for the framing this tracks.
+ *
+ * The TOOL MECHANICS are unchanged by that re-theme and are the reason the
+ * scenario set was re-themed in place rather than duplicated into a second
+ * fixture: `noExtraTypes`, `minProperties`, `noRetry`+`minCalls` and
+ * `toolSequence` are properties of the expectation model, not of the
+ * vocabulary, so re-theming keeps every one of them — and keeps every scenario
+ * `id`, so a pre-re-theme baseline still joins against a post-re-theme run.
+ *
+ * WINNABILITY IS A HARD CONSTRAINT ON WORDING
+ *
+ * Each chain builds its own schema in its first scenario, and every later
+ * prompt in that chain must name only values that schema can actually hold. A
+ * prompt asking for a field the type has nowhere to put is unwinnable: the
+ * model degrades reasonably (folding the value into the node's text) and
+ * scores red for it, and the fixture is then measuring itself rather than the
+ * model. See scenario 9's note and #1846.
+ *
  * Scenario wording must stay independent of packages/agent/src/agent_guidance.rs.
  * `guidance_is_not_contaminated_by_eval_prompts` enforces it by parsing the
  * `prompt:` literals out of this file: a prompt that also appears in guidance
  * turns a passing scenario into proof that the model can copy a memorized
- * example, and prompt tuning then has a degenerate solution.
+ * example, and prompt tuning then has a degenerate solution. The dev-workflow
+ * domain raises that risk rather than lowering it — the seeded skill
+ * descriptions already name Spec, ADR and Ticket — so prompts here are written
+ * around those terms and checked against the guard, not assumed clear of it.
  */
 
 import type {
@@ -316,7 +351,7 @@ export function assertExpectation(
 // the baseline join key and must stay stable; prompts may be reworded freely.
 // ---------------------------------------------------------------------------
 
-interface MatrixScenario extends Scenario {
+export interface MatrixScenario extends Scenario {
   expect: Expectation;
 }
 
@@ -338,9 +373,9 @@ const GROUPS: MatrixScenario[][] = [
     },
   ],
   // Single-custom-type CRUD chain (scenarios 3-7, then 9) shares one chat node.
-  // Scenario 9 is deliberately last: it needs the laser cutter that scenario 4
-  // creates, and referring to it by name keeps its own resolution a direct
-  // string match rather than the indirect reference scenario 6 exercises.
+  // Scenario 9 is deliberately last: it needs the spec that scenario 4 creates,
+  // and referring to it by name keeps its own resolution a direct string match
+  // rather than the indirect reference scenario 6 exercises.
   [
     {
       id: "3",
@@ -348,37 +383,35 @@ const GROUPS: MatrixScenario[][] = [
       // Every field a later scenario keys on must be implied here, or that
       // scenario is unwinnable by construction and scores a correct refusal as
       // a failure. Two are load-bearing downstream:
-      //   - checked-out vs returned → the status scenario 6 sets.
-      //   - replacement cost        → the value scenario 4 supplies, and the
-      //     discriminator scenarios 6 ("the 2400 one") and 7 ("worth 90000")
-      //     both resolve against.
-      // The cost clause is deliberate: scenario 6 exists to test resolve_query
-      // on an *indirect* reference. Re-keying it to the item name ("the laser
-      // cutter") would make the referent a direct string match that plain
+      //   - drafted vs signed off → the state scenario 6 sets.
+      //   - the day count         → the value scenario 4 supplies, and the
+      //     discriminator scenarios 6 ("the five-day one") and 7 ("longer than
+      //     forty days") both resolve against.
+      // The day-count clause is deliberate: scenario 6 exists to test
+      // resolve_query on an *indirect* reference. Re-keying it to the spec's
+      // own name would make the referent a direct string match that plain
       // search_nodes resolves, and the assertion would pass while testing less.
       prompt:
-        "I want to keep a record of the equipment my team checks out, whether it's been returned, and what each item costs to replace",
+        "I want somewhere to keep the feature write-ups my team drafts, whether each has been signed off, and how many days we think it takes",
       expect: { kind: "noExtraTypes" },
     },
     {
       id: "4",
       scenario: "4. Instance creation",
       // `minProperties` is what makes scenarios 6 and 7 winnable *in principle*:
-      // both discriminate on the replacement cost this turn is supposed to
-      // store. Without it, create_node persisting a bare shell scores green
-      // here and the failure surfaces two scenarios later as an unresolvable
-      // reference — indistinguishable from the model declining a genuinely
-      // ambiguous one. 1, not 2, so this asserts "the particulars reached
-      // storage" rather than pinning which of the date or cost the model chose
-      // to record.
-      prompt:
-        "Log a laser cutter checked out on the 12th, replacement cost 2400",
+      // both discriminate on the day count this turn is supposed to store.
+      // Without it, create_node persisting a bare shell scores green here and
+      // the failure surfaces two scenarios later as an unresolvable reference —
+      // indistinguishable from the model declining a genuinely ambiguous one.
+      // 1, not 2, so this asserts "the particulars reached storage" rather than
+      // pinning which of the state or the estimate the model chose to record.
+      prompt: "Put one down for offline sync, still a draft, we reckon five days",
       expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
     },
     {
       id: "5",
       scenario: "5. List/query",
-      prompt: "What equipment is on the books?",
+      prompt: "What write-ups are on the books?",
       expect: { kind: "toolOnce", tool: "search_nodes" },
     },
     {
@@ -387,7 +420,7 @@ const GROUPS: MatrixScenario[][] = [
       // resolve_query performs the search internally and returns the resolved
       // node directly (see ADR-064 rule 4) — the model acts on it via
       // update_node without a separate search_nodes call of its own.
-      prompt: "The 2400 one came back — set it to returned",
+      prompt: "The five-day one got signed off — mark it that way",
       // minProperties: 1 requires the requested state change to actually reach
       // update_node. Resolving the right node and then calling update_node with
       // only its id changes nothing, and without this scores as a pass.
@@ -400,14 +433,14 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "7",
       scenario: "7. Empty-result query",
-      prompt: "Do we have anything worth 90000 sitting out?",
+      prompt: "Is anything on our plate longer than forty days?",
       expect: { kind: "noRetry", tool: "search_nodes" },
     },
     {
       id: "9",
       scenario: "9. Set property on existing node",
       // Distinct from scenario 6, which tests resolving an INDIRECT reference
-      // ("the 2400 one") and happens to update it. Here the referent is a
+      // ("the five-day one") and happens to update it. Here the referent is a
       // direct string match, so nothing is being tested about resolution —
       // the whole assertion is that the *value the prompt supplies* reaches
       // storage.
@@ -423,22 +456,22 @@ const GROUPS: MatrixScenario[][] = [
       //
       // WINNABILITY (the constraint an earlier draft of this scenario broke):
       // the prompt must name a value this chain's schema can actually hold.
-      // Scenario 3 builds Equipment Item from a prompt mentioning only
-      // returned-ness and replacement cost, so those two fields are all that
-      // exist. A first draft here asked to set a DUE DATE — a field the schema
-      // has nowhere to put — which made the scenario unwinnable: the model
-      // folded the date into the node's text (a reasonable degradation, and it
-      // reported it honestly as "updated with a note") and scored red for it.
-      // A scenario that reds out correct behavior measures the fixture, not the
-      // model. Same trap as the album/artist case in #1846.
+      // Scenario 3 builds the write-up type from a prompt mentioning only
+      // sign-off and a day count, so those two fields are all that exist. An
+      // earlier draft of the equipment-themed ancestor of this scenario asked
+      // to set a DUE DATE — a field the schema has nowhere to put — which made
+      // the scenario unwinnable: the model folded the date into the node's text
+      // (a reasonable degradation, and it reported it honestly) and scored red
+      // for it. A scenario that reds out correct behavior measures the fixture,
+      // not the model. Same trap as the album/artist case in #1846.
       //
-      // `replacementCost` is chosen over `isReturned` because scenario 6
-      // already owns the returned-ness transition; re-testing it here would
-      // score the same model behavior twice. "1800" is unambiguous — no
-      // relative-date or unit inference stands between the request and the
-      // write, so a red here means the value did not reach `properties`, which
-      // is the one thing this scenario is for.
-      prompt: "Correction: the laser cutter's replacement cost is 1800, not 2400",
+      // The day count is chosen over the sign-off state because scenario 6
+      // already owns that transition; re-testing it here would score the same
+      // model behavior twice. "eight" is unambiguous — no relative-date or unit
+      // inference stands between the request and the write, so a red here means
+      // the value did not reach `properties`, which is the one thing this
+      // scenario is for.
+      prompt: "Correction: offline sync is eight days, not five",
       expect: {
         kind: "toolOnce",
         tool: "update_node",
@@ -451,36 +484,36 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "8a",
       scenario: "8a. Create type: first",
-      prompt: "Start tracking albums I mean to listen to",
+      prompt: "Start keeping the calls we make on how the system is built",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
       id: "8b",
       scenario: "8b. Create type: second",
-      prompt: "I also need a tracker for the venues I book",
+      prompt: "I also need somewhere for the two-week cycles we plan",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
       id: "8c",
       scenario: "8c. Instance: first type",
-      // minProperties: 1 requires the artist this prompt supplies to actually
-      // reach storage. Without it, create_node persisting a bare shell (no
-      // artist property — unwinnable if album_tracker's schema itself has no
-      // artist field, see #1846) scores identically to one that recorded it.
-      prompt: "Put down Kind of Blue, it's by Miles Davis",
+      // minProperties: 1 requires the particular this prompt supplies — who
+      // made the call — to actually reach storage. Without it, create_node
+      // persisting a bare shell (no such property — unwinnable if the type's
+      // own schema has no field for it, see #1846) scores identically to one
+      // that recorded it.
+      prompt: "Put down that we went with event-based cache clearing, Priya's call",
       expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
     },
     {
       id: "8d",
       scenario: "8d. Instance: second type",
-      prompt:
-        "New venue: the Blue Note, they can be reached at booking@example.com",
+      prompt: "New cycle: Harbour, it wraps up on the 30th",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
       id: "8e",
       scenario: "8e. Query across types",
-      prompt: "Run through the albums for me",
+      prompt: "Run through those calls for me",
       expect: { kind: "toolOnce", tool: "search_nodes" },
     },
   ],
@@ -506,7 +539,7 @@ const GROUPS: MatrixScenario[][] = [
       // This turn deliberately supplies NONE of them — the following scenarios
       // are about writing and filtering a field that has no value yet, which is
       // only a real test if it starts unset.
-      prompt: "Add a task to schedule the chip upgrade on the Polestar",
+      prompt: "Add a task to swap the image resizer over to the new pipeline",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
@@ -551,6 +584,94 @@ const GROUPS: MatrixScenario[][] = [
       // catch, which is worse than not measuring it at all.
       prompt: "How many tasks are still open?",
       expect: { kind: "noRetry", tool: "search_nodes", minCalls: 1 },
+    },
+  ],
+  // Relationship traversal (scenario 11) shares its own chat node.
+  //
+  // The matrix's one structural blind spot until now: every group above acts on
+  // a node's OWN fields, so nothing measured whether the model can record a
+  // link between two nodes or follow one back. That is the half of the data
+  // model the product's own framing rests on — a decision means nothing without
+  // the work it constrains — and `create_relationship`/`get_related_nodes` were
+  // never once exercised end-to-end despite both being registered tools.
+  //
+  // Kept as its own group rather than appended to the chain above because it
+  // needs TWO nodes of DIFFERENT types to exist before the link is askable, and
+  // building those inside another group would silently re-score that group's
+  // create_node behavior a third time.
+  [
+    {
+      id: "11a",
+      scenario: "11a. Link setup: first node",
+      // Not scored for relationship behavior — it exists so 11c has two real,
+      // differently-typed endpoints to connect. `text` is the fallback the
+      // model reaches for when no custom type fits, and that is fine here:
+      // what 11c asserts is the LINK, and create_relationship takes two ids
+      // regardless of what types they carry.
+      prompt: "Note that we settled on server-side rendering for the reports page",
+      expect: { kind: "toolOnce", tool: "create_node" },
+    },
+    {
+      id: "11b",
+      scenario: "11b. Link setup: second node",
+      prompt: "Add a task to rebuild the reports page",
+      expect: { kind: "toolOnce", tool: "create_node" },
+    },
+    {
+      id: "11c",
+      scenario: "11c. Record a link between two nodes",
+      // The failure this is built to catch is NOT "no tool fired" — it is the
+      // model expressing the link by writing prose into one of the two nodes,
+      // which reports success and records nothing traversable. Asserting
+      // create_relationship by name is what separates those two outcomes.
+      //
+      // `toolOnce` rather than `toolSequence`, deliberately, even though the
+      // model must recover both endpoint ids before it can link them: the
+      // lookup has three legitimate spellings (search_nodes, search_semantic,
+      // get_node) and pinning any one of them into a sequence would red out
+      // the other two. The retrieval is not left unmodelled by that choice —
+      // 11a and 11b created both endpoints in this same chat, so the ids are
+      // recoverable — it is simply not the thing being scored here. What is
+      // being scored is that the link was recorded as an EDGE and exactly once.
+      //
+      // The known cost, stated rather than hidden: this cannot distinguish a
+      // create_relationship carrying two real ids from one carrying two
+      // invented ones. Catching that needs the tool result, not the tool name,
+      // and `ToolCallRecord` does not carry the endpoint ids today. A run's
+      // trace file does, so a suspicious pass is checkable by hand.
+      //
+      // No minProperties: create_relationship's payload is two ids and a
+      // relation name, none of which are schema field values, so `fieldCount`
+      // does not apply to it — asserting it would fail on a correct call. The
+      // `minProperties is never asserted on create_relationship` invariant in
+      // the test file pins that.
+      prompt: "That rebuild has to follow what we settled on for that page — connect the two",
+      expect: {
+        kind: "toolOnce",
+        tool: "create_relationship",
+      },
+    },
+    {
+      id: "11d",
+      scenario: "11d. Traverse a link back",
+      // The read half. This is the query the product's framing is built on —
+      // "what constrains this piece of work" — and it is only answerable by
+      // following the edge 11c recorded, not by matching text.
+      //
+      // `noRetry` with `minCalls: 1` rather than `toolOnce`, for the same
+      // reason 10c uses it: a first lookup may legitimately be followed by one
+      // narrowing call, but the tool must fire at least once. The failure mode
+      // worth catching is the model answering from the conversation it can
+      // still see in its own history instead of reading the graph — which
+      // shows up precisely as the traversal never firing.
+      //
+      // NOTE ON DEPENDENCE: if 11c failed to record an edge, this scenario can
+      // still pass — it asserts that the traversal was ATTEMPTED, not that it
+      // came back non-empty. That is deliberate. Making it conditional on 11c's
+      // success would fold two independent behaviors into one score and make a
+      // link-side regression read as two failures instead of one.
+      prompt: "What did we settle on that the rebuild has to respect?",
+      expect: { kind: "noRetry", tool: "get_related_nodes", minCalls: 1 },
     },
   ],
 ];
