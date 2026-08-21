@@ -19,7 +19,7 @@ import fixture, {
   type Expectation,
   type MatrixScenario,
 } from "./agent-matrix.ts";
-import type { TurnRecord } from "../types.ts";
+import type { ToolCallRecord, TurnRecord } from "../types.ts";
 
 describe("assertExpectation", () => {
   describe("noTools", () => {
@@ -449,6 +449,104 @@ describe("assertExpectation", () => {
 });
 
 /**
+ * A rejected TARGET tool must score red, on every assertion kind.
+ *
+ * Before this, `isError` was only ever inspected on two narrow paths —
+ * `schemaCallsAreSound` (create_schema only) and `callPersistedProperties`
+ * (only when a scenario opted into `minProperties`). Every other scenario
+ * scored a rejected call green on tool name alone.
+ *
+ * That is the most likely failure shape for the relationship scenarios
+ * specifically: `create_relationship` takes two node ids the model has to
+ * recover, and two invented ids are rejected outright — so the one scenario
+ * added to measure linking would have reported success on precisely the
+ * failure it exists to catch.
+ */
+describe("a rejected target tool scores red", () => {
+  test("toolOnce: create_relationship rejected (11c's shape)", () => {
+    const v = assertExpectation(
+      { kind: "toolOnce", tool: "create_relationship" },
+      ["create_relationship"],
+      [{ name: "create_relationship", isError: true }],
+    );
+    expect(v.passed).toBe(false);
+    expect(v.failure).toContain("REJECTED");
+  });
+
+  test("toolOnce: a successful call still passes", () => {
+    expect(
+      assertExpectation(
+        { kind: "toolOnce", tool: "create_relationship" },
+        ["create_relationship"],
+        [{ name: "create_relationship", isError: false }],
+      ).passed,
+    ).toBe(true);
+  });
+
+  test("noRetry: get_related_nodes rejected (11d's shape)", () => {
+    const v = assertExpectation(
+      { kind: "noRetry", tool: "get_related_nodes", minCalls: 1 },
+      ["get_related_nodes"],
+      [{ name: "get_related_nodes", isError: true }],
+    );
+    expect(v.passed).toBe(false);
+    expect(v.failure).toContain("REJECTED");
+  });
+
+  test("toolSequence: a rejected final tool scores red", () => {
+    const v = assertExpectation(
+      { kind: "toolSequence", tools: ["resolve_query", "update_node"] },
+      ["resolve_query", "update_node"],
+      [
+        { name: "resolve_query", isError: false },
+        { name: "update_node", isError: true },
+      ],
+    );
+    expect(v.passed).toBe(false);
+    expect(v.failure).toContain("REJECTED");
+  });
+
+  // An empty result is a SUCCESSFUL call — `isError` reflects the executor's
+  // own is_error flag, not result emptiness. Scenario 7 is built entirely on a
+  // query that legitimately finds nothing, so conflating the two would red out
+  // the one scenario whose correct answer is "no matches".
+  test("an empty but successful search stays green (scenario 7)", () => {
+    expect(
+      assertExpectation({ kind: "noRetry", tool: "search_nodes" }, ["search_nodes"], [
+        { name: "search_nodes", isError: false },
+      ]).passed,
+    ).toBe(true);
+  });
+
+  // `minProperties` inspects the same `isError` and returns a strictly more
+  // specific diagnosis, so it must keep precedence where a scenario opted in.
+  test("minProperties keeps its more specific message", () => {
+    const v = assertExpectation(
+      { kind: "toolOnce", tool: "update_node", minProperties: 1 },
+      ["update_node"],
+      [{ name: "update_node", isError: true }],
+    );
+    expect(v.passed).toBe(false);
+    expect(v.failure).toContain("never reached storage");
+  });
+
+  // Only the TARGET tool is judged: a model that tries a bad search, gets an
+  // error, recovers and then does the right thing has still done it.
+  test("a rejected NON-target call does not fail the scenario", () => {
+    expect(
+      assertExpectation(
+        { kind: "toolOnce", tool: "create_relationship" },
+        ["search_nodes", "create_relationship"],
+        [
+          { name: "search_nodes", isError: true },
+          { name: "create_relationship", isError: false },
+        ],
+      ).passed,
+    ).toBe(true);
+  });
+});
+
+/**
  * Fixture-level invariants, as distinct from the scoring logic above.
  *
  * These pin properties the eval's validity rests on but which no assertion in
@@ -460,10 +558,14 @@ describe("fixture invariants", () => {
   const all = fixture.groups.flat() as MatrixScenario[];
 
   /** A turn record carrying just the tool names a scenario would have called. */
-  function turn(toolsCalled: string[]): TurnRecord {
+  function turn(
+    toolsCalled: string[],
+    toolCalls?: ToolCallRecord[],
+  ): TurnRecord {
     return {
       toolsOffered: toolsCalled.join(","),
       toolsCalled,
+      toolCalls,
       reply: "",
       latencyMs: 0,
     };
@@ -514,12 +616,18 @@ describe("fixture invariants", () => {
   test("no scenario targets a tool that actionTools() strips", () => {
     for (const s of all) {
       const e = s.expect;
+      // `noExtraTypes` names no tool in its payload but targets create_schema
+      // implicitly — scenario 3 is scored entirely on create_schema's count.
+      // Omitting it left the one scenario using that kind uncovered by exactly
+      // the regression this test exists for.
       const targets =
         e.kind === "toolOnce" || e.kind === "noRetry"
           ? [e.tool]
           : e.kind === "toolSequence"
             ? e.tools
-            : [];
+            : e.kind === "noExtraTypes"
+              ? ["create_schema"]
+              : [];
       for (const t of targets) {
         expect(actionTools([t])).toEqual([t]);
       }
@@ -550,17 +658,58 @@ describe("fixture invariants", () => {
   // passing and one failing shape, so a fixture that stopped reading `expect`
   // (or started reading a differently-named field) fails here rather than
   // scoring every scenario identically.
+  // Loops over EVERY scenario rather than spot-checking two. An earlier
+  // version checked only ids 1 and 11c, which a `score()` that ignored
+  // `scenario.expect` and looked expectations up from a hardcoded id table
+  // would still pass — the name promised more than the body delivered.
+  //
+  // For each scenario this synthesizes the turn its own expectation demands
+  // and asserts it passes, then asserts a deliberately wrong turn fails. Any
+  // `score()` not actually reading each scenario's `expect` fails somewhere in
+  // the 20.
   test("score() reads each scenario's own expectation", () => {
-    const greeting = all.find((s) => s.id === "1");
-    const link = all.find((s) => s.id === "11c");
-    if (!greeting || !link) throw new Error("expected scenarios 1 and 11c");
+    /** The minimal tool sequence that satisfies `e`. */
+    function satisfyingTools(e: MatrixScenario["expect"]): string[] {
+      switch (e.kind) {
+        case "noTools":
+          return [];
+        case "toolOnce":
+        case "noRetry":
+          return [e.tool];
+        case "toolSequence":
+          return [...e.tools];
+        case "noExtraTypes":
+          return ["create_schema"];
+      }
+    }
 
-    const noToolTurn = [turn([])];
-    expect(fixture.score(greeting, noToolTurn).passed).toBe(true);
-    expect(fixture.score(link, noToolTurn).passed).toBe(false);
+    let checked = 0;
+    for (const s of all) {
+      const good = satisfyingTools(s.expect);
+      // `minProperties` scenarios need a call record carrying field values;
+      // `noExtraTypes`/create_schema needs a non-zero fieldCount to be sound.
+      const calls = good.map((name) => ({
+        name,
+        isError: false,
+        fieldCount: 2,
+      }));
+      expect(fixture.score(s, [turn(good, calls)]).passed).toBe(true);
 
-    const linkTurn = [turn(["create_relationship"])];
-    expect(fixture.score(link, linkTurn).passed).toBe(true);
-    expect(fixture.score(greeting, linkTurn).passed).toBe(false);
+      // A wrong turn for this scenario. Chosen per kind rather than "no tools
+      // at all", because a bare `noRetry` without `minCalls` legitimately
+      // PASSES on zero calls — its repeat-detecting loop never executes. Using
+      // an empty turn as the universal negative would assert the opposite of
+      // that documented behaviour and fail here for the wrong reason.
+      const bad =
+        s.expect.kind === "noTools"
+          ? ["create_node"]
+          : s.expect.kind === "noRetry"
+            ? // A blind retry loop: red whether or not `minCalls` is set.
+              [s.expect.tool, s.expect.tool]
+            : [];
+      expect(fixture.score(s, [turn(bad)]).passed).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(all.length);
   });
 });

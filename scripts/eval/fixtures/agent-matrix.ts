@@ -238,6 +238,48 @@ function callPersistedProperties(
 }
 
 /**
+ * Check that the scenario's TARGET tool was not rejected.
+ *
+ * The name-counting assertions all shared a blind spot: a tool that fired the
+ * right number of times but was REJECTED scores identically to one that
+ * succeeded, because the tool name is all that is checked. `isError` was only
+ * ever inspected on two narrow paths — `schemaCallsAreSound` (create_schema
+ * only) and `callPersistedProperties` (only when a scenario opted into
+ * `minProperties`) — so every scenario without `minProperties` was blind to it.
+ *
+ * That is not a hypothetical gap. It is the most likely failure shape for
+ * `create_relationship`: the tool takes two node ids, the model has to recover
+ * both, and two invented ids are rejected outright. Scoring that green means
+ * the one scenario added to measure linking would report success on precisely
+ * the failure it exists to catch. The same hole covered `search_nodes` on the
+ * read-side scenarios, where a malformed filter is rejected and the turn
+ * answers from nothing.
+ *
+ * Deliberately checks only the TARGET tool, not every call in the turn: a
+ * model that tries a bad search, gets an error, recovers and then does the
+ * right thing has still done the right thing. `schemaCallsAreSound` keeps its
+ * own broader create_schema rule, which is about a DIFFERENT failure (a schema
+ * that persisted with no fields) and is not subsumed by this.
+ */
+function targetToolWasNotRejected(
+  calls: ToolCallRecord[],
+  tool: string,
+): Verdict {
+  for (const c of calls) {
+    if (c.name !== tool) continue;
+    if (c.isError) {
+      return {
+        passed: false,
+        failure:
+          `${tool} fired but was REJECTED — the turn scores as a pass on tool ` +
+          `name alone while nothing it asked for actually happened`,
+      };
+    }
+  }
+  return { passed: true };
+}
+
+/**
  * Decide whether a turn met its expectation.
  *
  * Pure and daemon-free so it is unit-testable without a model — see
@@ -273,6 +315,11 @@ export function assertExpectation(
       // count-only hole this closes for noExtraTypes exists here too.
       const schemaVerdict = schemaCallsAreSound(toolCalls);
       if (!schemaVerdict.passed) return schemaVerdict;
+      // `minProperties` first when a scenario opted into it: it inspects the
+      // same `isError` and returns a strictly more specific diagnosis (which
+      // value failed to reach storage, not merely that the call failed).
+      // `targetToolWasNotRejected` is the fallback for every scenario that did
+      // NOT opt in, which is where the blind spot actually was.
       if (expect.minProperties !== undefined) {
         return callPersistedProperties(
           toolCalls,
@@ -280,7 +327,7 @@ export function assertExpectation(
           expect.minProperties,
         );
       }
-      return { passed: true };
+      return targetToolWasNotRejected(toolCalls, expect.tool);
     }
 
     case "toolSequence": {
@@ -295,14 +342,16 @@ export function assertExpectation(
           failure: `Expected sequence [${expect.tools.join(",")}] as a subsequence, got: ${actions.join(",")}`,
         };
       }
+      const seqTarget =
+        expect.propertiesOn ?? expect.tools[expect.tools.length - 1];
       if (expect.minProperties !== undefined) {
         return callPersistedProperties(
           toolCalls,
-          expect.propertiesOn ?? expect.tools[expect.tools.length - 1],
+          seqTarget,
           expect.minProperties,
         );
       }
-      return { passed: true };
+      return targetToolWasNotRejected(toolCalls, seqTarget);
     }
 
     case "noRetry": {
@@ -328,7 +377,7 @@ export function assertExpectation(
           };
         }
       }
-      return { passed: true };
+      return targetToolWasNotRejected(toolCalls, expect.tool);
     }
 
     case "noExtraTypes": {
@@ -484,7 +533,16 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "8a",
       scenario: "8a. Create type: first",
-      prompt: "Start keeping the calls we make on how the system is built",
+      // Names the field 8c keys on, for the same reason scenario 3 names its
+      // downstream fields. 8c asserts `minProperties: 1` on whose call it was,
+      // so leaving this type's fields entirely to chance made 8c winnable only
+      // if the model happened to invent that field — and a type with nowhere
+      // to put the value means the model folds it into the node's text,
+      // degrades honestly, and scores red for the fixture's omission rather
+      // than its own behavior (#1846). The sibling chain already got this
+      // right; this one inherited the gap from the scenario it replaced.
+      prompt:
+        "Start keeping the calls we make on how the system is built, and who made each one",
       expect: { kind: "toolOnce", tool: "create_schema" },
     },
     {
@@ -658,12 +716,27 @@ const GROUPS: MatrixScenario[][] = [
       // "what constrains this piece of work" — and it is only answerable by
       // following the edge 11c recorded, not by matching text.
       //
-      // `noRetry` with `minCalls: 1` rather than `toolOnce`, for the same
-      // reason 10c uses it: a first lookup may legitimately be followed by one
-      // narrowing call, but the tool must fire at least once. The failure mode
-      // worth catching is the model answering from the conversation it can
-      // still see in its own history instead of reading the graph — which
-      // shows up precisely as the traversal never firing.
+      // `noRetry` with `minCalls: 1`. The `minCalls` half is what this
+      // scenario is for: the failure worth catching is the model answering
+      // from the conversation it can still see in its own history instead of
+      // reading the graph, which shows up precisely as the traversal never
+      // firing. Bare `noRetry` scores that GREEN, since its repeat-detecting
+      // loop never executes over zero calls.
+      //
+      // The `noRetry` half is the weaker of the two and is NOT justified by
+      // the same reasoning as 10c, despite the surface similarity. There, a
+      // second `search_nodes` is a genuine blind retry of the same lookup.
+      // Here, a second `get_related_nodes` could be a legitimate walk of the
+      // OTHER endpoint of a bidirectional edge — correct exploration, scored
+      // red. This prompt asks about one endpoint ("what the rebuild has to
+      // respect"), so one traversal is the expected shape and the two-call
+      // case should not arise; it is kept because a genuine blind retry loop
+      // is still worth catching, and relaxing it would leave that unmeasured.
+      //
+      // If a run reds out here with exactly two `get_related_nodes` calls,
+      // check the trace for the two-endpoint shape BEFORE recording it as a
+      // model failure — that is the known false-positive, and it is a fixture
+      // defect rather than a model one.
       //
       // NOTE ON DEPENDENCE: if 11c failed to record an edge, this scenario can
       // still pass — it asserts that the traversal was ATTEMPTED, not that it
