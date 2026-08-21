@@ -717,7 +717,32 @@ const GROUPS: MatrixScenario[][] = [
       // does not apply to it — asserting it would fail on a correct call. The
       // `minProperties is never asserted on create_relationship` invariant in
       // the test file pins that.
-      prompt: "That rebuild has to follow what we settled on for that page — connect the two",
+      // WINNABILITY — the constraint this scenario's first live run exposed,
+      // and it is a hard one. `create_relationship` does NOT accept an
+      // arbitrary relation name: the validator requires the type to be defined
+      // on the SOURCE node's schema, plus four universal built-ins
+      // (member_of, has_child, mentions, has_role). See
+      // node_service/relationship.rs's "are universal" error.
+      //
+      // The first draft asked to "connect the two", and the model answered
+      // with `related_to` — two real ids, correct direction, everything about
+      // the turn right — and the write was REJECTED, because neither `task`
+      // nor `text` defines `related_to`. Worse, the tool's own description
+      // names `related_to` as a valid generic fallback, so the model was
+      // rejected for following its instructions exactly. That combination made
+      // the scenario unwinnable by construction: no wording of "link these"
+      // could have succeeded for an ad-hoc relation between these two types.
+      //
+      // The prompt therefore asks for a link the system can actually record.
+      // "Point the task at it" maps onto `mentions`, which is universal and
+      // legal between any two nodes, so a correct model CAN pass — which is
+      // the minimum bar for a scenario to measure anything.
+      //
+      // The underlying affordance gap (a documented generic label the
+      // validator refuses) is a product bug, tracked separately; it is not
+      // this fixture's job to encode a workaround for it beyond staying
+      // winnable.
+      prompt: "Point that rebuild task at the decision it has to respect",
       expect: {
         kind: "toolOnce",
         tool: "create_relationship",
