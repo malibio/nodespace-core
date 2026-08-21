@@ -533,6 +533,16 @@ impl ChatEngine {
             }
         }
 
+        // The KV cache now exactly matches `tokens` (prefill above completed
+        // successfully). Update `cached_prompt` here rather than only on
+        // successful loop exit — the grammar sampler and streaming-parser
+        // init below can each fail and return via `?` before generation
+        // starts, and leaving `cached_prompt` stale in that window lets a
+        // later call trust a KV region that no longer agrees with it. On
+        // context overflow (checked below) this gets cleared, so a
+        // subsequent overflow-driven clear always wins over this write.
+        llama.cached_prompt = tokens.clone();
+
         // --- Sampling setup ---
         // A repetition penalty runs first so it reshapes the logits before the
         // temperature softens them. Without it, small models at near-greedy
@@ -642,10 +652,10 @@ impl ChatEngine {
                     tracing::warn!("Failed to decode token {}: {}", new_token.0, e);
                     batch.clear();
                     if let Err(e) = batch.add(new_token, n_cur as i32, &[0], true) {
-                        // KV cache already holds every token decoded so far this
-                        // turn while `cached_prompt` won't be updated until the
-                        // loop exits successfully — poison so a later call can't
-                        // trust a prefix match against this now-abandoned cache.
+                        // The KV cache now extends past `tokens` with this turn's
+                        // generated tokens, so the `cached_prompt` set after
+                        // prefill understates it — poison rather than leave a
+                        // prefix match that over-trusts the cache.
                         llama.poison_context();
                         return Err(ChatError::InferenceError(format!(
                             "Batch add failed: {}",
@@ -709,8 +719,8 @@ impl ChatEngine {
             batch.clear();
             if let Err(e) = batch.add(new_token, n_cur as i32, &[0], true) {
                 // Same rationale as the batch-add failure above: the KV cache
-                // already reflects this turn's decoded tokens, so `cached_prompt`
-                // (only updated on successful loop exit) would be stale.
+                // extends past `tokens` with this turn's generated tokens, so
+                // the `cached_prompt` set after prefill would understate it.
                 llama.poison_context();
                 return Err(ChatError::InferenceError(format!(
                     "Batch add failed: {}",
@@ -729,13 +739,11 @@ impl ChatEngine {
             n_cur += 1;
         }
 
-        // Store the full prompt token sequence so the next call can reuse the
-        // KV-cached prefix.  On context overflow the KV state is indeterminate,
-        // so we clear cached_prompt to force a full decode on the next call.
+        // `cached_prompt` was already set to `tokens` right after prefill
+        // completed. On context overflow the KV state is indeterminate, so we
+        // clear it here to force a full decode on the next call.
         if context_overflowed {
             llama.cached_prompt.clear();
-        } else {
-            llama.cached_prompt = tokens;
         }
 
         // Finalize: signal end-of-stream with empty string and is_partial=false.
