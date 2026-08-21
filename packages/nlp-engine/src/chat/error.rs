@@ -21,6 +21,15 @@ pub enum ChatError {
     #[error("Inference failed: {0}")]
     InferenceError(String),
 
+    /// A `llama_decode` call failed at the backend level (e.g. a Metal
+    /// command-buffer OOM). The context has already been torn down so the
+    /// next call rebuilds a fresh backend — see
+    /// `ChatLlamaState::poison_context`. Kept distinct from
+    /// [`ChatError::InferenceError`] so callers and logs can tell "backend
+    /// recovered, retry the turn" apart from other inference failures.
+    #[error("Backend decode failed and was reset; retry the turn: {0}")]
+    BackendDecodeFailed(String),
+
     #[error("Chat template error: {0}")]
     TemplateError(String),
 

@@ -162,6 +162,21 @@ impl ChatLlamaState {
 
         Ok(self.context.as_mut().expect("context just created"))
     }
+
+    /// Tear down a context that just failed a `llama_decode` call.
+    ///
+    /// llama.cpp does not recover a backend on its own after a compute
+    /// failure (its own log says "recreate the backend to recover" and
+    /// nothing does) — the Metal `sched`/command queue stays in the failed
+    /// state and every future decode on the same context fails identically.
+    /// Dropping the context here, plus the prefix cache it invalidates,
+    /// makes the *next* `get_or_create_context()` call build a fresh context
+    /// (and thus a fresh Metal backend/command queue) instead of reusing the
+    /// poisoned one — turning a permanent outage into one failed turn.
+    fn poison_context(&mut self) {
+        self.context = None;
+        self.cached_prompt.clear();
+    }
 }
 
 #[cfg(feature = "chat-service")]
@@ -501,8 +516,13 @@ impl ChatEngine {
                     .add(token, pos as i32, &[0], pos == last_idx)
                     .map_err(|e| ChatError::InferenceError(format!("Batch add failed: {}", e)))?;
             }
-            ctx.decode(&mut batch)
-                .map_err(|e| ChatError::InferenceError(format!("Prompt decode failed: {}", e)))?;
+            if let Err(e) = ctx.decode(&mut batch) {
+                llama.poison_context();
+                return Err(ChatError::BackendDecodeFailed(format!(
+                    "Prompt decode failed: {}",
+                    e
+                )));
+            }
         }
 
         // --- Sampling setup ---
@@ -618,8 +638,13 @@ impl ChatEngine {
                         .map_err(|e| {
                             ChatError::InferenceError(format!("Batch add failed: {}", e))
                         })?;
-                    ctx.decode(&mut batch)
-                        .map_err(|e| ChatError::InferenceError(format!("Decode failed: {}", e)))?;
+                    if let Err(e) = ctx.decode(&mut batch) {
+                        llama.poison_context();
+                        return Err(ChatError::BackendDecodeFailed(format!(
+                            "Decode failed: {}",
+                            e
+                        )));
+                    }
                     n_cur += 1;
                     continue;
                 }
@@ -672,8 +697,13 @@ impl ChatEngine {
                 .add(new_token, n_cur as i32, &[0], true)
                 .map_err(|e| ChatError::InferenceError(format!("Batch add failed: {}", e)))?;
 
-            ctx.decode(&mut batch)
-                .map_err(|e| ChatError::InferenceError(format!("Decode failed: {}", e)))?;
+            if let Err(e) = ctx.decode(&mut batch) {
+                llama.poison_context();
+                return Err(ChatError::BackendDecodeFailed(format!(
+                    "Decode failed: {}",
+                    e
+                )));
+            }
 
             n_cur += 1;
         }
