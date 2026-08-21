@@ -7,9 +7,11 @@
 //! format — one protocol implementation serves every such provider.
 
 use crate::agent_types::{
-    ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
-    ModelFamily, StreamingChunk,
+    ChatInferenceEngine, ChatMessage, ChatModelSpec, InferenceError, InferenceRequest,
+    InferenceUsage, ModelFamily, StreamingChunk,
 };
+#[cfg(test)]
+use crate::agent_types::{Role, ToolCallRaw};
 use crate::local_agent::ndjson::NdjsonLineBuffer;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -147,6 +149,28 @@ struct OpenAiMessage {
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenAiRequestToolCall>>,
+}
+
+/// An assistant message's outgoing tool call, replayed from history so a
+/// subsequent `tool`-role result has a matching call in the same request —
+/// required by strict OpenAI-compatible servers (see module docs on
+/// `OpenAiMessage`).
+#[derive(Serialize)]
+struct OpenAiRequestToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    call_type: String,
+    function: OpenAiRequestToolCallFunction,
+}
+
+#[derive(Serialize)]
+struct OpenAiRequestToolCallFunction {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Serialize)]
@@ -213,6 +237,32 @@ struct OpenAiUsage {
     completion_tokens: u32,
 }
 
+/// Map an internal history message to its OpenAI wire-format equivalent,
+/// replaying tool calls and the tool-result `name` so a strict
+/// OpenAI-compatible server accepts the replayed history — see the module
+/// docs on [`OpenAiMessage`] for why this matters.
+fn to_openai_message(msg: &ChatMessage) -> OpenAiMessage {
+    OpenAiMessage {
+        role: msg.role.as_str().to_string(),
+        content: msg.content.clone(),
+        tool_call_id: msg.tool_call_id.clone(),
+        name: msg.name.clone(),
+        tool_calls: (!msg.tool_calls.is_empty()).then(|| {
+            msg.tool_calls
+                .iter()
+                .map(|tc| OpenAiRequestToolCall {
+                    id: tc.id.clone(),
+                    call_type: "function".to_string(),
+                    function: OpenAiRequestToolCallFunction {
+                        name: tc.function_name.clone(),
+                        arguments: tc.arguments_json.clone(),
+                    },
+                })
+                .collect()
+        }),
+    }
+}
+
 #[async_trait]
 impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
     async fn generate(
@@ -220,15 +270,7 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
         request: InferenceRequest,
         on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
     ) -> Result<InferenceUsage, InferenceError> {
-        let messages: Vec<OpenAiMessage> = request
-            .messages
-            .iter()
-            .map(|msg| OpenAiMessage {
-                role: msg.role.as_str().to_string(),
-                content: msg.content.clone(),
-                tool_call_id: msg.tool_call_id.clone(),
-            })
-            .collect();
+        let messages: Vec<OpenAiMessage> = request.messages.iter().map(to_openai_message).collect();
 
         let tools = request.tools.map(|tool_defs| {
             tool_defs
@@ -574,5 +616,70 @@ mod tests {
             "gpt-4o".to_string(),
         );
         assert_eq!(engine.model_name(), "gpt-4o");
+    }
+
+    #[test]
+    fn replayed_assistant_tool_call_carries_tool_calls_on_the_wire() {
+        // Regression test for issue #2198: a replayed assistant turn that
+        // issued a tool call must serialize with a `tool_calls` array, or a
+        // strict OpenAI-compatible server rejects the following `tool`
+        // message with "must be a response to a preceding message with
+        // tool_calls".
+        let assistant_turn = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "call_abc".to_string(),
+                function_name: "search_nodes".to_string(),
+                arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+            }],
+        );
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        assert_eq!(json["role"], "assistant");
+        let tool_calls = json["tool_calls"]
+            .as_array()
+            .expect("tool_calls must be present on a replayed assistant tool-call turn");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], "call_abc");
+        assert_eq!(tool_calls[0]["type"], "function");
+        assert_eq!(tool_calls[0]["function"]["name"], "search_nodes");
+        assert_eq!(
+            tool_calls[0]["function"]["arguments"],
+            r#"{"query":"Q3 budget"}"#
+        );
+    }
+
+    #[test]
+    fn replayed_tool_result_carries_its_tool_name_on_the_wire() {
+        // Regression test for issue #2198: the OpenAI wire format expects a
+        // `name` field on `tool`-role messages; dropping it left the model
+        // unable to see which tool a past result came from.
+        let tool_result = ChatMessage::tool_result(r#"{"nodes":[]}"#, "call_abc", "search_nodes");
+
+        let wire = to_openai_message(&tool_result);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        assert_eq!(json["role"], "tool");
+        assert_eq!(json["tool_call_id"], "call_abc");
+        assert_eq!(
+            json["name"], "search_nodes",
+            "tool-role messages must carry the tool name on replay"
+        );
+    }
+
+    #[test]
+    fn a_plain_text_turn_omits_tool_calls_and_name() {
+        // A non-tool turn must not grow a spurious `tool_calls` or `name`
+        // field — only turns that actually carry that data should emit it.
+        let turn = ChatMessage::text(Role::User, "hello");
+
+        let wire = to_openai_message(&turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        assert!(json.get("tool_calls").is_none());
+        assert!(json.get("name").is_none());
+        assert!(json.get("tool_call_id").is_none());
     }
 }
