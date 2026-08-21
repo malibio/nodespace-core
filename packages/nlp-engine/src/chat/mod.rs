@@ -512,9 +512,17 @@ impl ChatEngine {
                 let pos = chunk_start + i;
                 // Only the final token of the whole prompt needs logits — that
                 // is the position sampling reads from.
-                batch
-                    .add(token, pos as i32, &[0], pos == last_idx)
-                    .map_err(|e| ChatError::InferenceError(format!("Batch add failed: {}", e)))?;
+                if let Err(e) = batch.add(token, pos as i32, &[0], pos == last_idx) {
+                    // The KV trim above may already have mutated the cache for
+                    // this prompt while `cached_prompt` still describes the
+                    // previous one — poison so the next call can't compute a
+                    // prefix match against a cache that no longer agrees with it.
+                    llama.poison_context();
+                    return Err(ChatError::InferenceError(format!(
+                        "Batch add failed: {}",
+                        e
+                    )));
+                }
             }
             if let Err(e) = ctx.decode(&mut batch) {
                 llama.poison_context();
@@ -633,11 +641,17 @@ impl ChatEngine {
                 Err(e) => {
                     tracing::warn!("Failed to decode token {}: {}", new_token.0, e);
                     batch.clear();
-                    batch
-                        .add(new_token, n_cur as i32, &[0], true)
-                        .map_err(|e| {
-                            ChatError::InferenceError(format!("Batch add failed: {}", e))
-                        })?;
+                    if let Err(e) = batch.add(new_token, n_cur as i32, &[0], true) {
+                        // KV cache already holds every token decoded so far this
+                        // turn while `cached_prompt` won't be updated until the
+                        // loop exits successfully — poison so a later call can't
+                        // trust a prefix match against this now-abandoned cache.
+                        llama.poison_context();
+                        return Err(ChatError::InferenceError(format!(
+                            "Batch add failed: {}",
+                            e
+                        )));
+                    }
                     if let Err(e) = ctx.decode(&mut batch) {
                         llama.poison_context();
                         return Err(ChatError::BackendDecodeFailed(format!(
@@ -693,9 +707,16 @@ impl ChatEngine {
 
             // Prepare batch for next token
             batch.clear();
-            batch
-                .add(new_token, n_cur as i32, &[0], true)
-                .map_err(|e| ChatError::InferenceError(format!("Batch add failed: {}", e)))?;
+            if let Err(e) = batch.add(new_token, n_cur as i32, &[0], true) {
+                // Same rationale as the batch-add failure above: the KV cache
+                // already reflects this turn's decoded tokens, so `cached_prompt`
+                // (only updated on successful loop exit) would be stale.
+                llama.poison_context();
+                return Err(ChatError::InferenceError(format!(
+                    "Batch add failed: {}",
+                    e
+                )));
+            }
 
             if let Err(e) = ctx.decode(&mut batch) {
                 llama.poison_context();
