@@ -743,8 +743,11 @@ const GROUPS: MatrixScenario[][] = [
       // with `related_to` — two real ids, correct direction, everything about
       // the turn right — and the write was REJECTED, because neither `task`
       // nor `text` defines `related_to`. Worse, the tool's own description
-      // names `related_to` as a valid generic fallback, so the model was
-      // rejected for following its instructions exactly. That combination made
+      // named `related_to` as a valid generic fallback at the time, so the
+      // model was rejected for following its instructions exactly. (That
+      // description has since been corrected to name `mentions`, and a
+      // regression guard now keys the wording off the validator's own
+      // built-in list — see core#2234.) That combination made
       // the scenario unwinnable by construction: no wording of "link these"
       // could have succeeded for an ad-hoc relation between these two types.
       //

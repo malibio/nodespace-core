@@ -1050,6 +1050,15 @@ fn def_create_relationship() -> ToolDefinition {
                     "type": "string",
                     "description": "Id of the record acted upon — the one being superseded, blocked, or belonged to. Copied exactly from a tool result."
                 },
+                // Stated as prose rather than a JSON `enum`, deliberately —
+                // ADR-064 rule 1 otherwise prefers the schema channel, because
+                // a stated constraint measurably outperforms prose. It cannot
+                // apply here: the legal set is SOURCE-NODE-DEPENDENT (whatever
+                // that node's own type declares, plus the four universals), so
+                // no static list is correct for every call. An enum naming only
+                // the universals would be wrong in the other direction —
+                // forbidding the schema-declared names this parameter exists to
+                // encourage.
                 "relationship_type": {
                     "type": "string",
                     "description": "The relation's name, lowercase snake_case. Must be either a relationship DECLARED on the source record's own type (e.g. 'supersedes', 'has_task'), or one of these four universal names, which are legal between any two records: member_of, has_child, mentions, has_role. Any other name is rejected — when no declared relation fits, use 'mentions'."
@@ -3885,9 +3894,24 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
+        // Asserts that the description states the CONSTRAINT — that a name
+        // outside the legal set is refused — rather than that it contains some
+        // particular noun. Three drafts of this check were weaker than they
+        // looked, which is the whole reason this test is being rewritten:
+        //   - `contains("relevant schema")` (the original) passed on the
+        //     broken description that also recommended `related_to`;
+        //   - `contains("schema") || contains("type")` was near-vacuous, since
+        //     the parameter is itself named `relationship_type`;
+        //   - `contains("declared")` looked precise but is satisfied by the
+        //     trailing "when no declared relation fits" clause, so a
+        //     description that DROPPED the requirement still passed —
+        //     verified by mutation.
+        // "rejected" is the one word that has to survive: it is what tells the
+        // model the set is closed, and no other clause supplies it.
         assert!(
-            desc.contains("schema") || desc.contains("type"),
-            "relationship_type description must point at schema-declared relationship names, got: {desc:?}"
+            desc.contains("rejected"),
+            "relationship_type description must state that a name outside the legal set is \
+             REJECTED — without it the model has no signal the set is closed, got: {desc:?}"
         );
         for name in BUILTIN_RELATIONSHIP_NAMES {
             assert!(

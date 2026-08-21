@@ -779,6 +779,16 @@ mod tests {
         // refuses on a type that does not declare them. `related_to` is the one
         // that actually shipped; the others are plausible near-misses that
         // would fail the same way.
+        //
+        // Matched as a bare substring, which cannot tell a recommendation from
+        // a prohibition — guidance reading "never use related_to" would fail
+        // this, reporting it as an offer. Kept deliberately: the guard's job is
+        // to keep these names OUT of model-facing text, and prose telling a
+        // small model what not to do is a weaker instrument than not naming it
+        // (the resident-prompt ablation is the standing evidence). If a name
+        // here later becomes legal — a universal, or one a seeded schema
+        // declares — remove it from NOT_UNIVERSAL rather than loosening the
+        // match; the constant pre-check below already forces that for builtins.
         const NOT_UNIVERSAL: [&str; 4] =
             ["related_to", "relates_to", "links_to", "associated_with"];
 
