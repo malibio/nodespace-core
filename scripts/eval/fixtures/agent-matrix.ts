@@ -666,7 +666,21 @@ const GROUPS: MatrixScenario[][] = [
       // model reaches for when no custom type fits, and that is fine here:
       // what 11c asserts is the LINK, and create_relationship takes two ids
       // regardless of what types they carry.
-      prompt: "Note that we settled on server-side rendering for the reports page",
+      //
+      // AMBIGUOUS-VERB TRAP, caught on this group's first live run. An earlier
+      // draft opened with "Note that we settled on ..." — which reads as a
+      // preamble to a statement rather than a request to record one. The model
+      // called search_semantic looking for an existing note and answered
+      // "Found 0 nodes matching your request", scoring red for a reasonable
+      // reading of the words it was given.
+      //
+      // That failure then cascaded: with no node created here, 11c's
+      // create_relationship went out with `to_id: null` and was rejected, and
+      // 11d had no edge to traverse. All three of this group's failures traced
+      // back to this one word choice, which is why the opening verb has to be
+      // an unambiguous record-creation request — the same correction scenario 4
+      // already needed.
+      prompt: "Log a decision: the reports page uses server-side rendering",
       expect: { kind: "toolOnce", tool: "create_node" },
     },
     {
