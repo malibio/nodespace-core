@@ -671,6 +671,43 @@ const TOTAL_TOKEN_BUDGET: u32 = 32_000;
 /// Tokens reserved for the system prompt and tool definitions.
 const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 
+/// Stability-motivated prefill ceiling, independent of the context-window
+/// budget above.
+///
+/// core#2172 found a Metal command-buffer OOM during prefill on a 16 GB
+/// machine at an 8,518-token **total** prompt (system prompt + history,
+/// 35.5 KB), with `n_ctx` granted at 32,768 — i.e. the context-window budget
+/// (`total_budget` in `maybe_summarize_history`, effectively ~30K tokens on
+/// that machine) was nowhere near full when the *backend* failed. A prompt
+/// can be well within the model's context window and still be large enough
+/// to risk exhausting Metal's transient compute-buffer allocation during a
+/// single prefill. This gate therefore compares against the same
+/// `history_tokens + system_tokens` total gate 1 uses (the full prompt
+/// actually submitted to `llama_decode`), not history alone — the
+/// tool-registered system prompt is itself ~6,600 tokens (see gate 1's doc
+/// comment), so a history-only comparison would never reflect what Metal
+/// actually decodes.
+///
+/// core#2227 attempted to reproduce that OOM on matching 16 GB hardware to
+/// measure the actual failure threshold (with `powermetrics` GPU telemetry)
+/// and could not: three full eval-matrix runs, including prompts up to
+/// 9,469 tokens — larger than the original failure — decoded cleanly with no
+/// backend error. The original OOM's exact trigger (allocator fragmentation
+/// state, concurrent GPU clients, thermal state, or plain Metal
+/// nondeterminism) remains unmeasured.
+///
+/// **This constant is therefore explicitly provisional**, not derived from a
+/// validated safe/unsafe boundary: it sits below the observed 8,518-token
+/// failure point with margin (and above the ~6,600-token system prompt
+/// alone, so a turn with little history does not spuriously trigger
+/// summarization every time), on the reasoning that giving up context-window
+/// headroom that mostly goes unused (the shared-chat-node pattern that
+/// triggered #2172 rarely needs more than a few thousand tokens of live
+/// history to function) is a cheap hedge against a failure mode whose
+/// recovery (#2226) is now loud but still costs a turn. Revise this once a
+/// real repro pins the actual Metal failure threshold — see #2227.
+const PREFILL_STABILITY_CEILING: u32 = 8_000;
+
 /// Last-resort user-facing message when a turn produces nothing usable — no
 /// tool executions to summarize and no (non-empty, non-pseudo-code) text from
 /// the model. Guarantees the chat UI always shows an honest failure notice
@@ -2811,15 +2848,23 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             _ => TOTAL_TOKEN_BUDGET,
         };
 
-        // The only gate: measured history plus the *actual* system prompt
-        // against the window. A second check against a static
+        // Gate 1: measured history plus the *actual* system prompt against
+        // the window. A second check against a static
         // `total_budget - SYSTEM_PROMPT_BUDGET` budget used to sit here, but
         // SYSTEM_PROMPT_BUDGET (4,000) is well under the real tool-registered
         // system prompt (~6,600 measured in nlp-engine). That let the second
         // check pass — and skip summarization — in exactly the corridor where
         // this first check had already established the prompt overflows the
         // window, because it compared against a looser, wrong-headroom budget.
-        if history_tokens + system_tokens <= total_budget {
+        //
+        // Gate 2 (`PREFILL_STABILITY_CEILING`): independent of the window
+        // budget — see its doc comment. A large model on a spacious machine
+        // can pass gate 1 by a wide margin while still submitting a prefill
+        // large enough to risk the backend failure core#2172 found. Compares
+        // against the same total gate 1 does (the whole prompt actually
+        // submitted for decode), not history alone.
+        let total_prompt_tokens = history_tokens + system_tokens;
+        if total_prompt_tokens <= total_budget && total_prompt_tokens <= PREFILL_STABILITY_CEILING {
             return Ok(());
         }
 
@@ -4213,6 +4258,100 @@ mod tests {
         );
     }
 
+    /// core#2172: a Metal backend OOM during prefill on a 16 GB machine with
+    /// `n_ctx` granted at 32,768 — the context-window budget was nowhere
+    /// near full (~8.5K tokens against a ~30K-token budget) when the
+    /// *backend* failed. `PREFILL_STABILITY_CEILING` is a second, narrower
+    /// gate independent of the context window, so a spacious `n_ctx` does
+    /// not let the total prompt (history + system) grow past it just
+    /// because gate 1 (the window budget) has room to spare.
+    #[tokio::test]
+    async fn summarization_triggers_on_stability_ceiling_despite_spacious_window() {
+        let engine = Arc::new(MockEngine::with_context_window(
+            vec![
+                // Summarization call
+                vec![
+                    StreamingChunk::Token {
+                        text: "Summary: earlier discussion condensed.".to_string(),
+                    },
+                    StreamingChunk::Done {
+                        usage: InferenceUsage {
+                            prompt_tokens: 40,
+                            completion_tokens: 10,
+                        },
+                    },
+                ],
+                // Final answer
+                vec![
+                    StreamingChunk::Token {
+                        text: "Done.".to_string(),
+                    },
+                    StreamingChunk::Done {
+                        usage: InferenceUsage {
+                            prompt_tokens: 30,
+                            completion_tokens: 10,
+                        },
+                    },
+                ],
+            ],
+            // Matches #2172's granted n_ctx: the window-budget gate (gate 1)
+            // has ample room (~30K tokens) at this history size.
+            32_768,
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+
+        // ~8.5K history tokens (@ ~4 chars/token: 20 * 1700 = 34,000 chars).
+        // The test harness has no PromptAssembler wired in, so
+        // `system_content` falls back to `EMERGENCY_FALLBACK_PROMPT` — a
+        // short, fixed string (tens of tokens), unlike production's ~6,600-
+        // token tool-registered prompt. Total (history + this small system
+        // prompt) still clears PREFILL_STABILITY_CEILING (8,000) while
+        // staying far under a 32,768 window budget (~30K after
+        // MAX_RESPONSE_TOKENS) — gate 1 alone would not trigger
+        // summarization here; only gate 2 does.
+        for i in 0..20 {
+            let role = if i % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            };
+            session.messages.push(ChatMessage::text(
+                role,
+                format!("Msg {}: {}", i, "z".repeat(1700)),
+            ));
+        }
+        let messages_before = session.messages.len();
+
+        agent_loop
+            .run_turn(
+                &mut session,
+                "Continue the conversation",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            session.messages.len() < messages_before,
+            "Stability ceiling must trigger summarization even with a spacious \
+             context window. Before: {}, After: {}",
+            messages_before,
+            session.messages.len()
+        );
+        assert!(
+            session.messages[0]
+                .content
+                .contains("[Conversation summary]"),
+            "First message should be the summary, got: {}",
+            session.messages[0].content
+        );
+    }
+
     #[tokio::test]
     async fn summarization_never_orphans_a_tool_result() {
         // Build a history that exceeds the token budget and is arranged so the
@@ -4378,6 +4517,67 @@ mod tests {
                 .contains("[Conversation summary]"),
             "First message should be the summary, got: {}",
             session.messages[0].content
+        );
+    }
+
+    /// PREFILL_STABILITY_CEILING must account for the system prompt, not
+    /// just history — this is the exact regression a history-only
+    /// comparison would miss: history alone sits under the ceiling, but
+    /// history + a realistic-size system prompt (production's tool-
+    /// registered prompt runs ~6,600 tokens) pushes the total over it.
+    #[tokio::test]
+    async fn stability_ceiling_counts_the_system_prompt_not_just_history() {
+        let engine = Arc::new(MockEngine::with_context_window(
+            vec![vec![
+                StreamingChunk::Token {
+                    text: "Summary.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ]],
+            // Spacious window: gate 1 alone would not trigger at this size.
+            32_768,
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+
+        // ~5.5K history tokens (@ ~4 chars/token: 20 * 1100 = 22,000 chars) —
+        // under PREFILL_STABILITY_CEILING (8,000) on its own.
+        for i in 0..20 {
+            let role = if i % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            };
+            session.messages.push(ChatMessage::text(
+                role,
+                format!("Msg {}: {}", i, "w".repeat(1100)),
+            ));
+        }
+        let messages_before = session.messages.len();
+
+        // ~6,600-token system prompt (26,400 chars), matching production's
+        // measured tool-registered prompt size. history (~5.5K) alone is
+        // under the ceiling; history + this system prompt (~12K) is not.
+        let realistic_system_prompt = "s".repeat(26_400);
+
+        agent_loop
+            .maybe_summarize_history(&mut session, &realistic_system_prompt)
+            .await
+            .unwrap();
+
+        assert!(
+            session.messages.len() < messages_before,
+            "history + system prompt over PREFILL_STABILITY_CEILING must trigger \
+             summarization even though history alone is under it. Before: {}, After: {}",
+            messages_before,
+            session.messages.len()
         );
     }
 
