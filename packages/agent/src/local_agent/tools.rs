@@ -3865,17 +3865,41 @@ mod tests {
     }
 
     /// `relationship_type` should steer the model toward schema-defined
-    /// relationship names before generic labels.
+    /// relationship names before generic labels, and must not offer a name the
+    /// validator rejects.
+    ///
+    /// The second half is the one that shipped broken (#2234): this test used
+    /// to assert only the literal phrase "relevant schema", which the old
+    /// description satisfied while also recommending `related_to` — a name
+    /// `NodeService::create_relationship` refuses unless the source node's own
+    /// schema declares it. Asserting a phrase let the contradiction through, so
+    /// the checks below are on the description's SUBSTANCE: it must point at
+    /// schema-declared names, and every generic label it names must actually be
+    /// legal.
     #[test]
     fn create_relationship_type_prefers_schema_defined_names() {
+        use nodespace_core::models::schema::BUILTIN_RELATIONSHIP_NAMES;
+
         let def = Tool::CreateRelationship.definition();
         let desc = def.parameters_schema["properties"]["relationship_type"]["description"]
             .as_str()
             .unwrap()
             .to_string();
         assert!(
-            desc.contains("relevant schema"),
-            "relationship_type description must point at schema-defined relationship names, got: {desc:?}"
+            desc.contains("schema") || desc.contains("type"),
+            "relationship_type description must point at schema-declared relationship names, got: {desc:?}"
+        );
+        for name in BUILTIN_RELATIONSHIP_NAMES {
+            assert!(
+                desc.contains(name),
+                "relationship_type description must name the universal relationship {name:?} \
+                 so the model has a legal fallback, got: {desc:?}"
+            );
+        }
+        assert!(
+            !desc.contains("related_to"),
+            "relationship_type description offers 'related_to', which the validator \
+             rejects unless the source node's schema declares it (#2234), got: {desc:?}"
         );
     }
 
