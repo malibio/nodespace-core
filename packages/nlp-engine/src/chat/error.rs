@@ -27,7 +27,7 @@ pub enum ChatError {
     /// `ChatLlamaState::poison_context`. Kept distinct from
     /// [`ChatError::InferenceError`] so callers and logs can tell "backend
     /// recovered, retry the turn" apart from other inference failures.
-    #[error("Backend decode failed and was reset; retry the turn: {0}")]
+    #[error("Backend decode failed (context reset): {0}")]
     BackendDecodeFailed(String),
 
     #[error("Chat template error: {0}")]
