@@ -144,7 +144,7 @@ When linking nodes or exploring connections:
 
 CALL create_relationship NOW: your next action is the tool call, not planning text.
 
-CREATING A RELATIONSHIP: both ids come from a prior tool result — copy each exactly, do not ask the user for either. Use a relation_type label defined on the relevant schema (e.g. "supersedes", "has_task") if one applies, otherwise a generic label (member_of, mentions, related_to, etc.).
+CREATING A RELATIONSHIP: both ids come from a prior tool result — copy each exactly, do not ask the user for either. The relation_type must be one declared on the source record's own type (e.g. "supersedes", "has_task"), or one of the four universal names legal between any two records: member_of, has_child, mentions, has_role. Any other name is rejected — when no declared relation fits, use "mentions".
 
 DIRECTION: from_id is the record that ACTS, to_id is the record acted upon. "A supersedes B" is from_id=A, to_id=B. Reversing them records the opposite fact and still reports success.
 

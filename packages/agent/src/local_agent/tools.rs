@@ -1052,7 +1052,7 @@ fn def_create_relationship() -> ToolDefinition {
                 },
                 "relationship_type": {
                     "type": "string",
-                    "description": "The relation's name, lowercase snake_case. Use a name defined on the relevant schema(s) (e.g. 'supersedes', 'has_task') if one applies, otherwise a generic label (member_of, mentions, related_to, etc.)."
+                    "description": "The relation's name, lowercase snake_case. Must be either a relationship DECLARED on the source record's own type (e.g. 'supersedes', 'has_task'), or one of these four universal names, which are legal between any two records: member_of, has_child, mentions, has_role. Any other name is rejected — when no declared relation fits, use 'mentions'."
                 }
             },
             "required": ["from_id", "to_id", "relationship_type"]
