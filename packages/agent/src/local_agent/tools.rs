@@ -1155,10 +1155,24 @@ fn def_create_schema() -> ToolDefinition {
                     // to adopt. This parameter names the thing being CREATED,
                     // which is what made its example answerable.
                     //
+                    // MEASURED, not just predicted (core#2190,
+                    // goldens/ablation/must-exist-id-{baseline,armA,armB}.toml):
+                    // the three survivors are inert in BOTH directions — the
+                    // literal token "adr" never appeared in 27/27 tool calls
+                    // against a type deliberately chosen to be conceptually
+                    // adjacent to "ADR", and removing the example outright
+                    // (armB) produced the identical result to keeping it
+                    // (baseline) or neutralising it (armA). Kept as-is; no
+                    // measured reason to remove them.
+                    //
                     // The rule, stated so it survives without the measurement:
                     // an example in a description for a value the model is
                     // choosing supplies a candidate answer. Say what the value
-                    // IS instead.
+                    // IS instead. An example for a value the model must copy
+                    // from context that already displays it (an id already
+                    // shown elsewhere in the prompt) illustrates format, and on
+                    // this measurement was redundant with that context rather
+                    // than merely harmless.
                     "description": "Display name for the entity type, in the user's own words, singular."
                 },
                 "description": {
