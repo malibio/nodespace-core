@@ -10,8 +10,6 @@ use crate::agent_types::{
     ChatInferenceEngine, ChatMessage, ChatModelSpec, InferenceError, InferenceRequest,
     InferenceUsage, ModelFamily, StreamingChunk,
 };
-#[cfg(test)]
-use crate::agent_types::{Role, ToolCallRaw};
 use crate::local_agent::ndjson::NdjsonLineBuffer;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -528,6 +526,7 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_types::{Role, ToolCallRaw};
 
     #[test]
     fn test_is_openai_compat_prefix() {
