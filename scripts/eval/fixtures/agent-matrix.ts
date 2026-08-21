@@ -739,9 +739,10 @@ const GROUPS: MatrixScenario[][] = [
       // the minimum bar for a scenario to measure anything.
       //
       // The underlying affordance gap (a documented generic label the
-      // validator refuses) is a product bug, tracked separately; it is not
+      // validator refuses) is a product bug tracked on core#2234; it is not
       // this fixture's job to encode a workaround for it beyond staying
-      // winnable.
+      // winnable. If that lands, revisit whether this prompt should go back to
+      // asking for a link in the user's own words.
       prompt: "Point that rebuild task at the decision it has to respect",
       expect: {
         kind: "toolOnce",
