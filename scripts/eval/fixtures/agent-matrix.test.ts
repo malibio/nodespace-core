@@ -530,6 +530,39 @@ describe("a rejected target tool scores red", () => {
     expect(v.failure).toContain("never reached storage");
   });
 
+  // Self-correction on the TARGET tool is success, not failure. `noRetry`
+  // deliberately tolerates several non-adjacent calls, so a first call rejected
+  // for a malformed argument, corrected and retried successfully, is a turn
+  // that accomplished what the prompt asked for. This shape was observed live
+  // (create_node rejected for a missing node_type, then supplied and persisted).
+  test("a rejected call followed by a successful one passes", () => {
+    expect(
+      assertExpectation(
+        { kind: "noRetry", tool: "get_related_nodes", minCalls: 1 },
+        ["get_related_nodes"],
+        [
+          { name: "get_related_nodes", isError: true },
+          { name: "get_related_nodes", isError: false },
+        ],
+      ).passed,
+    ).toBe(true);
+  });
+
+  // The other half: if EVERY call to the target tool was rejected, the turn
+  // ends with nothing written while the tool name still appears in the trace.
+  test("every call rejected still fails, and says how many", () => {
+    const v = assertExpectation(
+      { kind: "noRetry", tool: "create_relationship", minCalls: 1 },
+      ["create_relationship"],
+      [
+        { name: "create_relationship", isError: true },
+        { name: "create_relationship", isError: true },
+      ],
+    );
+    expect(v.passed).toBe(false);
+    expect(v.failure).toContain("2 times, all REJECTED");
+  });
+
   // Only the TARGET tool is judged: a model that tries a bad search, gets an
   // error, recovers and then does the right thing has still done it.
   test("a rejected NON-target call does not fail the scenario", () => {

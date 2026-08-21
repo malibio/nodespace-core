@@ -265,18 +265,33 @@ function targetToolWasNotRejected(
   calls: ToolCallRecord[],
   tool: string,
 ): Verdict {
-  for (const c of calls) {
-    if (c.name !== tool) continue;
-    if (c.isError) {
-      return {
-        passed: false,
-        failure:
-          `${tool} fired but was REJECTED — the turn scores as a pass on tool ` +
-          `name alone while nothing it asked for actually happened`,
-      };
-    }
-  }
-  return { passed: true };
+  const own = calls.filter((c) => c.name === tool);
+  if (own.length === 0) return { passed: true };
+  // A rejection only sinks the turn if NOTHING to this tool ever succeeded.
+  //
+  // The distinction is load-bearing on `noRetry`, which deliberately tolerates
+  // several non-adjacent calls: a first call rejected for a malformed argument,
+  // corrected by the model, and retried successfully is a turn that ACCOMPLISHED
+  // what the prompt asked for. Failing it would contradict that kind's own
+  // semantics and score self-correction — the behaviour we want — as failure.
+  //
+  // Observed live on 11a: create_node was rejected for a missing node_type,
+  // the model supplied it and the second call persisted. (That scenario still
+  // reds, on `toolOnce`'s pre-existing exactly-once rule, which is a separate
+  // and deliberate judgement about write tools; this helper is not what decides
+  // it.)
+  //
+  // What stays red is the case this exists for: every call to the target tool
+  // rejected, so the turn ends with nothing written while the tool name still
+  // appears in the trace.
+  if (own.some((c) => !c.isError)) return { passed: true };
+  return {
+    passed: false,
+    failure:
+      `${tool} fired ${own.length > 1 ? `${own.length} times, all ` : "but was "}` +
+      `REJECTED — the turn scores as a pass on tool name alone while nothing ` +
+      `it asked for actually happened`,
+  };
 }
 
 /**
