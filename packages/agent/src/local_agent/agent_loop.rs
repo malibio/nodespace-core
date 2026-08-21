@@ -671,9 +671,6 @@ const TOTAL_TOKEN_BUDGET: u32 = 32_000;
 /// Tokens reserved for the system prompt and tool definitions.
 const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 
-/// Tokens available for conversation history.
-const HISTORY_TOKEN_BUDGET: u32 = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
-
 /// Last-resort user-facing message when a turn produces nothing usable — no
 /// tool executions to summarize and no (non-empty, non-pseudo-code) text from
 /// the model. Guarantees the chat UI always shows an honest failure notice
@@ -2764,9 +2761,11 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
 
     /// Summarize older history turns if the conversation exceeds the token budget.
     ///
-    /// Estimates token count for the full history. If it exceeds
-    /// `HISTORY_TOKEN_BUDGET`, summarizes older messages (keeping the most
-    /// recent 2-3 turns) and replaces them with a single summary message.
+    /// Estimates token count for the full history (including tool-call argument
+    /// JSON) plus the real system prompt. If the two together exceed the
+    /// model's effective context window, summarizes older messages (keeping
+    /// the most recent 2-3 turns) and replaces them with a single summary
+    /// message.
     async fn maybe_summarize_history(
         &self,
         session: &mut AgentSession,
@@ -2777,11 +2776,22 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             return Ok(());
         }
 
-        // Estimate token count of the full conversation
+        // Estimate token count of the full conversation. A tool-call assistant
+        // turn carries its signal in `tool_calls[].arguments_json`, not
+        // `content` (content is empty by construction) — up to MAX_RESPONSE_TOKENS
+        // worth of JSON per call that the naive content-only scan would miss
+        // entirely, which is exactly the corridor where the real prompt
+        // overflows the window while the counted history still looks small.
         let mut history_text = String::new();
         for msg in &session.messages {
             history_text.push_str(&msg.content);
             history_text.push(' ');
+            for call in &msg.tool_calls {
+                history_text.push_str(&call.function_name);
+                history_text.push(' ');
+                history_text.push_str(&call.arguments_json);
+                history_text.push(' ');
+            }
         }
 
         let history_tokens = self.engine.token_count(&history_text).await?;
@@ -2793,22 +2803,23 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // reply so summarization triggers before the prompt fills the window and
         // the engine rejects it with ContextOverflow. Fall back to the static
         // budget when the window is unknown (model not loaded / remote backend).
-        let (total_budget, history_budget) = match self.engine.model_info().await {
-            Ok(Some(spec)) if spec.context_window > 0 => {
-                let total = spec
-                    .context_window
-                    .saturating_sub(MAX_RESPONSE_TOKENS)
-                    .max(SYSTEM_PROMPT_BUDGET + 1);
-                (total, total.saturating_sub(SYSTEM_PROMPT_BUDGET))
-            }
-            _ => (TOTAL_TOKEN_BUDGET, HISTORY_TOKEN_BUDGET),
+        let total_budget = match self.engine.model_info().await {
+            Ok(Some(spec)) if spec.context_window > 0 => spec
+                .context_window
+                .saturating_sub(MAX_RESPONSE_TOKENS)
+                .max(SYSTEM_PROMPT_BUDGET + 1),
+            _ => TOTAL_TOKEN_BUDGET,
         };
 
+        // The only gate: measured history plus the *actual* system prompt
+        // against the window. A second check against a static
+        // `total_budget - SYSTEM_PROMPT_BUDGET` budget used to sit here, but
+        // SYSTEM_PROMPT_BUDGET (4,000) is well under the real tool-registered
+        // system prompt (~6,600 measured in nlp-engine). That let the second
+        // check pass — and skip summarization — in exactly the corridor where
+        // this first check had already established the prompt overflows the
+        // window, because it compared against a looser, wrong-headroom budget.
         if history_tokens + system_tokens <= total_budget {
-            return Ok(());
-        }
-
-        if history_tokens <= history_budget {
             return Ok(());
         }
 
@@ -4300,6 +4311,76 @@ mod tests {
         );
     }
 
+    /// A tool-call assistant turn carries its signal in `tool_calls[].arguments_json`,
+    /// not `content` (content is empty by construction). A history built entirely
+    /// from such turns must still trigger summarization once the argument JSON
+    /// alone pushes it over the effective window — the content-only scan this
+    /// guards against would see nothing but empty strings and never trigger.
+    #[tokio::test]
+    async fn history_summarization_counts_tool_call_arguments() {
+        let engine = Arc::new(MockEngine::with_context_window(
+            vec![vec![
+                StreamingChunk::Token {
+                    text: "Summary of earlier tool activity.".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ]],
+            4096, // effective window small enough that arg JSON alone overflows it
+        ));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+
+        // Every assistant turn has EMPTY content — all signal lives in
+        // arguments_json — plus a paired empty-content tool result. ~4 chars/token
+        // in the mock: 12 calls * 2000 chars of args = 24000 chars ≈ 6000 tokens,
+        // which alone exceeds the 4096-token effective window even though every
+        // `content` field in the history is empty.
+        for i in 0..12 {
+            session
+                .messages
+                .push(ChatMessage::assistant_with_tool_calls(
+                    String::new(),
+                    vec![ToolCallRaw {
+                        id: format!("tc_{i}"),
+                        function_name: "create_nodes_from_markdown".into(),
+                        arguments_json: format!(r#"{{"markdown":"{}"}}"#, "x".repeat(2000)),
+                    }],
+                ));
+            session.messages.push(ChatMessage::tool_result(
+                String::new(),
+                format!("tc_{i}"),
+                "create_nodes_from_markdown".to_string(),
+            ));
+        }
+        let messages_before = session.messages.len();
+
+        agent_loop
+            .maybe_summarize_history(&mut session, "system")
+            .await
+            .unwrap();
+
+        assert!(
+            session.messages.len() < messages_before,
+            "tool-call argument JSON must count toward the history budget. Before: {}, After: {}",
+            messages_before,
+            session.messages.len()
+        );
+        assert!(
+            session.messages[0]
+                .content
+                .contains("[Conversation summary]"),
+            "First message should be the summary, got: {}",
+            session.messages[0].content
+        );
+    }
+
     // -- Additional coverage tests ------------------------------------------
 
     /// Mock engine that always fails on generate.
@@ -4573,7 +4654,7 @@ mod tests {
 
         let mut session = new_session();
 
-        // Fill history with enough content to exceed HISTORY_TOKEN_BUDGET.
+        // Fill history with enough content to exceed the history budget.
         // ~4 chars/token, budget is 6000 tokens => need > 24000 chars.
         for i in 0..30 {
             let role = if i % 2 == 0 {
@@ -4605,12 +4686,13 @@ mod tests {
             total_text.push(' ');
         }
         let token_count = engine.token_count(&total_text).await.unwrap();
+        let history_budget = TOTAL_TOKEN_BUDGET - SYSTEM_PROMPT_BUDGET;
 
         assert!(
-            token_count <= HISTORY_TOKEN_BUDGET,
+            token_count <= history_budget,
             "After summarization, history tokens ({}) should be at or below budget ({})",
             token_count,
-            HISTORY_TOKEN_BUDGET
+            history_budget
         );
     }
 
