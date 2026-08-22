@@ -396,10 +396,12 @@ async fn scenario_11d_one_traversal_enumerates_every_inbound_link() {
         "the rebuild task must come back from a single traversal of the \
          decision: {out:?}"
     );
-    assert!(
-        ids.len() >= 2,
-        "both records pointing at the decision must come back from ONE call — \
-         if enumerating them took two traversals, 11d's noRetry half would red \
-         out a correct model: {out:?}"
+    assert_eq!(
+        ids.len(),
+        2,
+        "exactly the two records pointing at the decision must come back from ONE \
+         call — fewer means enumerating them would take two traversals and 11d's \
+         noRetry half would red out a correct model; more means the traversal is \
+         returning nodes nothing linked: {out:?}"
     );
 }

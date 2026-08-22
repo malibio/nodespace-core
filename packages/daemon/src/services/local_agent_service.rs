@@ -1923,19 +1923,20 @@ pub fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatCo
             // later turn will actually use.
             //
             // The key is `schemaId`, not `schema_id`: `CreateSchemaOutput` and
-            // its update-side counterpart both carry
+            // `SchemaUpdateOutput` both carry
             // `#[serde(rename_all = "camelCase")]`, so camelCase is what
             // reaches the wire. The snake_case spelling this used to look for
             // matched nothing, silently degrading every schema write's history
-            // to the id-less phrasing of `terse_write_fact`. Both spellings are
-            // accepted now — the camelCase one is what production sends, and
-            // the snake_case fallback costs nothing and keeps any hand-built
-            // or externally-sourced result working.
+            // to the id-less phrasing of `terse_write_fact`.
+            //
+            // Only the camelCase spelling is accepted. `result` is populated
+            // exclusively by `exec_create_schema`/`exec_update_schema`, which
+            // serialize those structs, so a snake_case key has no producer —
+            // tolerating one would encode a false claim about the wire format.
             let node_id = r
                 .result
                 .get("id")
                 .or_else(|| r.result.get("schemaId"))
-                .or_else(|| r.result.get("schema_id"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
 
@@ -2352,6 +2353,10 @@ async fn build_workspace_context(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use nodespace_agent::local_agent::agent_loop::CANONICAL_ARGS_MAX_CHARS;
+    use nodespace_core::models::Node;
+    use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 
     /// A completed `create_schema` write must capture the new type's id.
     ///
@@ -2414,10 +2419,6 @@ mod tests {
              identifier a later create_node has to copy into node_type"
         );
     }
-    use super::*;
-    use nodespace_agent::local_agent::agent_loop::CANONICAL_ARGS_MAX_CHARS;
-    use nodespace_core::models::Node;
-    use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 
     /// Load and render a chat node's history, the way a turn does.
     ///

@@ -102,7 +102,7 @@ fn exec(name: &str, args: serde_json::Value, result: serde_json::Value) -> ToolE
 /// `golden_scenario6_sequence.rs`'s doc comments):
 ///   turn 1: create_schema(name="Equipment Checkout Record",
 ///     fields=[isReturned: boolean, replacementCost: number])
-///     -> schema_id "equipment_checkout_record"
+///     -> schemaId "equipment_checkout_record"
 ///   turn 2: create_node(node_type="equipment_checkout_record",
 ///     field_values={isReturned: false, replacementCost: 2400})
 ///     -> nodespace://laser-cutter-node
@@ -116,9 +116,18 @@ fn turn1_and_turn2_messages() -> Vec<AiChatMessage> {
                 {"name": "replacementCost", "type": "number"}
             ]
         }),
+        // camelCase, matching what `create_schema` actually puts on the wire:
+        // `CreateSchemaOutput` carries `#[serde(rename_all = "camelCase")]`.
+        // This fixture previously spelled these keys in snake_case, which no
+        // production result ever uses — and `completed_writes_from` read the
+        // schema id under the same wrong spelling, so the two agreed with each
+        // other and disagreed with production. The test passed while the real
+        // pipeline silently rendered the id-less phrasing of the fact. Keeping
+        // the fixture in the real wire shape is what makes this test's
+        // assertion about the schema id mean anything.
         serde_json::json!({
-            "schema_id": "equipment_checkout_record",
-            "is_core": false,
+            "schemaId": "equipment_checkout_record",
+            "isCore": false,
             "version": 1
         }),
     )]);

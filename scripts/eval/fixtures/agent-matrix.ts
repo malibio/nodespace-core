@@ -525,10 +525,12 @@ const GROUPS: MatrixScenario[][] = [
       // property, so the assertion is satisfiable.
       //
       // The cost, stated rather than hidden: this no longer measures whether
-      // the model can decompose an indirect reference at all. That behavior
-      // needs a scenario whose referent is NOT recoverable from history, which
-      // this chain cannot provide — every write it makes is replayed with its
-      // particulars. Measuring it properly needs a chain built for it.
+      // the model can decompose an indirect reference at all, and no other
+      // scenario does either — `toolSequence` is now unused by any live
+      // scenario. That behavior needs one whose referent is NOT recoverable
+      // from history, which this chain cannot provide: every write it makes is
+      // replayed with its particulars. Tracked as its own issue rather than
+      // left as an unowned gap in this comment; see #2248.
       expect: {
         kind: "toolOnce",
         tool: "update_node",
@@ -943,7 +945,7 @@ const GROUPS: MatrixScenario[][] = [
       // type AND its id, so every read-only question about either endpoint is
       // answerable from history. Re-wording alone cannot fix that — which is
       // why this scenario now asks for the CURRENT set of links on the
-      // decision, and 11c records a second edge for the set to be non-trivial.
+      // decision, and 11c2 records a second edge for the set to be non-trivial.
       //
       // A set is the one thing the history genuinely does not state. It holds
       // two separate "Fact: create_relationship completed" lines, recorded a
