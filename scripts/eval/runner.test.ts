@@ -1,6 +1,8 @@
 /**
  * Unit tests for runner.ts's pure scoring/reporting helpers — the uniformity
- * guard, empty-generation exclusion, and raw-output trace assembly.
+ * guard, empty-generation exclusion, raw-output trace assembly, and the
+ * multi-rep aggregation (pass^k, flip rate, guidance-drift detection) that
+ * `--runs` reports from.
  *
  * Runs via `bun run test:scripts` (and so under `bun run test:all`). Deliberate
  * exception to the project-wide "never use `bun test`" rule: this file touches
@@ -17,11 +19,15 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  aggregateReps,
   buildTraceLines,
+  checkGuidanceDrift,
   checkUniformity,
+  formatReliabilityTable,
   markerFor,
   parseTurnOutput,
   partitionExcluded,
+  readBaselineReliability,
 } from "./runner.ts";
 import { assertExpectation } from "./fixtures/agent-matrix.ts";
 import { EnvironmentError } from "./preflight.ts";
@@ -208,6 +214,7 @@ describe("buildTraceLines", () => {
     const lines = buildTraceLines(results);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
+      rep: 1,
       scenarioId: "1",
       turnIndex: 0,
       isPriorContext: false,
@@ -244,6 +251,375 @@ describe("buildTraceLines", () => {
     expect(lines).toHaveLength(2);
     expect(lines[0].isPriorContext).toBe(true);
     expect(lines[1].isPriorContext).toBe(false);
+  });
+
+  // A multi-rep trace is only useful if a line says which rep it came from —
+  // "what did the model say the time it failed" is the question reps exist to
+  // let you ask.
+  test("tags each line with the rep it came from", () => {
+    const results = [
+      result({
+        id: "1",
+        turns: [
+          {
+            toolsOffered: "",
+            toolsCalled: [],
+            reply: "r",
+            latencyMs: 10,
+            rawOutput: "raw",
+          },
+        ],
+      }),
+    ];
+    expect(buildTraceLines(results, 3)[0].rep).toBe(3);
+  });
+});
+
+describe("aggregateReps × setup exclusion", () => {
+  // The seam between outcome grading (which introduced setup scenarios) and
+  // --runs (which introduced pass^k). A setup scenario counted here would put
+  // the cascade back one level up: a flaky setup turn would be reported as an
+  // unreliable SCENARIO, when what it actually means is that its successors'
+  // reps are not comparable.
+  test("setup scenarios are excluded from the pass^k denominator", () => {
+    const agg = aggregateReps([
+      [result({ id: "11a", excludedAsSetup: true }), result({ id: "11c" })],
+      [result({ id: "11a", excludedAsSetup: true }), result({ id: "11c" })],
+    ]);
+    expect(agg.scoredScenarios).toBe(1);
+    expect(agg.passAtK).toBe(1);
+  });
+
+  test("a setup scenario is marked, not reported as never scored", () => {
+    const agg = aggregateReps([
+      [result({ id: "11a", excludedAsSetup: true, passed: false })],
+      [result({ id: "11a", excludedAsSetup: true, passed: true })],
+    ]);
+    const s = agg.scenarios.find((x) => x.id === "11a")!;
+    expect(s.setup).toBe(true);
+    expect(s.scoredReps).toBe(0);
+    // A setup turn that passed in one rep and failed in another is NOT a flip
+    // worth reporting — it was never an observation in the first place.
+    expect(s.flipped).toBe(false);
+    expect(agg.flipped).toBe(0);
+  });
+
+  // It must render as setup rather than as a degenerate empty generation,
+  // which would name an inference bug that did not happen.
+  test("the reliability table renders a setup scenario as setup", () => {
+    const agg = aggregateReps([
+      [result({ id: "11a", excludedAsSetup: true }), result({ id: "11c" })],
+    ]);
+    const lines = formatReliabilityTable(agg);
+    const setupLine = lines.find((l) => l.includes("11a"))!;
+    expect(setupLine).toContain("⊙");
+    expect(setupLine).toContain("fixture setup");
+    expect(setupLine).not.toContain("empty generation");
+  });
+
+  // A setup scenario and a genuinely-excluded one both have scoredReps === 0
+  // and must stay distinguishable.
+  test("setup and all-excluded scenarios render differently", () => {
+    const agg = aggregateReps([
+      [
+        result({ id: "11a", excludedAsSetup: true }),
+        result({ id: "5", excludedAsEmptyGeneration: true, passed: false }),
+      ],
+    ]);
+    const lines = formatReliabilityTable(agg);
+    expect(lines.find((l) => l.includes("11a"))).toContain("fixture setup");
+    expect(lines.find((l) => l.includes(" 5 "))).toContain("empty generation");
+  });
+});
+
+describe("aggregateReps", () => {
+  test("a single rep reports pass^1 == pass^k and no flips", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" }), result({ id: "2", passed: false })],
+    ]);
+    expect(agg.reps).toBe(1);
+    expect(agg.scoredScenarios).toBe(2);
+    expect(agg.passAtK).toBe(1);
+    expect(agg.passAt1).toBe(1);
+    expect(agg.flipped).toBe(0);
+  });
+
+  test("a scenario passing in every rep counts toward pass^k", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" })],
+      [result({ id: "1" })],
+      [result({ id: "1" })],
+    ]);
+    expect(agg.passAtK).toBe(1);
+    expect(agg.scenarios[0]).toMatchObject({
+      scoredReps: 3,
+      passedReps: 3,
+      passedAll: true,
+      flipped: false,
+    });
+  });
+
+  // The motivating case from the issue: 2/3 is not a pass, and it is a
+  // different finding from 0/3. A single run renders both identically.
+  test("a scenario that flips is excluded from pass^k and flagged", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" })],
+      [result({ id: "1", passed: false })],
+      [result({ id: "1" })],
+    ]);
+    expect(agg.passAtK).toBe(0);
+    expect(agg.flipped).toBe(1);
+    expect(agg.scenarios[0]).toMatchObject({
+      scoredReps: 3,
+      passedReps: 2,
+      passedAll: false,
+      flipped: true,
+    });
+  });
+
+  test("a scenario failing in every rep is a hard fail, not a flip", () => {
+    const agg = aggregateReps([
+      [result({ id: "1", passed: false })],
+      [result({ id: "1", passed: false })],
+    ]);
+    expect(agg.passAtK).toBe(0);
+    expect(agg.flipped).toBe(0);
+    expect(agg.scenarios[0]).toMatchObject({ passedAll: false, flipped: false });
+  });
+
+  test("pass^1 is the mean of the per-rep scores, not a per-scenario rate", () => {
+    // rep 1 scores 2/2, rep 2 scores 0/2 → mean 1.0 out of 2 scenarios.
+    const agg = aggregateReps([
+      [result({ id: "1" }), result({ id: "2" })],
+      [result({ id: "1", passed: false }), result({ id: "2", passed: false })],
+    ]);
+    expect(agg.passAt1).toBe(1);
+    expect(agg.passAtK).toBe(0);
+    expect(agg.flipped).toBe(2);
+  });
+
+  // An inference bug is not evidence either way about the scenario, so an
+  // excluded rep must not make a reliable scenario read as a flipping one.
+  test("an excluded rep leaves the denominator, not the numerator", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" })],
+      [result({ id: "1", excludedAsEmptyGeneration: true, passed: false })],
+      [result({ id: "1" })],
+    ]);
+    expect(agg.passAtK).toBe(1);
+    expect(agg.flipped).toBe(0);
+    expect(agg.scenarios[0]).toMatchObject({
+      scoredReps: 2,
+      passedReps: 2,
+      excludedReps: 1,
+      passedAll: true,
+    });
+  });
+
+  test("a scenario excluded in every rep is counted as neither pass nor fail", () => {
+    const agg = aggregateReps([
+      [
+        result({ id: "1" }),
+        result({ id: "2", excludedAsEmptyGeneration: true, passed: false }),
+      ],
+      [
+        result({ id: "1" }),
+        result({ id: "2", excludedAsEmptyGeneration: true, passed: false }),
+      ],
+    ]);
+    // Scenario 2 was never scored: it leaves the denominator entirely rather
+    // than counting as a failure that no measurement supports.
+    expect(agg.scoredScenarios).toBe(1);
+    expect(agg.passAtK).toBe(1);
+    expect(agg.scenarios).toHaveLength(2);
+    expect(agg.scenarios[1]).toMatchObject({
+      scoredReps: 0,
+      excludedReps: 2,
+      passedAll: false,
+      flipped: false,
+    });
+  });
+
+  // A rep that aborted partway contributes fewer scenarios than the others.
+  // Each scenario's reliability must then be judged against the reps that
+  // actually reached it, not against the run's rep count — otherwise every
+  // scenario after the abort point reads as unreliable because of where the
+  // run stopped rather than because of how the model behaved.
+  test("scenarios present in only some reps are judged on the reps that reached them", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" }), result({ id: "2" })],
+      [result({ id: "1" })], // rep 2 stopped after scenario 1
+      [result({ id: "1" }), result({ id: "2", passed: false })],
+    ]);
+    expect(agg.reps).toBe(3);
+    expect(agg.scenarios[0]).toMatchObject({ scoredReps: 3, passedReps: 3, passedAll: true });
+    expect(agg.scenarios[1]).toMatchObject({ scoredReps: 2, passedReps: 1, flipped: true });
+    expect(agg.passAtK).toBe(1);
+    // pass^1 averages the per-rep scored counts (2, 1, 1) — it is a mean of
+    // what each rep actually scored, not a rate over the run's scenario list.
+    expect(agg.passAt1).toBeCloseTo(4 / 3, 5);
+  });
+
+  test("keeps fixture order and preserves scenario descriptions", () => {
+    const agg = aggregateReps([
+      [
+        result({ id: "b", scenario: "second" }),
+        result({ id: "a", scenario: "first" }),
+      ],
+      [result({ id: "a", scenario: "first" })],
+    ]);
+    expect(agg.scenarios.map((s) => s.id)).toEqual(["b", "a"]);
+    expect(agg.scenarios[0].scenario).toBe("second");
+  });
+
+  test("no reps at all aggregates to zeroes rather than throwing", () => {
+    const agg = aggregateReps([]);
+    expect(agg).toMatchObject({
+      reps: 0,
+      scoredScenarios: 0,
+      passAtK: 0,
+      passAt1: 0,
+      flipped: 0,
+    });
+  });
+});
+
+describe("checkGuidanceDrift", () => {
+  const guidance = {
+    skill: [
+      { key: "Research & Search", version: "d64c01a0" },
+      { key: "Node Creation", version: "7d5db44b" },
+    ],
+  };
+
+  test("identical guidance does not drift", () => {
+    expect(checkGuidanceDrift(guidance, structuredClone(guidance), 2)).toBeNull();
+  });
+
+  // Node query order is not a guarantee, so a reordered readback must not read
+  // as a rebuilt daemon — that would abort correct runs.
+  test("the same entries in a different order do not drift", () => {
+    const reordered = {
+      skill: [
+        { key: "Node Creation", version: "7d5db44b" },
+        { key: "Research & Search", version: "d64c01a0" },
+      ],
+    };
+    expect(checkGuidanceDrift(guidance, reordered, 2)).toBeNull();
+  });
+
+  test("a changed content version is drift", () => {
+    const changed = {
+      skill: [
+        { key: "Research & Search", version: "CHANGED" },
+        { key: "Node Creation", version: "7d5db44b" },
+      ],
+    };
+    const err = checkGuidanceDrift(guidance, changed, 3);
+    expect(err).toBeInstanceOf(EnvironmentError);
+    expect(err?.message).toContain("rep 3");
+  });
+
+  test("an added or removed seeded node is drift", () => {
+    const fewer = { skill: [{ key: "Node Creation", version: "7d5db44b" }] };
+    expect(checkGuidanceDrift(guidance, fewer, 2)).toBeInstanceOf(
+      EnvironmentError,
+    );
+  });
+
+  test("both sides absent is not drift", () => {
+    expect(checkGuidanceDrift(undefined, undefined, 2)).toBeNull();
+  });
+
+  test("guidance appearing where there was none is drift", () => {
+    expect(checkGuidanceDrift(undefined, guidance, 2)).toBeInstanceOf(
+      EnvironmentError,
+    );
+  });
+});
+
+describe("formatReliabilityTable", () => {
+  test("a single rep renders plain pass/fail, not an N/N tally", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" }), result({ id: "2", passed: false })],
+    ]);
+    const lines = formatReliabilityTable(agg);
+    expect(lines[0]).toContain("✓ 1  pass");
+    expect(lines[1]).toContain("✗ 2  fail");
+    expect(lines.join("\n")).not.toContain("reps");
+  });
+
+  // The finding the issue is about: "fails 3/3" and "fails 1/3" must not
+  // render identically.
+  test("distinguishes a standing failure from a flipping one", () => {
+    const agg = aggregateReps([
+      [result({ id: "always" }), result({ id: "never", passed: false }), result({ id: "flaky" })],
+      [result({ id: "always" }), result({ id: "never", passed: false }), result({ id: "flaky", passed: false })],
+      [result({ id: "always" }), result({ id: "never", passed: false }), result({ id: "flaky" })],
+    ]);
+    const lines = formatReliabilityTable(agg);
+    expect(lines[0]).toBe("  ✓ always  3/3 reps");
+    expect(lines[1]).toBe("  ✗ never  0/3 reps");
+    expect(lines[2]).toBe("  ~ flaky  2/3 reps  ← FLIPPED");
+  });
+
+  test("reports excluded reps alongside the tally", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" })],
+      [result({ id: "1", excludedAsEmptyGeneration: true, passed: false })],
+    ]);
+    expect(formatReliabilityTable(agg)[0]).toBe("  ✓ 1  1/1 reps · 1 excluded");
+  });
+
+  test("a scenario excluded in every rep says so rather than reading as a fail", () => {
+    const agg = aggregateReps([
+      [result({ id: "1", excludedAsEmptyGeneration: true, passed: false })],
+      [result({ id: "1", excludedAsEmptyGeneration: true, passed: false })],
+    ]);
+    expect(formatReliabilityTable(agg)[0]).toBe(
+      "  ⊘ 1  excluded in all 2 rep(s) — never scored",
+    );
+  });
+
+  test("a single-rep exclusion does not render as 'all 1 rep(s)'", () => {
+    const agg = aggregateReps([
+      [result({ id: "1", excludedAsEmptyGeneration: true, passed: false })],
+    ]);
+    expect(formatReliabilityTable(agg)[0]).toBe(
+      "  ⊘ 1  excluded (degenerate empty generation) — never scored",
+    );
+  });
+});
+
+describe("readBaselineReliability", () => {
+  test("reads a multi-rep baseline by pass^k", () => {
+    const baseline = {
+      reps: [
+        { rep: 1, results: [result({ id: "1" }), result({ id: "2" })] },
+        { rep: 2, results: [result({ id: "1" }), result({ id: "2", passed: false })] },
+      ],
+    };
+    const base = readBaselineReliability(baseline);
+    expect(base?.reps).toBe(2);
+    expect(base?.byId.get("1")?.passedAll).toBe(true);
+    expect(base?.byId.get("2")?.passedAll).toBe(false);
+  });
+
+  // Baselines recorded before --runs existed carry a flat `results` array and
+  // must still join, or every pre-existing baseline reads as "all removed".
+  test("reads a pre-reps baseline as a single rep", () => {
+    const baseline = {
+      results: [result({ id: "1" }), result({ id: "2", passed: false })],
+    };
+    const base = readBaselineReliability(baseline);
+    expect(base?.reps).toBe(1);
+    expect(base?.byId.get("1")?.passedAll).toBe(true);
+    expect(base?.byId.get("2")?.passedAll).toBe(false);
+  });
+
+  test("returns null for a file carrying neither shape", () => {
+    expect(readBaselineReliability({ eval: "agent-matrix" })).toBeNull();
+    expect(readBaselineReliability(null)).toBeNull();
   });
 });
 

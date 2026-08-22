@@ -18,6 +18,7 @@ import {
   preflight,
   readDaemonStatus,
   readGuidanceProvenance,
+  type DaemonStatus,
   EnvironmentError,
   EXIT_FAILED,
   EXIT_USAGE,
@@ -25,8 +26,11 @@ import {
 import type {
   EvalFixture,
   EvalResults,
+  GuidanceProvenance,
   Provenance,
-  Scenario,
+  RepResult,
+  RunAggregate,
+  ScenarioReliability,
   ScenarioResult,
   ToolCallRecord,
   TurnRecord,
@@ -202,6 +206,41 @@ function gitCommit(): { commit: string; dirty: boolean } {
 // ---------------------------------------------------------------------------
 
 /**
+ * Read a baseline results file into per-scenario reliability.
+ *
+ * Baselines are compared on pass^k, not on a single verdict, for the same
+ * reason the runner repeats at all: a single-draw baseline diffed against a
+ * single-draw run reports the distribution's spread as regressions and fixes.
+ * A one-rep baseline still works — its pass^k is just its only verdict — but
+ * it inherits that noise, which is why the summary says how many reps each
+ * side carried.
+ */
+export function readBaselineReliability(
+  parsed: unknown,
+): { reps: number; byId: Map<string, ScenarioReliability> } | null {
+  // A baseline that parsed to a non-object (a file containing `null`, a bare
+  // number, an array) must warn like any other unreadable baseline rather than
+  // throwing — a bad --baseline path cannot be allowed to discard a run that
+  // took minutes of inference to produce.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+  const b = parsed as Partial<EvalResults> & {
+    // Pre-`--runs` files carried scenarios at the top level with no reps.
+    results?: ScenarioResult[];
+  };
+  if (Array.isArray(b.reps) && b.reps.length > 0) {
+    const agg = aggregateReps(b.reps.map((r) => r.results ?? []));
+    return { reps: b.reps.length, byId: new Map(agg.scenarios.map((s) => [s.id, s])) };
+  }
+  if (Array.isArray(b.results)) {
+    const agg = aggregateReps([b.results]);
+    return { reps: 1, byId: new Map(agg.scenarios.map((s) => [s.id, s])) };
+  }
+  return null;
+}
+
+/**
  * Compare against a recorded baseline. Returns the regression count.
  *
  * Joins on scenario `id`, not the prompt text: prompts get reworded (the
@@ -210,12 +249,12 @@ function gitCommit(): { commit: string; dirty: boolean } {
  */
 async function compareToBaseline(
   evalName: string,
-  results: ScenarioResult[],
+  aggregate: RunAggregate,
   baselinePath: string,
 ): Promise<number> {
-  let baseline: EvalResults;
+  let parsed: unknown;
   try {
-    baseline = JSON.parse(await Bun.file(baselinePath).text());
+    parsed = JSON.parse(await Bun.file(baselinePath).text());
   } catch (e) {
     // A baseline that cannot be read is an operator error worth surfacing, but
     // it must not discard a run that took minutes of inference to produce.
@@ -225,32 +264,40 @@ async function compareToBaseline(
     return 0;
   }
 
-  const p = baseline.provenance;
+  const base = readBaselineReliability(parsed);
+  if (!base) {
+    console.error(
+      `[${evalName}] Warning: baseline at ${baselinePath} carries neither ` +
+        `\`reps\` nor \`results\` — nothing to compare against.`,
+    );
+    return 0;
+  }
+
+  const p = (parsed as Partial<EvalResults>).provenance;
   console.log(`── Baseline comparison (vs ${baselinePath}) ──`);
   if (p) {
     console.log(
       `   Recorded: ${p.recordedAt} · model ${p.model} · n_ctx ${p.nCtx}`,
     );
   }
+  console.log(
+    `   Comparing pass^k: baseline ${base.reps} rep(s) vs this run ${aggregate.reps} rep(s)`,
+  );
+  if (base.reps === 1 && aggregate.reps === 1) {
+    console.log(
+      `   Note: both sides are single draws — a difference here is within the ` +
+        `run-to-run spread this suite is known to have.`,
+    );
+  }
 
-  const byId = new Map((baseline.results ?? []).map((r) => [r.id, r]));
   let regressions = 0;
 
-  for (const cur of results) {
-    const base = byId.get(cur.id);
-    if (!base) {
-      console.log(`   NEW         ${cur.id} → ${cur.passed ? "pass" : "fail"}`);
-      continue;
-    }
-    // An empty-generation exclusion is an inference bug, not a scoring
-    // outcome — it carries `passed: false` only so older tooling degrades
-    // safely, and must not be compared against a baseline verdict as if it
-    // were one. Otherwise every run with a stray empty generation reports a
-    // spurious REGRESSION on a scenario the model was never actually scored
-    // against this time.
-    if (cur.excludedAsEmptyGeneration) {
+  for (const cur of aggregate.scenarios) {
+    const b = base.byId.get(cur.id);
+    if (!b) {
       console.log(
-        `   EXCLUDED    ${cur.id}: degenerate empty generation this run — not compared`,
+        `   NEW         ${cur.id} → ${cur.passedAll ? "pass^k" : "fail"} ` +
+          `(${cur.passedReps}/${cur.scoredReps} reps)`,
       );
       continue;
     }
@@ -259,26 +306,40 @@ async function compareToBaseline(
     // still carries a scored verdict for the same id, and comparing the two
     // would report a REGRESSION the moment a setup turn takes a different
     // (still perfectly valid) path. Its failure is surfaced during the run
-    // instead, where it means something: the state it should have established.
-    if (cur.excludedAsSetup) {
+    // instead, where it means something: the state its successors needed.
+    if (cur.setup) {
       console.log(
-        `   SETUP       ${cur.id}: fixture setup, not scored — not compared` +
-          (cur.passed ? "" : " (⚠ setup did not establish its state)"),
+        `   SETUP       ${cur.id}: fixture setup, not scored — not compared`,
       );
       continue;
     }
-    if (base.passed && !cur.passed) {
+    // A scenario excluded in every rep was never scored this run — an
+    // inference bug, not a scoring outcome. Comparing it against a baseline
+    // verdict would report a spurious REGRESSION on a scenario the model was
+    // never actually measured against this time.
+    if (cur.scoredReps === 0) {
       console.log(
-        `   REGRESSION  ${cur.id}: was passing, now failing — ${cur.failure}`,
+        `   EXCLUDED    ${cur.id}: degenerate empty generation in all ` +
+          `${cur.excludedReps} rep(s) — not compared`,
+      );
+      continue;
+    }
+    if (b.passedAll && !cur.passedAll) {
+      console.log(
+        `   REGRESSION  ${cur.id}: passed all ${b.scoredReps} baseline rep(s), ` +
+          `now ${cur.passedReps}/${cur.scoredReps}`,
       );
       regressions++;
-    } else if (!base.passed && cur.passed) {
-      console.log(`   FIXED       ${cur.id}: was failing, now passing`);
+    } else if (!b.passedAll && cur.passedAll) {
+      console.log(
+        `   FIXED       ${cur.id}: was ${b.passedReps}/${b.scoredReps} in ` +
+          `baseline, now passes all ${cur.scoredReps} rep(s)`,
+      );
     }
   }
 
-  for (const [id] of byId) {
-    if (!results.some((r) => r.id === id)) {
+  for (const [id] of base.byId) {
+    if (!aggregate.scenarios.some((s) => s.id === id)) {
       console.log(`   REMOVED     ${id}: in baseline, not in this run`);
     }
   }
@@ -356,6 +417,91 @@ export function partitionExcluded(results: ScenarioResult[]): {
 }
 
 /**
+ * Fold every rep's results into per-scenario reliability plus run totals.
+ *
+ * The headline it produces is pass^k — a scenario counts only if it passed in
+ * every rep that scored it — because that is the property the eval is for. A
+ * model that writes to a user's graph correctly two times in three is not a
+ * model that works; pass^1 records what it can do, pass^k what it does.
+ *
+ * Excluded reps are removed from a scenario's denominator rather than counted
+ * as failures, so a stray empty generation cannot make a reliable scenario
+ * read as a flipping one. A scenario excluded in EVERY rep drops out of
+ * `scoredScenarios` entirely — it was never measured, and counting it either
+ * way would be inventing a result.
+ *
+ * Pure, and takes rep results rather than a `RepResult[]`, so the aggregation
+ * math is unit-testable against fixed arrays with no daemon and no provenance
+ * scaffolding (see runner.test.ts).
+ */
+export function aggregateReps(reps: ScenarioResult[][]): RunAggregate {
+  // Fixture order, taken from the first rep that saw each scenario. Reps run
+  // the same fixture, so this is stable; a rep that aborted early simply
+  // contributes fewer scenarios rather than reordering them.
+  const order: string[] = [];
+  const byId = new Map<string, { scenario: string; results: ScenarioResult[] }>();
+  for (const rep of reps) {
+    for (const r of rep) {
+      let entry = byId.get(r.id);
+      if (!entry) {
+        entry = { scenario: r.scenario, results: [] };
+        byId.set(r.id, entry);
+        order.push(r.id);
+      }
+      entry.results.push(r);
+    }
+  }
+
+  const scenarios: ScenarioReliability[] = order.map((id) => {
+    const { scenario, results } = byId.get(id)!;
+    // Setup scenarios are excluded from pass^k for the same reason they are
+    // excluded from a single run's denominator: they are not observations.
+    // Counting them here would put the cascade back one level up — a setup
+    // turn that flipped would be reported as an unreliable SCENARIO, when what
+    // it actually means is that its successors' reps are not comparable.
+    const setup = results.length > 0 && results.every((r) => r.excludedAsSetup);
+    const excludedReps = results.filter(
+      (r) => r.excludedAsEmptyGeneration,
+    ).length;
+    const scored = setup
+      ? []
+      : results.filter((r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup);
+    const passedReps = scored.filter((r) => r.passed).length;
+    return {
+      id,
+      scenario,
+      scoredReps: scored.length,
+      passedReps,
+      excludedReps,
+      passedAll: scored.length > 0 && passedReps === scored.length,
+      flipped: passedReps > 0 && passedReps < scored.length,
+      ...(setup ? { setup: true } : {}),
+    };
+  });
+
+  const measured = scenarios.filter((s) => s.scoredReps > 0);
+  // pass^1 is the mean of the per-rep scored pass counts — the number a single
+  // run would have quoted — not a per-scenario rate, so it stays directly
+  // comparable to every score this project has cited from a one-rep run.
+  const perRepPassed = reps.map(
+    (rep) => partitionExcluded(rep).scored.filter((r) => r.passed).length,
+  );
+  const passAt1 =
+    perRepPassed.length > 0
+      ? perRepPassed.reduce((a, b) => a + b, 0) / perRepPassed.length
+      : 0;
+
+  return {
+    reps: reps.length,
+    scoredScenarios: measured.length,
+    passAtK: measured.filter((s) => s.passedAll).length,
+    passAt1,
+    flipped: scenarios.filter((s) => s.flipped).length,
+    scenarios,
+  };
+}
+
+/**
  * Decide whether a scored run's pass rate is uniform enough to be a harness
  * signature rather than a result. Returns `null` when the run is fine, or an
  * `EnvironmentError` when it should abort.
@@ -386,8 +532,56 @@ export function checkUniformity(
   );
 }
 
+/**
+ * Decide whether guidance drifted between reps. Returns `null` when it did
+ * not, or an `EnvironmentError` naming the drift.
+ *
+ * Reps are only comparable if they measured the same guidance. Seeding runs at
+ * daemon startup and is content-versioned, so any between-rep purge/restart —
+ * exactly what this harness asks the operator to do — can silently land a rep
+ * on different content: a rebuilt daemon, a purge that did not take, a
+ * different checkout. Folding two guidance versions into one pass^k number
+ * produces a reliability figure for a system that never existed, so this
+ * aborts rather than averaging across it.
+ *
+ * Pure, so both the stable and drifted cases are testable with no daemon.
+ */
+export function checkGuidanceDrift(
+  first: GuidanceProvenance | undefined,
+  current: GuidanceProvenance | undefined,
+  rep: number,
+): EnvironmentError | null {
+  const fingerprint = (g: GuidanceProvenance | undefined): string =>
+    JSON.stringify(
+      Object.entries(g ?? {})
+        .map(([type, entries]) => [
+          type,
+          [...entries]
+            .map((e) => `${e.key}@${e.version}`)
+            .sort((a, b) => a.localeCompare(b)),
+        ])
+        .sort((a, b) => (a[0] as string).localeCompare(b[0] as string)),
+    );
+
+  const a = fingerprint(first);
+  const b = fingerprint(current);
+  if (a === b) return null;
+
+  return new EnvironmentError(
+    `Seeded guidance changed between rep 1 and rep ${rep} — the reps did not measure ` +
+      `the same system, so their scores cannot be pooled.\n` +
+      `  rep 1:   ${a}\n` +
+      `  rep ${rep}: ${b}`,
+    `Reps must run against identical guidance. If a between-run hook rebuilds or ` +
+      `reseeds the daemon, make sure it restores the SAME commit's content every ` +
+      `time.\n  No results file was written for this run.`,
+  );
+}
+
 /** One line of the raw-output JSONL trace. */
 export interface TraceLine {
+  /** 1-based rep this turn came from. */
+  rep: number;
   scenarioId: string;
   turnIndex: number;
   isPriorContext: boolean;
@@ -398,18 +592,24 @@ export interface TraceLine {
 }
 
 /**
- * Build the raw-output trace lines for a run's results.
+ * Build the raw-output trace lines for one rep's results.
  *
  * Only turns that actually captured `rawOutput` produce a line — a turn run
  * against a daemon without `RUST_LOG=debug` simply contributes nothing,
- * rather than a null placeholder.
+ * rather than a null placeholder. Each line carries its `rep` so a multi-rep
+ * trace answers "what did the model say the time it failed", which is the
+ * whole point of keeping the reps that disagree.
  */
-export function buildTraceLines(results: ScenarioResult[]): TraceLine[] {
+export function buildTraceLines(
+  results: ScenarioResult[],
+  rep = 1,
+): TraceLine[] {
   const lines: TraceLine[] = [];
   for (const r of results) {
     for (const [idx, t] of r.turns.entries()) {
       if (t.rawOutput === undefined) continue;
       lines.push({
+        rep,
         scenarioId: r.id,
         turnIndex: idx,
         isPriorContext: idx < r.turns.length - 1,
@@ -423,95 +623,104 @@ export function buildTraceLines(results: ScenarioResult[]): TraceLine[] {
   return lines;
 }
 
+/**
+ * Render the per-scenario reliability table.
+ *
+ * Split out as a pure string[] builder so the rendering that carries the
+ * finding — "fails 3/3" versus "fails 1/3", the distinction a single run
+ * cannot make — is asserted directly in a unit test rather than only by
+ * eyeballing terminal output.
+ */
+export function formatReliabilityTable(aggregate: RunAggregate): string[] {
+  const single = aggregate.reps === 1;
+  return aggregate.scenarios.map((s) => {
+    // Setup before the exclusion branch: a setup scenario also has
+    // `scoredReps === 0`, and reporting it as a degenerate empty generation
+    // would name an inference bug that did not happen.
+    if (s.setup) {
+      return `  ⊙ ${s.id}  fixture setup — not scored`;
+    }
+    if (s.scoredReps === 0) {
+      return single
+        ? `  ⊘ ${s.id}  excluded (degenerate empty generation) — never scored`
+        : `  ⊘ ${s.id}  excluded in all ${s.excludedReps} rep(s) — never scored`;
+    }
+    const marker = s.passedAll ? "✓" : s.flipped ? "~" : "✗";
+    const tally = single
+      ? s.passedAll
+        ? "pass"
+        : "fail"
+      : `${s.passedReps}/${s.scoredReps} reps`;
+    const excluded =
+      s.excludedReps > 0 ? ` · ${s.excludedReps} excluded` : "";
+    const flag = s.flipped ? "  ← FLIPPED" : "";
+    return `  ${marker} ${s.id}  ${tally}${excluded}${flag}`;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 function usage(fixture: EvalFixture): string {
   return (
-    `usage: bun run scripts/eval/${fixture.name}.ts <label> [out.json] [--baseline <path>]\n\n` +
+    `usage: bun run scripts/eval/${fixture.name}.ts <label> [out.json] [--runs N]\n` +
+    `       [--between-runs <cmd>] [--baseline <path>]\n\n` +
     `  ${fixture.description}\n\n` +
-    `  label        tag recorded in the results (e.g. 'e4b')\n` +
-    `  out.json     where to write results (default: /tmp/${fixture.name}-<label>-<ts>.json)\n` +
-    `  --baseline   compare against a recorded run and fail on regression\n\n` +
+    `  label          tag recorded in the results (e.g. 'e4b')\n` +
+    `  out.json       where to write results (default: /tmp/${fixture.name}-<label>-<ts>.json)\n` +
+    `  --runs         repetitions of the whole fixture (default 1). The headline\n` +
+    `                 becomes pass^k: a scenario counts only if it passed in every\n` +
+    `                 rep. A rep costs a full run's wall clock.\n` +
+    `  --between-runs shell command run between reps (not before the first, not\n` +
+    `                 after the last) — purge the database and restart the daemon\n` +
+    `                 here. Reps run against the same daemon otherwise, and the\n` +
+    `                 runner aborts if guidance drifts between them.\n` +
+    `  --baseline     compare against a recorded run and fail on regression\n\n` +
     ENV_USAGE +
     `\n\nExit codes: 0 all passed · 1 scenario failure/regression · 2 environment unusable · 64 usage`
   );
 }
 
-/**
- * Run an eval end to end. Call this from a fixture's CLI wrapper; it owns the
- * process lifetime and exits rather than returning.
- */
-export async function runEval(fixture: EvalFixture): Promise<never> {
-  const argv = process.argv.slice(2);
-
-  const baselineFlag = argv.indexOf("--baseline");
-  let baselinePath: string | undefined;
-  if (baselineFlag !== -1) {
-    baselinePath = argv[baselineFlag + 1];
-    if (!baselinePath) {
-      console.error(`--baseline needs a path\n\n${usage(fixture)}`);
-      process.exit(EXIT_USAGE);
-    }
-    argv.splice(baselineFlag, 2);
-  }
-
-  const [label, outPathArg] = argv;
-  if (!label) {
-    console.error(usage(fixture));
+/** Pull `--flag <value>` out of argv, or `undefined`. Exits on a missing value. */
+function takeFlag(
+  argv: string[],
+  flag: string,
+  fixture: EvalFixture,
+): string | undefined {
+  const i = argv.indexOf(flag);
+  if (i === -1) return undefined;
+  const value = argv[i + 1];
+  if (value === undefined) {
+    console.error(`${flag} needs a value\n\n${usage(fixture)}`);
     process.exit(EXIT_USAGE);
   }
+  argv.splice(i, 2);
+  return value;
+}
 
-  const env = readEnv();
-
-  // Preflight BEFORE any scenario runs. An environment failure must never be
-  // reported as scenario results, so this precedes both the run and the file.
-  const status = (() => {
-    try {
-      const s = readDaemonStatus(env);
-      preflight(env, s);
-      return s;
-    } catch (e) {
-      if (e instanceof EnvironmentError) abortOnEnvironment(fixture.name, e);
-      throw e;
-    }
-  })();
-
-  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const outPath = outPathArg ?? `/tmp/${fixture.name}-${label}-${ts}.json`;
-  const { commit, dirty } = gitCommit();
-  const guidance = readGuidanceProvenance(env);
-
-  const provenance: Provenance = {
-    model: status.modelId,
-    recordedAt: new Date().toISOString(),
-    hostMemoryGb: Number((status.hostRamBytes / 1e9).toFixed(1)),
-    nCtx: status.grantedNCtx,
-    ...(status.modelMatchedByPath ? { modelMatchedByPath: true } : {}),
-    evalCommit: commit,
-    dirty,
-    guidance,
-  };
-
-  console.error(
-    `[${fixture.name}] label=${label} model=${status.modelId} n_ctx=${status.grantedNCtx}` +
-      (dirty ? " (working tree dirty)" : ""),
-  );
-  for (const [nodeType, entries] of Object.entries(guidance)) {
-    console.error(
-      `[${fixture.name}] guidance seeded (${nodeType}): ${
-        entries.length === 0
-          ? "none found — cannot confirm what this run measured"
-          : entries.map((e) => `${e.key}@${e.version}`).join(", ")
-      }`,
-    );
+/** Read the daemon status and run preflight, aborting on an environment failure. */
+function gate(fixture: EvalFixture, env: EvalEnv): DaemonStatus {
+  try {
+    const s = readDaemonStatus(env);
+    preflight(env, s);
+    return s;
+  } catch (e) {
+    if (e instanceof EnvironmentError) abortOnEnvironment(fixture.name, e);
+    throw e;
   }
+}
 
-  // -------------------------------------------------------------------------
-  // Run
-  // -------------------------------------------------------------------------
-
+/**
+ * Run every scenario in the fixture once.
+ *
+ * Extracted from `runEval` so a rep is a callable unit rather than the body of
+ * the entry point — which is what lets `--runs` repeat the identical code path
+ * instead of a second, separately-drifting copy of the scenario loop.
+ * Throws `EnvironmentError` if the daemon dies mid-rep; the caller decides
+ * whether that voids the whole run (it does — see `runEval`).
+ */
+function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
   const results: ScenarioResult[] = [];
 
   /**
@@ -557,155 +766,342 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     return t;
   };
 
-  try {
-    for (const group of fixture.groups) {
-      const chatId = newChat(env);
-      console.error(
-        `[${fixture.name}] chat ${chatId} for: ${group.map((s) => s.id).join(", ")}`,
-      );
+  for (const group of fixture.groups) {
+    const chatId = newChat(env);
+    console.error(
+      `[${fixture.name}] chat ${chatId} for: ${group.map((s) => s.id).join(", ")}`,
+    );
 
-      /**
-       * Nodes this group has created so far — the only nodes whose edges are
-       * worth walking when snapshotting (see the bracketing comment below).
-       *
-       * Per group rather than per run: a scenario can only link nodes its own
-       * chat established, and letting this accumulate across groups would
-       * restore the whole-database walk this exists to avoid.
-       */
-      const groupNodeIds = new Set<string>();
+    /**
+     * Nodes this group has created so far — the only nodes whose edges are
+     * worth walking when snapshotting (see the bracketing comment below).
+     *
+     * Per group rather than per run: a scenario can only link nodes its own
+     * chat established, and letting this accumulate across groups would
+     * restore the whole-database walk this exists to avoid.
+     */
+    const groupNodeIds = new Set<string>();
 
-      for (const scenario of group) {
-        console.error(`[${fixture.name}] → ${scenario.scenario}`);
+    for (const scenario of group) {
+      console.error(`[${fixture.name}] → ${scenario.scenario}`);
 
-        // Prior turns establish context and are never scored.
-        const priorTurns: TurnRecord[] = [];
-        for (const prior of scenario.priorTurns ?? []) {
-          console.error(`[${fixture.name}]   [context] ${prior}`);
-          priorTurns.push(turn(chatId, prior));
-        }
+      // Prior turns establish context and are never scored.
+      const priorTurns: TurnRecord[] = [];
+      for (const prior of scenario.priorTurns ?? []) {
+        console.error(`[${fixture.name}]   [context] ${prior}`);
+        priorTurns.push(turn(chatId, prior));
+      }
 
-        // Snapshot bracketing the scored turn. Captured only when the fixture
-        // opts into graph grading, and taken as late/early as possible around
-        // the turn so the diff attributes to THIS turn rather than to anything
-        // the harness did between scenarios.
-        //
-        // Edge discovery is the expensive half: the daemon exposes
-        // relationships per (node, relation) pair rather than as a whole-graph
-        // dump, so walking every node costs a round-trip per node per relation
-        // — ~3s on a 118-node database, and it would be paid twice per turn.
-        //
-        // Both snapshots therefore walk only the nodes THIS GROUP created,
-        // which is where every edge a scenario can assert must land: a turn
-        // can only link nodes its own chat established (11c links what 11a and
-        // 11b created). The restriction cannot instead be "walk what changed",
-        // because `create_relationship` leaves both endpoints byte-identical —
-        // verified against the daemon, same version and same modified_at — so
-        // that rule would find no edges at all and score 11c, the one scenario
-        // that measures linking, as a false pass.
-        const before = fixture.graph
-          ? captureSnapshot(env, fixture.graph.types, {
-              edgesFor: (n) => groupNodeIds.has(n.id),
-            })
-          : undefined;
+      // Snapshot bracketing the scored turn. Captured only when the fixture
+      // opts into graph grading, and taken as late/early as possible around
+      // the turn so the diff attributes to THIS turn rather than to anything
+      // the harness did between scenarios.
+      //
+      // Edge discovery is the expensive half: the daemon exposes
+      // relationships per (node, relation) pair rather than as a whole-graph
+      // dump, so walking every node costs a round-trip per node per relation
+      // — ~11s on a 120-node database, and it would be paid twice per turn.
+      //
+      // Both snapshots therefore walk only the nodes THIS GROUP created,
+      // which is where every edge a scenario can assert must land: a turn
+      // can only link nodes its own chat established (11c links what 11a and
+      // 11b created). The restriction cannot instead be "walk what changed",
+      // because `create_relationship` leaves both endpoints byte-identical —
+      // verified against the daemon, same version and same modified_at — so
+      // that rule would find no edges at all and score 11c, the one scenario
+      // that measures linking, as a false pass.
+      const before = fixture.graph
+        ? captureSnapshot(env, fixture.graph.types, {
+            edgesFor: (n) => groupNodeIds.has(n.id),
+          })
+        : undefined;
 
-        const scored = turn(chatId, scenario.prompt);
+      const scored = turn(chatId, scenario.prompt);
 
-        // Nodes created by THIS turn join the candidate set before its edges
-        // are walked: a turn that creates a node and links it in the same
-        // breath is legitimate, and walking only the pre-turn set would miss
-        // that edge. Node enumeration is cheap (one query per type); it is the
-        // per-node relationship walk that is not, so the "after" pass runs in
-        // two steps rather than snapshotting a third time.
-        //
-        // This makes the walk ASYMMETRIC — the "after" set is a strict superset
-        // — and the consequence is worth stating: a node new since `before` had
-        // no edges walked there, so every edge on it appears in `addedEdges`
-        // whether this turn recorded it or the daemon materialized it at
-        // creation time. `EdgeExpectation` therefore requires a named relation,
-        // enforced by a fixture invariant; an unpinned one would pass on any
-        // turn that merely created a node. Restricting the diff instead would
-        // be the alternative, but it would lose the create-and-link-in-one-turn
-        // case above, which is a legitimate shape.
-        const after = fixture.graph
-          ? captureSnapshot(env, fixture.graph.types, {
-              edgesFor: (n) =>
-                groupNodeIds.has(n.id) ||
-                !before?.nodes.some((p) => p.id === n.id),
-            })
-          : undefined;
-        for (const n of after?.nodes ?? []) {
-          if (!before?.nodes.some((p) => p.id === n.id)) groupNodeIds.add(n.id);
-        }
-        const diff =
-          before && after ? diffSnapshots(before, after) : undefined;
+      // Nodes created by THIS turn join the candidate set before its edges
+      // are walked: a turn that creates a node and links it in the same
+      // breath is legitimate, and walking only the pre-turn set would miss
+      // that edge. Node enumeration is cheap (one query per type); it is the
+      // per-node relationship walk that is not, so the "after" pass runs in
+      // two steps rather than snapshotting a third time.
+      //
+      // This makes the walk ASYMMETRIC — the "after" set is a strict superset
+      // — and the consequence is worth stating: a node new since `before` had
+      // no edges walked there, so every edge on it appears in `addedEdges`
+      // whether this turn recorded it or the daemon materialized it at
+      // creation time. `EdgeExpectation` therefore requires a named relation,
+      // enforced by a fixture invariant; an unpinned one would pass on any
+      // turn that merely created a node. Restricting the diff instead would
+      // be the alternative, but it would lose the create-and-link-in-one-turn
+      // case above, which is a legitimate shape.
+      const after = fixture.graph
+        ? captureSnapshot(env, fixture.graph.types, {
+            edgesFor: (n) =>
+              groupNodeIds.has(n.id) ||
+              !before?.nodes.some((p) => p.id === n.id),
+          })
+        : undefined;
+      for (const n of after?.nodes ?? []) {
+        if (!before?.nodes.some((p) => p.id === n.id)) groupNodeIds.add(n.id);
+      }
+      const diff = before && after ? diffSnapshots(before, after) : undefined;
 
-        // The degenerate-empty-generation failure mode (agent_loop.rs: the
-        // model opens a turn and emits neither text nor a tool call) is an
-        // inference bug, not a scenario outcome — scoring it as a failure
-        // silently deflates every cell it lands in, exactly the harness-vs-model
-        // confusion this eval exists to prevent. Excluded from the denominator
-        // rather than scored, but still recorded with its turn data so the rate
-        // of empty generations stays visible rather than vanishing silently.
-        if (scored.emptyGeneration) {
-          results.push({
-            id: scenario.id,
-            scenario: scenario.scenario,
-            prompt: scenario.prompt,
-            passed: false,
-            failure: "excluded: degenerate empty generation (no text, no tool call)",
-            turns: [...priorTurns, scored],
-            extra: fixture.extra?.(scenario, [scored]),
-            excludedAsEmptyGeneration: true,
-          });
-          console.error(
-            `[${fixture.name}]   ⊘ excluded (empty generation) ${scored.latencyMs}ms`,
-          );
-          continue;
-        }
-
-        // The trajectory assertions still run, but they no longer decide the
-        // score when the fixture grades on outcome — they are recorded as a
-        // diagnostic. Trajectory answers "how did the model get there", which
-        // is what a debugging session needs and what an outcome score cannot
-        // say; it just is not the thing being graded.
-        const trajectory = fixture.score(scenario, [scored]);
-        const verdict =
-          fixture.graph && diff
-            ? fixture.graph.scoreOutcome(scenario, diff)
-            : trajectory;
-
+      // The degenerate-empty-generation failure mode (agent_loop.rs: the
+      // model opens a turn and emits neither text nor a tool call) is an
+      // inference bug, not a scenario outcome — scoring it as a failure
+      // silently deflates every cell it lands in, exactly the harness-vs-model
+      // confusion this eval exists to prevent. Excluded from the denominator
+      // rather than scored, but still recorded with its turn data so the rate
+      // of empty generations stays visible rather than vanishing silently.
+      if (scored.emptyGeneration) {
         results.push({
           id: scenario.id,
           scenario: scenario.scenario,
           prompt: scenario.prompt,
-          passed: verdict.passed,
-          failure: verdict.failure,
+          passed: false,
+          failure: "excluded: degenerate empty generation (no text, no tool call)",
           turns: [...priorTurns, scored],
           extra: fixture.extra?.(scenario, [scored]),
-          graphDiff: diff,
-          trajectory: fixture.graph ? trajectory : undefined,
-          excludedAsSetup: scenario.setup === true ? true : undefined,
-        });
-
-        const marker = markerFor({
-          excludedAsSetup: scenario.setup === true,
-          passed: verdict.passed,
+          excludedAsEmptyGeneration: true,
         });
         console.error(
-          `[${fixture.name}]   ${marker} ` +
-            `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms` +
-            (scenario.setup ? " (setup — not scored)" : ""),
+          `[${fixture.name}]   ⊘ excluded (empty generation) ${scored.latencyMs}ms`,
         );
-        if (!verdict.passed)
-          console.error(`[${fixture.name}]     ↳ ${verdict.failure}`);
-        // A setup turn that failed to establish its state makes every scenario
-        // after it unwinnable. It is not scored, but it must not pass silently.
-        if (scenario.setup && !verdict.passed)
-          console.error(
-            `[${fixture.name}]     ⚠ setup did not establish its state — ` +
-              `later scenarios in this group may be unwinnable`,
-          );
+        continue;
       }
+
+      // The trajectory assertions still run, but they no longer decide the
+      // score when the fixture grades on outcome — they are recorded as a
+      // diagnostic. Trajectory answers "how did the model get there", which
+      // is what a debugging session needs and what an outcome score cannot
+      // say; it just is not the thing being graded.
+      const trajectory = fixture.score(scenario, [scored]);
+      const verdict =
+        fixture.graph && diff
+          ? fixture.graph.scoreOutcome(scenario, diff)
+          : trajectory;
+
+      results.push({
+        id: scenario.id,
+        scenario: scenario.scenario,
+        prompt: scenario.prompt,
+        passed: verdict.passed,
+        failure: verdict.failure,
+        turns: [...priorTurns, scored],
+        extra: fixture.extra?.(scenario, [scored]),
+        graphDiff: diff,
+        trajectory: fixture.graph ? trajectory : undefined,
+        excludedAsSetup: scenario.setup === true ? true : undefined,
+      });
+
+      const marker = markerFor({
+        excludedAsSetup: scenario.setup === true,
+        passed: verdict.passed,
+      });
+      console.error(
+        `[${fixture.name}]   ${marker} ` +
+          `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms` +
+          (scenario.setup ? " (setup — not scored)" : ""),
+      );
+      if (!verdict.passed)
+        console.error(`[${fixture.name}]     ↳ ${verdict.failure}`);
+      // A setup turn that failed to establish its state makes every scenario
+      // after it unwinnable. It is not scored, but it must not pass silently.
+      if (scenario.setup && !verdict.passed)
+        console.error(
+          `[${fixture.name}]     ⚠ setup did not establish its state — ` +
+            `later scenarios in this group may be unwinnable`,
+        );
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Run the operator's between-rep command.
+ *
+ * The harness deliberately does NOT purge the database or restart the daemon
+ * itself: the caller owns the daemon, socket, and database everywhere else in
+ * this harness, and a runner that starts killing processes it did not start
+ * would own a lifecycle it cannot see (a daemon under a launch agent, a
+ * remote socket, a model that takes a minute to load). Instead the operator
+ * supplies the command, and the runner verifies afterwards — via the guidance
+ * readback that already exists — that whatever it did left the reps
+ * comparable. Assert, do not own.
+ */
+function runBetween(fixture: EvalFixture, cmd: string, rep: number): void {
+  console.error(`[${fixture.name}] between reps ${rep - 1}→${rep}: ${cmd}`);
+  const r = Bun.spawnSync(["sh", "-c", cmd], {
+    stdout: "inherit",
+    stderr: "inherit",
+    env: { ...process.env },
+  });
+  if (r.exitCode !== 0) {
+    abortOnEnvironment(
+      fixture.name,
+      new EnvironmentError(
+        `The --between-runs command exited ${r.exitCode} before rep ${rep}.`,
+        `Reps that run against an environment the hook failed to reset are not ` +
+          `comparable to the ones before it, so the run stops here rather than ` +
+          `pooling them.\n  No results file was written for this run.`,
+      ),
+    );
+  }
+}
+
+/**
+ * Run an eval end to end. Call this from a fixture's CLI wrapper; it owns the
+ * process lifetime and exits rather than returning.
+ */
+export async function runEval(fixture: EvalFixture): Promise<never> {
+  const argv = process.argv.slice(2);
+
+  const baselinePath = takeFlag(argv, "--baseline", fixture);
+  const betweenRuns = takeFlag(argv, "--between-runs", fixture);
+  const runsArg = takeFlag(argv, "--runs", fixture);
+
+  let runs = 1;
+  if (runsArg !== undefined) {
+    runs = Number(runsArg);
+    if (!Number.isInteger(runs) || runs < 1) {
+      console.error(
+        `--runs needs a positive integer (got ${JSON.stringify(runsArg)})\n\n${usage(fixture)}`,
+      );
+      process.exit(EXIT_USAGE);
+    }
+  }
+  if (betweenRuns !== undefined && runs === 1) {
+    console.error(
+      `--between-runs has no effect with a single rep — it runs BETWEEN reps.\n\n${usage(fixture)}`,
+    );
+    process.exit(EXIT_USAGE);
+  }
+
+  const [label, outPathArg] = argv;
+  if (!label) {
+    console.error(usage(fixture));
+    process.exit(EXIT_USAGE);
+  }
+
+  const env = readEnv();
+
+  // Preflight BEFORE any scenario runs. An environment failure must never be
+  // reported as scenario results, so this precedes both the run and the file.
+  // Re-run before every rep: a between-runs hook restarts the daemon, and rep
+  // 2 onward would otherwise score against whatever came back up — including
+  // a different model, or a smaller granted window.
+  const status = gate(fixture, env);
+
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const outPath = outPathArg ?? `/tmp/${fixture.name}-${label}-${ts}.json`;
+
+  const provenanceFor = (s: DaemonStatus): Provenance => {
+    const { commit, dirty } = gitCommit();
+    return {
+      model: s.modelId,
+      recordedAt: new Date().toISOString(),
+      hostMemoryGb: Number((s.hostRamBytes / 1e9).toFixed(1)),
+      nCtx: s.grantedNCtx,
+      ...(s.modelMatchedByPath ? { modelMatchedByPath: true } : {}),
+      evalCommit: commit,
+      dirty,
+      guidance: readGuidanceProvenance(env),
+    };
+  };
+
+  const firstProvenance = provenanceFor(status);
+
+  console.error(
+    `[${fixture.name}] label=${label} model=${status.modelId} n_ctx=${status.grantedNCtx}` +
+      (firstProvenance.dirty ? " (working tree dirty)" : "") +
+      (runs > 1 ? ` runs=${runs}` : ""),
+  );
+  for (const [nodeType, entries] of Object.entries(
+    firstProvenance.guidance ?? {},
+  )) {
+    console.error(
+      `[${fixture.name}] guidance seeded (${nodeType}): ${
+        entries.length === 0
+          ? "none found — cannot confirm what this run measured"
+          : entries.map((e) => `${e.key}@${e.version}`).join(", ")
+      }`,
+    );
+  }
+  if (runs > 1 && betweenRuns === undefined) {
+    console.error(
+      `[${fixture.name}] note: no --between-runs command — reps share one daemon and ` +
+        `one database, so each rep starts from the state the previous one left. Pass ` +
+        `--between-runs to purge and restart between them.`,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Run
+  // -------------------------------------------------------------------------
+
+  const reps: RepResult[] = [];
+
+  try {
+    for (let rep = 1; rep <= runs; rep++) {
+      // Rep 1 reuses the provenance already read for the header; every later
+      // rep re-reads it, because a between-runs hook that restarted the daemon
+      // can bring back a different model or a smaller context window, and
+      // pooling that rep's scores with the earlier ones would file them all
+      // under rep 1's conditions.
+      let provenance = firstProvenance;
+      if (rep > 1) {
+        if (betweenRuns !== undefined) runBetween(fixture, betweenRuns, rep);
+        provenance = provenanceFor(gate(fixture, env));
+        const drift = checkGuidanceDrift(
+          firstProvenance.guidance,
+          provenance.guidance,
+          rep,
+        );
+        if (drift) abortOnEnvironment(fixture.name, drift);
+      }
+      if (runs > 1) console.error(`[${fixture.name}] ── rep ${rep}/${runs} ──`);
+
+      const results = runRep(fixture, env);
+      const {
+        scored,
+        excludedCount,
+        setupCount,
+      } = partitionExcluded(results);
+      const passed = scored.filter((r) => r.passed).length;
+
+      // Where the retired trajectory assertions disagree with the outcome
+      // score. Not a failure count — each disagreement is either a scenario
+      // whose expectation no longer describes the behavior, or a real change
+      // in how the model reaches its result. Both are worth a look; neither is
+      // a verdict.
+      const trajectoryDisagreements = scored.filter(
+        (r) => r.trajectory !== undefined && r.trajectory.passed !== r.passed,
+      ).length;
+
+      // Uniform 0% or 100% across every SCORED scenario is a harness signature —
+      // an environment that preflight could not catch (e.g. every send silently
+      // routing to a dead model behind a load balancer, or every turn hitting the
+      // same unhandled code path) rather than a real result. Checked per rep
+      // rather than on the pooled scores: a single impossible rep is exactly as
+      // much a harness signature as a single impossible run, and averaging it
+      // into the others is how it would stop being visible.
+      const uniformityError = checkUniformity(passed, scored.length);
+      if (uniformityError) abortOnEnvironment(fixture.name, uniformityError);
+
+      reps.push({
+        rep,
+        provenance,
+        summary: {
+          total: scored.length,
+          passed,
+          failed: scored.length - passed,
+          excludedEmptyGenerations: excludedCount,
+          excludedSetup: setupCount,
+          trajectoryDisagreements,
+        },
+        results,
+      });
     }
   } catch (e) {
     if (e instanceof EnvironmentError) abortOnEnvironment(fixture.name, e);
@@ -716,50 +1112,20 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   // Report
   // -------------------------------------------------------------------------
 
-  const {
-    scored,
-    excludedCount: excludedEmptyGenerations,
-    setupCount: excludedSetup,
-  } = partitionExcluded(results);
-  const total = scored.length;
-  const passed = scored.filter((r) => r.passed).length;
-  const failed = total - passed;
-
-  // Where the retired trajectory assertions disagree with the outcome score.
-  // Not a failure count — each disagreement is either a scenario whose
-  // expectation no longer describes the behavior, or a real change in how the
-  // model reaches its result. Both are worth a look; neither is a verdict.
-  const trajectoryDisagreements = scored.filter(
-    (r) => r.trajectory !== undefined && r.trajectory.passed !== r.passed,
-  ).length;
-
-  // Uniform 0% or 100% across every SCORED scenario is a harness signature —
-  // an environment that preflight could not catch (e.g. every send silently
-  // routing to a dead model behind a load balancer, or every turn hitting the
-  // same unhandled code path) rather than a real result. Excluded scenarios
-  // are not counted toward "every": a run that is all empty-generations is
-  // reported by excludedEmptyGenerations instead, and one that is otherwise a
-  // real 0/1 or 1/1 must not trip this on a single-scenario smoke test.
-  const uniformityError = checkUniformity(passed, total);
-  if (uniformityError) abortOnEnvironment(fixture.name, uniformityError);
+  const aggregate = aggregateReps(reps.map((r) => r.results));
 
   const evalResults: EvalResults = {
     eval: fixture.name,
     label,
-    provenance,
-    summary: {
-      total,
-      passed,
-      failed,
-      excludedEmptyGenerations,
-      excludedSetup,
-      trajectoryDisagreements,
-    },
-    results,
+    provenance: firstProvenance,
+    aggregate,
+    reps,
   };
 
   await Bun.write(outPath, JSON.stringify(evalResults, null, 2));
-  console.error(`[${fixture.name}] wrote ${total} results to ${outPath}`);
+  console.error(
+    `[${fixture.name}] wrote ${aggregate.scoredScenarios} scenario(s) × ${runs} rep(s) to ${outPath}`,
+  );
 
   // Raw-output JSONL trace: one line per scored turn that captured raw
   // generation text, alongside the results JSON so a scenario that needs
@@ -767,7 +1133,9 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   // said. Absent turns (no RUST_LOG=debug on the daemon) are simply skipped
   // rather than padded with nulls.
   const tracePath = outPath.replace(/\.json$/, ".trace.jsonl");
-  const traceLines = buildTraceLines(results).map((l) => JSON.stringify(l));
+  const traceLines = reps
+    .flatMap((r) => buildTraceLines(r.results, r.rep))
+    .map((l) => JSON.stringify(l));
   if (traceLines.length > 0) {
     await Bun.write(tracePath, traceLines.join("\n") + "\n");
     console.error(
@@ -782,37 +1150,99 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
 
   console.log(`\n── ${fixture.description} ─────────────────────────────────`);
   console.log(`   Label:    ${label}`);
-  console.log(`   Model:    ${provenance.model}`);
+  console.log(`   Model:    ${firstProvenance.model}`);
   console.log(
-    `   Context:  n_ctx ${provenance.nCtx} · host RAM ${provenance.hostMemoryGb} GB`,
+    `   Context:  n_ctx ${firstProvenance.nCtx} · host RAM ${firstProvenance.hostMemoryGb} GB`,
   );
   console.log(
-    `   Commit:   ${provenance.evalCommit}${provenance.dirty ? " (dirty)" : ""}`,
+    `   Commit:   ${firstProvenance.evalCommit}${firstProvenance.dirty ? " (dirty)" : ""}`,
   );
-  console.log(`   Passed:   ${passed}/${total}`);
-  if (excludedEmptyGenerations > 0) {
+  console.log(`   Reps:     ${aggregate.reps}`);
+  // pass^k first, deliberately: it is the number to cite. pass^1 is printed
+  // right under it because it is the number every earlier run quoted, and the
+  // distance between them is the finding. At k=1 the two are the same number
+  // by definition, so only one line is printed — and it is labelled pass^1,
+  // since a lone "pass^1" is exactly the single draw this flag exists to stop
+  // people citing as a reliability figure.
+  if (aggregate.reps === 1) {
     console.log(
-      `   Excluded: ${excludedEmptyGenerations} (degenerate empty generation — not scored either way)`,
+      `   pass^1:   ${aggregate.passAtK}/${aggregate.scoredScenarios}` +
+        `  (single rep — pass a --runs N above 1 for a reliability figure)`,
+    );
+  } else {
+    console.log(
+      `   pass^${aggregate.reps}:   ${aggregate.passAtK}/${aggregate.scoredScenarios}` +
+        `  (passed in every rep)`,
+    );
+    // pass^1's denominator is the mean number of scenarios SCORED per rep,
+    // which is below `scoredScenarios` whenever exclusions were uneven across
+    // reps. Printing it over `scoredScenarios` would render e.g. "2.50/3"
+    // beside "pass^3: 3/3" — both correct, but inviting the reader to take the
+    // pair as a rate over one population when the two are computed over
+    // different ones.
+    const meanScored =
+      reps.reduce((n, r) => n + r.summary.total, 0) / reps.length;
+    console.log(
+      `   pass^1:   ${aggregate.passAt1.toFixed(2)}/${
+        Number.isInteger(meanScored) ? meanScored : meanScored.toFixed(2)
+      }  (mean of per-rep scores)`,
     );
   }
-  if (excludedSetup > 0) {
-    console.log(`   Setup:    ${excludedSetup} (fixture setup — not scored)`);
-  }
-  if (trajectoryDisagreements > 0) {
+  if (aggregate.reps > 1) {
     console.log(
-      `   Trajectory disagrees on ${trajectoryDisagreements} scenario(s) — ` +
+      `   Flipped:  ${aggregate.flipped}/${aggregate.scoredScenarios}` +
+        `  (passed in some reps, failed in others)`,
+    );
+  }
+  const excluded = reps.reduce(
+    (n, r) => n + (r.summary.excludedEmptyGenerations ?? 0),
+    0,
+  );
+  if (excluded > 0) {
+    console.log(
+      `   Excluded: ${excluded} scenario-rep(s) (degenerate empty generation — not scored either way)`,
+    );
+  }
+  // Summed across reps for the same reason `excluded` is: these are per-rep
+  // counts, and a run's headline should not silently report only its first.
+  const setupExcluded = reps.reduce(
+    (n, r) => n + (r.summary.excludedSetup ?? 0),
+    0,
+  );
+  if (setupExcluded > 0) {
+    console.log(
+      `   Setup:    ${setupExcluded} scenario-rep(s) (fixture setup — not scored)`,
+    );
+  }
+  const disagreements = reps.reduce(
+    (n, r) => n + (r.summary.trajectoryDisagreements ?? 0),
+    0,
+  );
+  if (disagreements > 0) {
+    console.log(
+      `   Trajectory disagrees on ${disagreements} scenario-rep(s) — ` +
         `diagnostic only, see 'trajectory' in the results file`,
     );
   }
-  for (const line of fixture.summary?.(results) ?? []) {
-    console.log(`   ${line}`);
+  if (aggregate.reps > 1) {
+    console.log(
+      `   Per rep:  ${reps.map((r) => `${r.summary.passed}/${r.summary.total}`).join("  ")}`,
+    );
+  }
+  // Fixture summaries are per-rep constructs (they read a ScenarioResult[]),
+  // so they are rendered per rep rather than against a pooled list that would
+  // double-count every scenario.
+  for (const r of reps) {
+    const lines = fixture.summary?.(r.results) ?? [];
+    for (const line of lines) {
+      console.log(`   ${aggregate.reps > 1 ? `[rep ${r.rep}] ` : ""}${line}`);
+    }
   }
   console.log(
     `────────────────────────────────────────────────────────────────────`,
   );
-  for (const r of results) {
-    console.log(`  ${markerFor(r)} ${r.id}`);
-    if (!r.passed) console.log(`      ↳ ${r.failure}`);
+  for (const line of formatReliabilityTable(aggregate)) {
+    console.log(line);
   }
   console.log(
     `────────────────────────────────────────────────────────────────────\n`,
@@ -820,13 +1250,22 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
 
   let regressions = 0;
   if (baselinePath) {
-    regressions = await compareToBaseline(fixture.name, results, baselinePath);
+    regressions = await compareToBaseline(fixture.name, aggregate, baselinePath);
   }
 
-  if (failed > 0 || regressions > 0) {
-    console.error(`\n[${fixture.name}] ✗ ${failed}/${total} scenarios failed`);
+  // The exit code follows pass^k, not the last rep: a suite that passes
+  // everything twice and fails one scenario the third time has not passed.
+  const notPassing = aggregate.scoredScenarios - aggregate.passAtK;
+  if (notPassing > 0 || regressions > 0) {
+    console.error(
+      `\n[${fixture.name}] ✗ ${notPassing}/${aggregate.scoredScenarios} scenarios did not pass ` +
+        `every rep` +
+        (aggregate.flipped > 0 ? ` (${aggregate.flipped} flipped)` : ""),
+    );
     process.exit(EXIT_FAILED);
   }
-  console.error(`\n[${fixture.name}] ✓ All ${total} scenarios passed`);
+  console.error(
+    `\n[${fixture.name}] ✓ All ${aggregate.scoredScenarios} scenarios passed all ${aggregate.reps} rep(s)`,
+  );
   process.exit(0);
 }

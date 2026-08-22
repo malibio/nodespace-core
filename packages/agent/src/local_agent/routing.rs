@@ -64,6 +64,32 @@ pub const READ_SKILL_SCORE_BAR: f32 = 0.15;
 /// awaiting a diagnostic eval.
 pub const MUTATING_SKILL_SCORE_BAR: f32 = 0.30;
 
+/// Minimum retrieval score for a skill that can **irreversibly remove user
+/// data** to be actionable.
+///
+/// The top rung of the blast-radius ladder ADR-038 describes: read-only <
+/// mutating < destructive. The ADR states the bar "is a property of the
+/// matched skill, not a single global constant" and that the gates should be
+/// biased against the expensive error; deleting the node a user meant to
+/// update is the one error in this system that cannot be walked back, so it
+/// sits above the general mutating bar rather than sharing it.
+///
+/// **This value is an untuned placeholder, and knowingly so.**
+/// [`READ_SKILL_SCORE_BAR`] and [`MUTATING_SKILL_SCORE_BAR`] carry the same
+/// caveat, for the same reason: tuning needs an eval that can separate a model
+/// failure from a harness failure. This rung was added to stop a weak
+/// destructive match winning rank-1 on requests with no deletion intent —
+/// `Node Deletion` was measured as a retrieved candidate on 11 turns across 5
+/// scenarios whose prompts marked a status, recorded a decision, set a due
+/// date, and asked a question, ranking first on three of them. It was chosen
+/// structurally (clearly above the mutating bar, well below the score a
+/// genuine "delete X" match earns), not measured against live embeddings.
+///
+/// The *ordering* is the load-bearing property and is asserted in tests. If a
+/// real deletion request is ever seen failing to route, this constant is the
+/// first thing to revisit.
+pub const DESTRUCTIVE_SKILL_SCORE_BAR: f32 = 0.45;
+
 /// Stage-1's structural choice, recovered from which tool the model called.
 ///
 /// ADR-038 rejects gating on a self-reported confidence number: a numeric
@@ -282,11 +308,35 @@ pub fn skill_is_mutating(candidate: &SkillCandidate) -> bool {
         .any(|t| Tool::from_name(t).is_none_or(Tool::is_write))
 }
 
+/// Whether a skill can irreversibly remove user data, derived from the tools
+/// it may fire.
+///
+/// Computed from the registry's own classification for the same reason
+/// [`skill_is_mutating`] is: adding `delete_node` to a whitelist raises that
+/// skill's bar automatically, with no second field to keep in sync.
+///
+/// Unlike [`skill_is_mutating`], an unrecognised tool name counts as **not**
+/// destructive — see [`super::tools::removes_user_data_tool`] for why the
+/// unknown case belongs on the opposite side here. In short: an unknown name
+/// is already treated as mutating, and treating it as destructive too would
+/// apply the strictest bar in the system to any skill with a typo in its
+/// whitelist.
+pub fn skill_is_destructive(candidate: &SkillCandidate) -> bool {
+    candidate
+        .tools
+        .iter()
+        .any(|t| super::tools::removes_user_data_tool(t))
+}
+
 /// The retrieval score a candidate must clear to be actionable.
 ///
-/// Scales with blast radius per ADR-038.
+/// Scales with blast radius per ADR-038: read-only < mutating < destructive.
+/// Checked most-restrictive-first, since a destructive skill is also a
+/// mutating one and must not stop at the lower rung.
 pub fn score_bar_for(candidate: &SkillCandidate) -> f32 {
-    if skill_is_mutating(candidate) {
+    if skill_is_destructive(candidate) {
+        DESTRUCTIVE_SKILL_SCORE_BAR
+    } else if skill_is_mutating(candidate) {
         MUTATING_SKILL_SCORE_BAR
     } else {
         READ_SKILL_SCORE_BAR
@@ -472,8 +522,40 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
     nodespace_core::ops::entity_types_block::render_entity_types(&descriptors)
 }
 
-/// The tools Stage 2 may offer, restricted to the union of the eligible
-/// candidates' whitelists.
+/// Wire names the eligible candidates permit, with the destructive-tool rule
+/// applied. The single source of truth for that rule: [`stage2_tools`] scopes
+/// from it and [`destructive_tools_withheld`] reports against it, so the log
+/// cannot claim something different from what the model was offered.
+fn stage2_permitted_names(candidates: &[SkillCandidate]) -> std::collections::HashSet<&str> {
+    // Computed by explicit max rather than taking `candidates[0]`: the caller
+    // does sort by score descending before truncating to RETRIEVAL_TOP_K
+    // (`agent_loop`'s `route`), but a safety property should not depend on
+    // another function's ordering staying that way. Ties keep every candidate
+    // at the top score, which is the same treatment `declare_write_tool_fields`
+    // gives them.
+    let top_score = candidates
+        .iter()
+        .filter(|c| clears_score_gate(c))
+        .map(|c| c.score)
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    candidates
+        .iter()
+        .filter(|c| clears_score_gate(c))
+        .flat_map(|c| {
+            let is_top = c.score >= top_score;
+            c.tools
+                .iter()
+                .map(|t| t.as_str())
+                .filter(move |t| is_top || !super::tools::removes_user_data_tool(t))
+        })
+        .collect()
+}
+
+/// The tools Stage 2 may offer, restricted to what the eligible candidates'
+/// whitelists permit: the union of them for ordinary tools, and — for tools
+/// that irreversibly remove user data — only the whitelist of the candidate
+/// that actually won retrieval. See [`stage2_permitted_names`] for why.
 ///
 /// This is the trust boundary ADR-038 places on the system side: the model
 /// judges *among* what retrieval surfaced, and can only fire what the matched
@@ -492,11 +574,23 @@ fn render_schema_metadata(meta: &serde_json::Value) -> Option<String> {
 /// what retrieval surfaced. The model still has every other tool to answer
 /// the request with.
 pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Vec<ToolDefinition> {
-    let permitted: std::collections::HashSet<&str> = candidates
-        .iter()
-        .filter(|c| clears_score_gate(c))
-        .flat_map(|c| c.tools.iter().map(|t| t.as_str()))
-        .collect();
+    // The union is right for ordinary tools and wrong for destructive ones.
+    // A skill contributes its whole whitelist to the surface merely by being
+    // one of the (up to three) candidates above its bar — so a weak
+    // second/third-place `Node Deletion` put `delete_node` in front of the
+    // model on requests that were recording a decision or setting a due date,
+    // while contributing nothing the turn actually needed. That is the
+    // opposite of ADR-038's "the expensive error is gated hardest": riding
+    // along in retrieval cost the destructive skill nothing.
+    //
+    // So destructive tools are admitted only from the candidate that actually
+    // *won* retrieval this turn. A skill that best matches a deletion request
+    // still offers `delete_node`; one that merely placed does not.
+    //
+    // Note this narrows only which candidates may contribute a destructive
+    // tool. It is not a second score gate — the winner still had to clear
+    // `DESTRUCTIVE_SKILL_SCORE_BAR` to be eligible at all.
+    let permitted = stage2_permitted_names(candidates);
 
     if permitted.is_empty() {
         return fail_open_surface(all);
@@ -513,6 +607,65 @@ pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Ve
         return fail_open_surface(all);
     }
     scoped
+}
+
+/// Names of destructive tools that a gate-clearing candidate whitelisted but
+/// [`stage2_tools`] withheld, because that candidate did not win retrieval.
+///
+/// Purely for the log line — it re-reads the same rule `stage2_tools` applies
+/// rather than reimplementing it, so the two cannot disagree about what was
+/// withheld. Empty on the overwhelming majority of turns.
+///
+/// This exists because the failure it reports is otherwise invisible. When
+/// scoping removes the tool a turn needed, the model has no evidence a better
+/// tool ever existed: best case it asks the user a confused clarifying
+/// question, worst case it reaches for the wrong tool from the narrowed set.
+/// Neither the daemon log nor the turn output distinguished that from a model
+/// that simply failed to call the tool, so a routing defect read as a model
+/// defect.
+/// Destructive candidates that retrieval returned but
+/// [`DESTRUCTIVE_SKILL_SCORE_BAR`] rejected, as `(name, score)`.
+///
+/// Distinct from [`destructive_tools_withheld`], which reports a skill that
+/// *was* eligible but did not win. This reports one that never became
+/// eligible: it would have cleared the mutating bar and been actionable before
+/// the destructive rung existed.
+///
+/// Exists to make a specific, acknowledged risk measurable in the field
+/// instead of waiting for a user to report it. Two changes landed together
+/// that push the same quantity in opposite directions: the bar a deletion
+/// match must clear went **up** to `DESTRUCTIVE_SKILL_SCORE_BAR`, while the
+/// `Node Deletion` description was narrowed — and a narrower description
+/// embeds *further* from an indirectly-phrased real request ("get rid of that
+/// old meeting note"). Both moves are individually justified and the bar is a
+/// documented placeholder, but neither was measured against live embeddings,
+/// so the band a genuine deletion has to land in is not known.
+///
+/// A turn appearing here is the signal that the bar is too high: the user
+/// asked for something the system read as deletion, and it was dropped
+/// entirely rather than offered. Scores logged alongside the names so the
+/// distribution can be read off existing logs rather than needing a new eval
+/// run to discover it.
+pub fn destructive_candidates_below_bar(candidates: &[SkillCandidate]) -> Vec<(&str, f32)> {
+    candidates
+        .iter()
+        .filter(|c| skill_is_destructive(c) && !clears_score_gate(c))
+        .map(|c| (c.name.as_str(), c.score))
+        .collect()
+}
+
+pub fn destructive_tools_withheld(candidates: &[SkillCandidate]) -> Vec<&str> {
+    let offered: std::collections::HashSet<&str> = stage2_permitted_names(candidates);
+    let mut withheld: Vec<&str> = candidates
+        .iter()
+        .filter(|c| clears_score_gate(c))
+        .flat_map(|c| c.tools.iter().map(|t| t.as_str()))
+        .filter(|t| super::tools::removes_user_data_tool(t))
+        .filter(|t| !offered.contains(t))
+        .collect();
+    withheld.sort_unstable();
+    withheld.dedup();
+    withheld
 }
 
 /// Declares `field_values` sub-properties (see
@@ -784,6 +937,192 @@ mod tests {
         // matched skill, not a single global constant.
         assert!(clears_score_gate(&read));
         assert!(!clears_score_gate(&write));
+    }
+
+    #[test]
+    fn destructive_skills_carry_a_strictly_higher_bar_than_other_mutations() {
+        // Compile-time, matching the read/mutating assertion above: the values
+        // are expected to be tuned, the ladder's ordering is not.
+        const _: () = assert!(DESTRUCTIVE_SKILL_SCORE_BAR > MUTATING_SKILL_SCORE_BAR);
+
+        // Identical score, three different verdicts — one rung per blast radius.
+        let read = candidate("research", 0.35, &["search_nodes"]);
+        let mutating = candidate("editing", 0.35, &["update_node"]);
+        let destructive = candidate("deletion", 0.35, &["delete_node"]);
+        assert!(clears_score_gate(&read));
+        assert!(clears_score_gate(&mutating));
+        assert!(
+            !clears_score_gate(&destructive),
+            "a skill that can irreversibly remove user data must clear a higher bar than one \
+             that merely writes"
+        );
+    }
+
+    #[test]
+    fn a_destructive_skill_that_only_places_cannot_put_delete_node_in_reach() {
+        // The #2240 regression. `Node Deletion` was retrieved as a candidate on
+        // turns that recorded a decision, marked a status, and set a due date.
+        // Because the surface was the union across every eligible candidate, it
+        // contributed `delete_node` merely by placing — while the tool the turn
+        // actually needed was absent unless some other candidate happened to
+        // whitelist it.
+        let all = vec![
+            tool("create_node"),
+            tool("search_nodes"),
+            tool("delete_node"),
+        ];
+        let cands = vec![
+            candidate("Node Creation", 0.8, &["create_node", "search_nodes"]),
+            candidate("Node Deletion", 0.5, &["delete_node", "search_nodes"]),
+        ];
+        let scoped = stage2_tools(&cands, &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+
+        assert!(
+            names.contains(&"create_node"),
+            "the winning skill's own tool must still be offered: {names:?}"
+        );
+        assert!(
+            !names.contains(&"delete_node"),
+            "a destructive skill that placed but did not win retrieval must not put delete_node \
+             in reach: {names:?}"
+        );
+        // The runner-up's non-destructive tools are unaffected — this narrows
+        // destructive admission only, it does not drop losing candidates.
+        assert!(names.contains(&"search_nodes"));
+    }
+
+    #[test]
+    fn a_destructive_skill_that_wins_retrieval_still_offers_delete_node() {
+        // The regression the change could plausibly cause. Deletion must keep
+        // working for requests that actually ask for it.
+        let all = vec![tool("create_node"), tool("delete_node"), tool("get_node")];
+        let cands = vec![
+            candidate("Node Deletion", 0.7, &["delete_node", "get_node"]),
+            candidate("Node Creation", 0.5, &["create_node"]),
+        ];
+        let scoped = stage2_tools(&cands, &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"delete_node"),
+            "a genuine deletion match must still be able to delete: {names:?}"
+        );
+    }
+
+    #[test]
+    fn destructive_admission_does_not_depend_on_candidate_order() {
+        // `stage2_tools` picks the winner by explicit max, so a caller that
+        // stopped sorting by score cannot silently widen the destructive
+        // surface.
+        let all = vec![tool("create_node"), tool("delete_node")];
+        let ascending = vec![
+            candidate("Node Deletion", 0.5, &["delete_node"]),
+            candidate("Node Creation", 0.8, &["create_node"]),
+        ];
+        let descending = vec![
+            candidate("Node Creation", 0.8, &["create_node"]),
+            candidate("Node Deletion", 0.5, &["delete_node"]),
+        ];
+        let names = |c: &[SkillCandidate]| -> Vec<String> {
+            let mut n: Vec<String> = stage2_tools(c, &all)
+                .iter()
+                .map(|t| t.name.clone())
+                .collect();
+            n.sort();
+            n
+        };
+        assert_eq!(names(&ascending), names(&descending));
+        assert!(!names(&ascending).contains(&"delete_node".to_string()));
+    }
+
+    #[test]
+    fn a_lone_destructive_candidate_is_never_left_with_an_empty_surface() {
+        // It wins by default (it is the only eligible candidate), so nothing is
+        // withheld and the existing fail-open branches stay untouched.
+        let all = vec![tool("delete_node"), tool("create_node")];
+        let cands = vec![candidate("Node Deletion", 0.9, &["delete_node"])];
+        let scoped = stage2_tools(&cands, &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["delete_node"]);
+    }
+
+    #[test]
+    fn a_destructive_skill_below_its_bar_is_ineligible_everywhere() {
+        // `clears_score_gate` is consulted independently by three sites, so the
+        // rank-1 half of the fix has to hold at each of them rather than only
+        // at the one that scopes tools.
+        let all = vec![tool("delete_node"), tool("search_nodes")];
+        // Above MUTATING (0.30), below DESTRUCTIVE — the band the rank-1
+        // `Node Deletion` turns landed in.
+        let cands = vec![candidate("Node Deletion", 0.35, &["delete_node"])];
+
+        assert_eq!(
+            routed_skill_names(&cands),
+            "",
+            "must not be logged as routed"
+        );
+        assert!(
+            render_candidates_for_prompt(&cands).is_none(),
+            "must not be rendered into the Stage-2 prompt"
+        );
+        // No eligible candidate at all -> the existing fail-open branch, not a
+        // scoped surface built from an ineligible skill.
+        let scoped = stage2_tools(&cands, &all);
+        let names: Vec<&str> = scoped.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"search_nodes"));
+    }
+
+    #[test]
+    fn an_unrecognised_tool_name_is_mutating_but_not_destructive() {
+        // Deliberate asymmetry — see `removes_user_data_tool`. An unknown name
+        // must not attract the strictest bar in the system, and a later
+        // "consistency" cleanup that flips it would quietly raise the bar on
+        // every skill with a typo'd whitelist.
+        let unknown = candidate("plugin", 0.9, &["some_external_tool"]);
+        assert!(skill_is_mutating(&unknown));
+        assert!(!skill_is_destructive(&unknown));
+        assert_eq!(score_bar_for(&unknown), MUTATING_SKILL_SCORE_BAR);
+    }
+
+    #[test]
+    fn destructive_candidates_rejected_by_the_bar_are_reported_for_the_log() {
+        // The band between the mutating and destructive bars — where a real
+        // deletion request would be silently dropped if the bar is too high.
+        let cands = vec![
+            candidate("Node Deletion", 0.35, &["delete_node"]),
+            candidate("Node Creation", 0.9, &["create_node"]),
+        ];
+        let rejected = destructive_candidates_below_bar(&cands);
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].0, "Node Deletion");
+
+        // A deletion match that clears the bar is not "rejected" — it is
+        // simply routed, and must not show up as evidence the bar is wrong.
+        let ok = vec![candidate("Node Deletion", 0.9, &["delete_node"])];
+        assert!(destructive_candidates_below_bar(&ok).is_empty());
+
+        // Nor does a non-destructive skill below its own (lower) bar.
+        let unrelated = vec![candidate("Research & Search", 0.01, &["search_nodes"])];
+        assert!(destructive_candidates_below_bar(&unrelated).is_empty());
+    }
+
+    #[test]
+    fn withheld_destructive_tools_are_reported_for_the_log() {
+        let placed = vec![
+            candidate("Node Creation", 0.8, &["create_node"]),
+            candidate("Node Deletion", 0.5, &["delete_node"]),
+        ];
+        assert_eq!(destructive_tools_withheld(&placed), vec!["delete_node"]);
+
+        // Nothing withheld when the destructive skill wins, and nothing
+        // withheld on an ordinary turn — this must stay quiet in the log.
+        let won = vec![
+            candidate("Node Deletion", 0.8, &["delete_node"]),
+            candidate("Node Creation", 0.5, &["create_node"]),
+        ];
+        assert!(destructive_tools_withheld(&won).is_empty());
+        let ordinary = vec![candidate("Node Creation", 0.8, &["create_node"])];
+        assert!(destructive_tools_withheld(&ordinary).is_empty());
     }
 
     #[test]
