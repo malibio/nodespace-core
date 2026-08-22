@@ -746,3 +746,162 @@ describe("fixture invariants", () => {
     expect(checked).toBe(all.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// End-state invariants.
+//
+// These guard the SCORED half of the fixture. The `expect` invariants above
+// now guard a diagnostic, so a scenario could silently stop asserting anything
+// real without any of them noticing.
+// ---------------------------------------------------------------------------
+
+describe("end-state fixture invariants", () => {
+  const all = fixture.groups.flat() as MatrixScenario[];
+
+  // An `end` with no clauses passes every diff, so a scenario carrying one
+  // would score green forever while looking fully specified.
+  test("every scenario states at least one end-state clause", () => {
+    for (const s of all) {
+      expect(s.end).toBeDefined();
+      const clauses = Object.entries(s.end).filter(([, v]) => v !== undefined);
+      expect(clauses.length).toBeGreaterThan(0);
+    }
+  });
+
+  // `noUnexpectedNodes` is meaningless without something to be unexpected
+  // RELATIVE to: on its own it just asserts the turn created nothing at all,
+  // which `expectNoWrites` says directly and more legibly.
+  test("noUnexpectedNodes is only used alongside a node the scenario expects", () => {
+    for (const s of all) {
+      if (!s.end.noUnexpectedNodes) continue;
+      expect(
+        s.end.createdNode !== undefined || s.end.updatedNode !== undefined,
+      ).toBe(true);
+    }
+  });
+
+  // A write scenario asserting nothing about what it wrote would pass on any
+  // write at all. Every scenario that is not a pure read must pin something.
+  test("every scenario either expects no writes or says what was written", () => {
+    for (const s of all) {
+      const writes =
+        s.end.createdNode !== undefined ||
+        s.end.updatedNode !== undefined ||
+        s.end.createdSchemas !== undefined ||
+        s.end.createdEdge !== undefined;
+      expect(s.end.expectNoWrites === true || writes).toBe(true);
+    }
+  });
+
+  // `expectNoWrites` and a write clause are contradictory: the scenario would
+  // be unwinnable, and would look like a model failure rather than a fixture
+  // one — the trap this fixture already documents for prompt wording.
+  test("no scenario both expects no writes and expects a write", () => {
+    for (const s of all) {
+      if (!s.end.expectNoWrites) continue;
+      expect(s.end.createdNode).toBeUndefined();
+      expect(s.end.updatedNode).toBeUndefined();
+      expect(s.end.createdSchemas).toBeUndefined();
+      expect(s.end.createdEdge).toBeUndefined();
+    }
+  });
+
+  // Setup scenarios are excluded from the denominator, so marking a scored
+  // scenario as setup silently removes a measurement. Pin the exact set.
+  test("only the link-setup scenarios are marked as setup", () => {
+    const setupIds = all.filter((s) => s.setup).map((s) => s.id).sort();
+    expect(setupIds).toEqual(["11a", "11b"]);
+  });
+
+  // The scenarios whose whole purpose is that a VALUE reached storage. If one
+  // of these stops asserting a property, it reverts to passing on a bare shell
+  // — the `property_count: 0` shape that reached production.
+  test("the value-carrying scenarios assert a persisted property", () => {
+    for (const id of ["4", "6", "8c", "10b"]) {
+      const s = all.find((x) => x.id === id);
+      expect(s).toBeDefined();
+      const want = s!.end.createdNode ?? s!.end.updatedNode;
+      expect(want).toBeDefined();
+      const pins =
+        want!.minProperties !== undefined ||
+        want!.properties !== undefined ||
+        want!.hasPropertyValue !== undefined;
+      expect(pins).toBe(true);
+    }
+  });
+
+  // The graph capability is what makes any of this score. Without it the
+  // runner silently falls back to trajectory grading for the whole eval.
+  test("the fixture opts into graph grading and scores each scenario's own end state", () => {
+    expect(fixture.graph).toBeDefined();
+    let checked = 0;
+    for (const s of all) {
+      // A diff that satisfies this scenario's clauses, built from them.
+      const satisfying = {
+        addedNodes: s.end.createdNode
+          ? [
+              {
+                id: `new-${s.id}`,
+                node_type: s.end.createdNode.type ?? "text",
+                content: s.end.createdNode.contentMatches ?? "",
+                properties: buildProps(s.end.createdNode),
+              },
+            ]
+          : [],
+        addedSchemas:
+          s.end.createdSchemas !== undefined
+            ? Array.from({ length: s.end.createdSchemas }, (_, i) => `type-${i}`)
+            : [],
+        addedEdges: s.end.createdEdge
+          ? [
+              {
+                from: "a",
+                relation: s.end.createdEdge.relation ?? "mentions",
+                to: "b",
+              },
+            ]
+          : [],
+        changedNodes: s.end.updatedNode
+          ? [
+              {
+                before: {
+                  id: `existing-${s.id}`,
+                  node_type: s.end.updatedNode.type ?? "text",
+                  content: s.end.updatedNode.contentMatches ?? "",
+                  properties: {},
+                },
+                after: {
+                  id: `existing-${s.id}`,
+                  node_type: s.end.updatedNode.type ?? "text",
+                  content: s.end.updatedNode.contentMatches ?? "",
+                  properties: buildProps(s.end.updatedNode),
+                },
+              },
+            ]
+          : [],
+      };
+      expect(fixture.graph!.scoreOutcome(s, satisfying).passed).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(all.length);
+  });
+
+  /** Property values that satisfy a node expectation's clauses. */
+  function buildProps(
+    want: NonNullable<MatrixScenario["end"]["createdNode"]>,
+  ): Record<string, unknown> {
+    const props: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(want.properties ?? {})) {
+      props[k] = v === true ? "some-value" : v;
+    }
+    if (want.hasPropertyValue !== undefined) {
+      props.some_key = want.hasPropertyValue;
+    }
+    // Top up to `minProperties` with filler the assertion will count.
+    let i = 0;
+    while (Object.keys(props).length < (want.minProperties ?? 0)) {
+      props[`filler_${i++}`] = "x";
+    }
+    return props;
+  }
+});

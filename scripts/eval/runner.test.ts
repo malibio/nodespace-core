@@ -72,6 +72,53 @@ describe("partitionExcluded", () => {
     expect(scored).toHaveLength(0);
     expect(excludedCount).toBe(2);
   });
+
+  // Setup scenarios establish state for later ones and are not observations.
+  // Scoring them let one ambiguous verb in a setup turn cost three points:
+  // itself, plus the two successors it left with nothing to act on.
+  test("excludes scenarios flagged as fixture setup", () => {
+    const results = [
+      result({ id: "11a", excludedAsSetup: true }),
+      result({ id: "11b", excludedAsSetup: true }),
+      result({ id: "11c" }),
+    ];
+    const { scored, setupCount } = partitionExcluded(results);
+    expect(scored.map((r) => r.id)).toEqual(["11c"]);
+    expect(setupCount).toBe(2);
+  });
+
+  // The two exclusions mean opposite things — an empty generation is a fault
+  // whose rate is itself a result, a setup turn is a fixed part of the fixture
+  // — so collapsing them would hide a rising empty-generation rate.
+  test("counts setup and empty-generation exclusions separately", () => {
+    const results = [
+      result({ id: "1", excludedAsEmptyGeneration: true, passed: false }),
+      result({ id: "11a", excludedAsSetup: true }),
+      result({ id: "2" }),
+    ];
+    const { scored, excludedCount, setupCount } = partitionExcluded(results);
+    expect(scored.map((r) => r.id)).toEqual(["2"]);
+    expect(excludedCount).toBe(1);
+    expect(setupCount).toBe(1);
+  });
+
+  // A setup turn that also came back an empty generation must not be counted
+  // twice — the totals would stop adding up to the number of scenarios run.
+  test("a setup scenario that was also an empty generation counts once", () => {
+    const results = [
+      result({
+        id: "11a",
+        excludedAsSetup: true,
+        excludedAsEmptyGeneration: true,
+        passed: false,
+      }),
+      result({ id: "11c" }),
+    ];
+    const { scored, excludedCount, setupCount } = partitionExcluded(results);
+    expect(scored.map((r) => r.id)).toEqual(["11c"]);
+    expect(excludedCount).toBe(1);
+    expect(setupCount).toBe(0);
+  });
 });
 
 describe("checkUniformity", () => {

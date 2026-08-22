@@ -1,19 +1,46 @@
 /**
- * Agent-behavior eval — end-to-end tool-call behavior.
+ * Agent-behavior eval — end-to-end graph outcomes.
  *
  * Asserts a structured, machine-checkable expectation per scenario rather than
- * capturing prose for a human to read: the right tool, the right number of
- * times, in the right order.
+ * capturing prose for a human to read: what the user's graph looks like when
+ * the turn ends.
  *
  * This is the third eval layer, distinct from the other two:
  *   - chat::parser::tests           — tool-call PARSING shape (fixtures)
  *   - scripts/eval/fixtures/routing — skill ROUTING accuracy (which skill fires)
- *   - this                          — END-TO-END behavior (right tool, right
- *                                     count, right effect)
+ *   - this                          — END-TO-END behavior (did the requested
+ *                                     change actually reach storage)
+ *
+ * OUTCOME, NOT TRAJECTORY
+ *
+ * This fixture used to score TRAJECTORY — which tool fired, how many times, in
+ * what order — and that disagreed with the product in three measured ways:
+ *
+ *   - A correct result scored as a failure. A model reaching the right end
+ *     state by a shorter path (update_node with no preceding resolve_query)
+ *     lost a point for the path rather than the result.
+ *   - Self-correction scored as a failure. A create_node rejected for a missing
+ *     node_type, corrected by the model and persisted on the second call, red-
+ *     lined on an exactly-once rule — punishing the recovery behavior we want.
+ *   - Severity was flat. Two search_nodes calls (wasted latency, nothing
+ *     persisted) scored identically to two create_schema calls (a spurious type
+ *     the user has to clean up).
+ *
+ * Each scenario's `end` clause is now THE score, and severity falls out of it
+ * for free rather than needing a severity table: a repeated read changes
+ * nothing and passes, while a repeated schema creation leaves an extra type
+ * behind and fails `createdSchemas`. See ../end-state.ts for the clause model
+ * and ../graph.ts for how end state is captured.
+ *
+ * `expect` — the old trajectory assertion — is KEPT on every scenario and
+ * still evaluated, but as a diagnostic recorded beside the score rather than as
+ * the score. It answers the question outcome grading cannot ("how did the model
+ * get there"), which is what a debugging session actually needs, and a scenario
+ * where the two disagree is the signal worth reading after a run.
  *
  * Under ADR-038 routing happens in a separate stage before the acting turn, so
- * assertions check for the TARGET tool tolerating routing calls, never raw
- * tool count.
+ * trajectory assertions check for the TARGET tool tolerating routing calls,
+ * never raw tool count.
  *
  * THE DOMAIN IS PART OF THE MEASUREMENT, NOT DECORATION
  *
@@ -31,12 +58,24 @@
  * constrains it. See ../../../../nodespace-docs/strategy/{vision,beliefs,
  * principles}.md for the framing this tracks.
  *
- * The TOOL MECHANICS are unchanged by that re-theme and are the reason the
- * scenario set was re-themed in place rather than duplicated into a second
- * fixture: `noExtraTypes`, `minProperties`, `noRetry`+`minCalls` and
- * `toolSequence` are properties of the expectation model, not of the
+ * The MECHANICS are unchanged by that re-theme and are the reason the scenario
+ * set was re-themed in place rather than duplicated into a second fixture: the
+ * expectation clauses are properties of the expectation model, not of the
  * vocabulary, so re-theming keeps every one of them — and keeps every scenario
  * `id`, so a pre-re-theme baseline still joins against a post-re-theme run.
+ *
+ * GROUPS CASCADE, SO SETUP IS NOT SCORED
+ *
+ * Scenarios in a group share a chat node and run in order, so an early failure
+ * craters the rest and the results stop being independent observations. One
+ * ambiguous verb in 11a once cost three points: itself, plus 11c (which had no
+ * node to link) and 11d (which had no edge to traverse) — one failure counted
+ * three times, inflating variance and making per-scenario counts misleading.
+ *
+ * Turns that exist only to establish state (11a, 11b) are therefore marked
+ * `setup: true`: run and recorded, asserted, warned about if they fail, but
+ * NOT scored. Their state still reaches their successors; their phantom
+ * failures no longer reach the denominator.
  *
  * WINNABILITY IS A HARD CONSTRAINT ON WORDING
  *
@@ -64,6 +103,7 @@ import type {
   TurnRecord,
   Verdict,
 } from "../types.ts";
+import { assertEndState, type EndState } from "../end-state.ts";
 
 // ---------------------------------------------------------------------------
 // Structured expectation model
@@ -416,6 +456,18 @@ export function assertExpectation(
 // ---------------------------------------------------------------------------
 
 export interface MatrixScenario extends Scenario {
+  /**
+   * What the graph must look like when the turn ends. THIS IS THE SCORE.
+   */
+  end: EndState;
+  /**
+   * The trajectory expectation, retained as a DIAGNOSTIC rather than a score.
+   *
+   * Kept because it answers a question the outcome score cannot — how the
+   * model got there — which is what a debugging session actually needs, and
+   * because a scenario where the two disagree is the signal worth reading
+   * after a run. It no longer decides pass/fail; see the module docstring.
+   */
   expect: Expectation;
 }
 
@@ -426,6 +478,9 @@ const GROUPS: MatrixScenario[][] = [
       scenario: "1. Greeting",
       prompt: "Hi there",
       expect: { kind: "noTools" },
+      // Nothing to assert on the graph beyond "it did not change": a greeting
+      // that silently created a node is the failure worth catching here.
+      end: { expectNoWrites: true },
     },
   ],
   [
@@ -434,6 +489,7 @@ const GROUPS: MatrixScenario[][] = [
       scenario: "2. Capability",
       prompt: "What can you do?",
       expect: { kind: "noTools" },
+      end: { expectNoWrites: true },
     },
   ],
   // Single-custom-type CRUD chain (scenarios 3-7, then 9) shares one chat node.
@@ -458,6 +514,18 @@ const GROUPS: MatrixScenario[][] = [
       prompt:
         "I want somewhere to keep the feature write-ups my team drafts, whether each has been signed off, and how many days we think it takes",
       expect: { kind: "noExtraTypes" },
+      // The type must EXIST when the turn ends, and be the only one created.
+      // This replaces the old exactly-one-CALL rule and is strictly better
+      // aligned with what the user experiences: a model that called
+      // create_schema twice for the SAME type ends with one type and now
+      // passes, while one that proactively invented a related type leaves it
+      // behind and fails — the outcome that actually costs real cleanup.
+      //
+      // A COUNT rather than a name, deliberately: the model chooses the type's
+      // identifier, so asserting one would red-line a model that named the
+      // same concept differently, measuring this fixture's vocabulary guess
+      // instead of the model's behavior (the #1846 trap, one level up).
+      end: { createdSchemas: 1 },
     },
     {
       id: "4",
@@ -471,12 +539,23 @@ const GROUPS: MatrixScenario[][] = [
       // pinning which of the state or the estimate the model chose to record.
       prompt: "Put one down for offline sync, still a draft, we reckon five days",
       expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
+      // minProperties: 1 rather than a named field — scenario 6 and 7
+      // discriminate on the day count, but which of the state or the estimate
+      // the model chose to record is not what this turn is asserting.
+      end: {
+        createdNode: { contentMatches: "offline sync", minProperties: 1 },
+        noUnexpectedNodes: true,
+      },
     },
     {
       id: "5",
       scenario: "5. List/query",
       prompt: "What write-ups are on the books?",
       expect: { kind: "toolOnce", tool: "search_nodes" },
+      // A query must not write. This is where severity now falls out for free:
+      // two search_nodes calls persist nothing and pass, while a model that
+      // answers by creating a node to hold the answer fails.
+      end: { expectNoWrites: true },
     },
     {
       id: "6",
@@ -493,12 +572,23 @@ const GROUPS: MatrixScenario[][] = [
         tools: ["resolve_query", "update_node"],
         minProperties: 1,
       },
+      // Path-agnostic by construction, which is the point: reaching this state
+      // via resolve_query+update_node and reaching it via update_node alone are
+      // the same outcome for the user, and the shorter route no longer costs a
+      // point. `updatedNode` (not `createdNode`) is what keeps the assertion
+      // honest — a turn that records the sign-off on a NEW node leaves the
+      // original untouched and is a real failure, named as such.
+      end: {
+        updatedNode: { contentMatches: "offline sync", minProperties: 1 },
+        noUnexpectedNodes: true,
+      },
     },
     {
       id: "7",
       scenario: "7. Empty-result query",
       prompt: "Is anything on our plate longer than forty days?",
       expect: { kind: "noRetry", tool: "search_nodes" },
+      end: { expectNoWrites: true },
     },
     {
       id: "9",
@@ -541,6 +631,23 @@ const GROUPS: MatrixScenario[][] = [
         tool: "update_node",
         minProperties: 1,
       },
+      // The VALUE the prompt supplies must reach storage — that is the whole
+      // scenario, so the clause pins the value and not merely "something
+      // changed". This is the shape that reached production reporting
+      // `updated: true` with `property_count: 0`: the model resolved the right
+      // node, echoed its title back as content, and sent no properties at all.
+      // A clause asserting only that the node changed would score that green
+      // the moment the model rewrote the content instead.
+      //
+      // `8` is matched across the string/number boundary and the field is NOT
+      // named, for the same winnability reason scenario 3's type is not named:
+      // scenario 3 lets the model choose the key it stores the day count
+      // under, so pinning one would measure the fixture's guess. What is
+      // asserted is that eight reached SOME property of the right node.
+      end: {
+        updatedNode: { contentMatches: "offline sync", hasPropertyValue: 8 },
+        noUnexpectedNodes: true,
+      },
     },
   ],
   // Multi-custom-type CRUD (scenario 8) shares its own chat node.
@@ -559,12 +666,14 @@ const GROUPS: MatrixScenario[][] = [
       prompt:
         "Start keeping the calls we make on how the system is built, and who made each one",
       expect: { kind: "toolOnce", tool: "create_schema" },
+      end: { createdSchemas: 1 },
     },
     {
       id: "8b",
       scenario: "8b. Create type: second",
       prompt: "I also need somewhere for the two-week cycles we plan",
       expect: { kind: "toolOnce", tool: "create_schema" },
+      end: { createdSchemas: 1 },
     },
     {
       id: "8c",
@@ -576,18 +685,27 @@ const GROUPS: MatrixScenario[][] = [
       // that recorded it.
       prompt: "Put down that we went with event-based cache clearing, Priya's call",
       expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
+      end: {
+        createdNode: { contentMatches: "cache", minProperties: 1 },
+        noUnexpectedNodes: true,
+      },
     },
     {
       id: "8d",
       scenario: "8d. Instance: second type",
       prompt: "New cycle: Harbour, it wraps up on the 30th",
       expect: { kind: "toolOnce", tool: "create_node" },
+      end: {
+        createdNode: { contentMatches: "harbour" },
+        noUnexpectedNodes: true,
+      },
     },
     {
       id: "8e",
       scenario: "8e. Query across types",
       prompt: "Run through those calls for me",
       expect: { kind: "toolOnce", tool: "search_nodes" },
+      end: { expectNoWrites: true },
     },
   ],
   // Core-type schema fields (scenario 10) shares its own chat node.
@@ -614,6 +732,10 @@ const GROUPS: MatrixScenario[][] = [
       // only a real test if it starts unset.
       prompt: "Add a task to swap the image resizer over to the new pipeline",
       expect: { kind: "toolOnce", tool: "create_node" },
+      end: {
+        createdNode: { type: "task", contentMatches: "resizer" },
+        noUnexpectedNodes: true,
+      },
     },
     {
       id: "10b",
@@ -635,6 +757,15 @@ const GROUPS: MatrixScenario[][] = [
       // change it did not make — scores identically to a real write.
       prompt: "Set that task's due date to 6 August 2026",
       expect: { kind: "toolOnce", tool: "update_node", minProperties: 1 },
+      // `due_date` by name: the whole defect this scenario exists for is the
+      // model failing to see a field defined on the core task schema, and the
+      // prompt deliberately says "due date" in the user's words without ever
+      // naming the key. Asserting the key is what proves the field list
+      // reached the model rather than the key having been handed to it.
+      end: {
+        updatedNode: { type: "task", properties: { due_date: true } },
+        noUnexpectedNodes: true,
+      },
     },
     {
       id: "10c",
@@ -657,6 +788,7 @@ const GROUPS: MatrixScenario[][] = [
       // catch, which is worse than not measuring it at all.
       prompt: "How many tasks are still open?",
       expect: { kind: "noRetry", tool: "search_nodes", minCalls: 1 },
+      end: { expectNoWrites: true },
     },
   ],
   // Relationship traversal (scenario 11) shares its own chat node.
@@ -695,14 +827,30 @@ const GROUPS: MatrixScenario[][] = [
       // back to this one word choice, which is why the opening verb has to be
       // an unambiguous record-creation request — the same correction scenario 4
       // already needed.
+      //
+      // The cascade is now bounded structurally as well as by wording: this
+      // turn is `setup`, so a repeat of that failure costs the successors it
+      // genuinely invalidates rather than also scoring itself as a third
+      // independent observation. Careful wording is still required — a setup
+      // turn that establishes nothing makes 11c and 11d unwinnable, which is
+      // why its verdict is asserted and warned about rather than ignored.
       prompt: "Log a decision: the reports page uses server-side rendering",
       expect: { kind: "toolOnce", tool: "create_node" },
+      // SETUP, not scored: this exists so 11c has two real endpoints to
+      // connect. Scoring it made one ambiguous verb here cost three points —
+      // this turn, plus 11c and 11d, which it left with nothing to link or
+      // traverse. Its verdict is still recorded and warned about, because a
+      // setup turn that quietly does nothing makes its successors unwinnable.
+      setup: true,
+      end: { createdNode: { contentMatches: "reports page" } },
     },
     {
       id: "11b",
       scenario: "11b. Link setup: second node",
       prompt: "Add a task to rebuild the reports page",
       expect: { kind: "toolOnce", tool: "create_node" },
+      setup: true,
+      end: { createdNode: { type: "task", contentMatches: "reports page" } },
     },
     {
       id: "11c",
@@ -766,6 +914,11 @@ const GROUPS: MatrixScenario[][] = [
         kind: "toolOnce",
         tool: "create_relationship",
       },
+      // The edge must EXIST. This is what separates the failure worth catching
+      // — the model expressing the link as prose inside one of the two nodes,
+      // which reports success and records nothing traversable — from a real
+      // link, and it does so without pinning how the endpoints were recovered.
+      end: { createdEdge: { relation: "mentions" } },
     },
     {
       id: "11d",
@@ -803,6 +956,11 @@ const GROUPS: MatrixScenario[][] = [
       // link-side regression read as two failures instead of one.
       prompt: "What did we settle on that the rebuild has to respect?",
       expect: { kind: "noRetry", tool: "get_related_nodes", minCalls: 1 },
+      // A read: the traversal must not write. Whether it came back non-empty
+      // depends on 11c having recorded an edge, which is deliberately NOT
+      // folded in — that would make one link-side regression read as two
+      // failures.
+      end: { expectNoWrites: true },
     },
   ],
 ];
@@ -811,6 +969,8 @@ const fixture: EvalFixture = {
   name: "agent-matrix",
   description: "Agent Eval Results (end-to-end tool-call behavior)",
   groups: GROUPS,
+  // Trajectory. No longer the score — the runner records this as
+  // `ScenarioResult.trajectory` and scores `graph.scoreOutcome` instead.
   score(scenario, turns) {
     const toolsCalled = turns.flatMap((t) => t.toolsCalled);
     const toolCalls = turns.flatMap((t) => t.toolCalls ?? []);
@@ -820,8 +980,23 @@ const fixture: EvalFixture = {
       toolCalls,
     );
   },
+  graph: {
+    /**
+     * Seed types for snapshot enumeration. Custom types the model invents
+     * during a run are discovered from the schema list and do not need to be
+     * named here — these are the types that may already exist when a run
+     * starts, plus the core types the scenarios act on directly.
+     */
+    types: ["task", "text", "note"],
+    scoreOutcome(scenario, diff) {
+      return assertEndState((scenario as MatrixScenario).end, diff);
+    },
+  },
   extra(scenario, turns: TurnRecord[]) {
     return {
+      // The scored expectation, and the trajectory one kept beside it as a
+      // diagnostic — a results file should say what was actually asserted.
+      end: (scenario as MatrixScenario).end,
       expect: (scenario as MatrixScenario).expect,
       // Per turn, not `turns[0]` alone: a scenario's turns can be offered
       // different tool surfaces (routing runs per turn and scopes Stage 2's

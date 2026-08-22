@@ -12,6 +12,7 @@
  */
 
 import { readEnv, ENV_USAGE, REPO_ROOT, type EvalEnv } from "./env.ts";
+import { captureSnapshot, diffSnapshots } from "./graph.ts";
 import {
   abortOnEnvironment,
   preflight,
@@ -253,6 +254,19 @@ async function compareToBaseline(
       );
       continue;
     }
+    // Setup scenarios are not scored, so their verdict is not a result to
+    // regress against — but a baseline predating the setup reclassification
+    // still carries a scored verdict for the same id, and comparing the two
+    // would report a REGRESSION the moment a setup turn takes a different
+    // (still perfectly valid) path. Its failure is surfaced during the run
+    // instead, where it means something: the state it should have established.
+    if (cur.excludedAsSetup) {
+      console.log(
+        `   SETUP       ${cur.id}: fixture setup, not scored — not compared` +
+          (cur.passed ? "" : " (⚠ setup did not establish its state)"),
+      );
+      continue;
+    }
     if (base.passed && !cur.passed) {
       console.log(
         `   REGRESSION  ${cur.id}: was passing, now failing — ${cur.failure}`,
@@ -284,7 +298,13 @@ async function compareToBaseline(
 
 /**
  * Split a run's results into scenarios that were actually scored and those
- * excluded as degenerate empty generations (see `TurnRecord.emptyGeneration`).
+ * excluded — as degenerate empty generations (see `TurnRecord.emptyGeneration`)
+ * or as fixture setup (see `Scenario.setup`).
+ *
+ * The two exclusions are counted separately because they mean opposite things:
+ * an empty generation is a fault whose RATE is a result in itself, while a
+ * setup turn is a deliberate, fixed part of the fixture. Collapsing them would
+ * make a run with a rising empty-generation rate look unchanged.
  *
  * Kept out of `runEval`'s body so uniformity/totals math is independently
  * testable against a fixed `ScenarioResult[]`, without spawning a daemon.
@@ -292,9 +312,18 @@ async function compareToBaseline(
 export function partitionExcluded(results: ScenarioResult[]): {
   scored: ScenarioResult[];
   excludedCount: number;
+  setupCount: number;
 } {
-  const scored = results.filter((r) => !r.excludedAsEmptyGeneration);
-  return { scored, excludedCount: results.length - scored.length };
+  const scored = results.filter(
+    (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup,
+  );
+  return {
+    scored,
+    excludedCount: results.filter((r) => r.excludedAsEmptyGeneration).length,
+    setupCount: results.filter(
+      (r) => r.excludedAsSetup && !r.excludedAsEmptyGeneration,
+    ).length,
+  };
 }
 
 /**
@@ -516,7 +545,21 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           priorTurns.push(turn(chatId, prior));
         }
 
+        // Snapshot bracketing the scored turn. Captured only when the fixture
+        // opts into graph grading, and taken as late/early as possible around
+        // the turn so the diff attributes to THIS turn rather than to anything
+        // the harness did between scenarios.
+        const before = fixture.graph
+          ? captureSnapshot(env, fixture.graph.types)
+          : undefined;
+
         const scored = turn(chatId, scenario.prompt);
+
+        const after = fixture.graph
+          ? captureSnapshot(env, fixture.graph.types)
+          : undefined;
+        const diff =
+          before && after ? diffSnapshots(before, after) : undefined;
 
         // The degenerate-empty-generation failure mode (agent_loop.rs: the
         // model opens a turn and emits neither text nor a tool call) is an
@@ -542,7 +585,16 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           continue;
         }
 
-        const verdict = fixture.score(scenario, [scored]);
+        // The trajectory assertions still run, but they no longer decide the
+        // score when the fixture grades on outcome — they are recorded as a
+        // diagnostic. Trajectory answers "how did the model get there", which
+        // is what a debugging session needs and what an outcome score cannot
+        // say; it just is not the thing being graded.
+        const trajectory = fixture.score(scenario, [scored]);
+        const verdict =
+          fixture.graph && diff
+            ? fixture.graph.scoreOutcome(scenario, diff)
+            : trajectory;
 
         results.push({
           id: scenario.id,
@@ -552,14 +604,26 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           failure: verdict.failure,
           turns: [...priorTurns, scored],
           extra: fixture.extra?.(scenario, [scored]),
+          graphDiff: diff,
+          trajectory: fixture.graph ? trajectory : undefined,
+          excludedAsSetup: scenario.setup === true ? true : undefined,
         });
 
+        const marker = scenario.setup ? "⊙" : verdict.passed ? "✓" : "✗";
         console.error(
-          `[${fixture.name}]   ${verdict.passed ? "✓" : "✗"} ` +
-            `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms`,
+          `[${fixture.name}]   ${marker} ` +
+            `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms` +
+            (scenario.setup ? " (setup — not scored)" : ""),
         );
         if (!verdict.passed)
           console.error(`[${fixture.name}]     ↳ ${verdict.failure}`);
+        // A setup turn that failed to establish its state makes every scenario
+        // after it unwinnable. It is not scored, but it must not pass silently.
+        if (scenario.setup && !verdict.passed)
+          console.error(
+            `[${fixture.name}]     ⚠ setup did not establish its state — ` +
+              `later scenarios in this group may be unwinnable`,
+          );
       }
     }
   } catch (e) {
@@ -571,11 +635,22 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   // Report
   // -------------------------------------------------------------------------
 
-  const { scored, excludedCount: excludedEmptyGenerations } =
-    partitionExcluded(results);
+  const {
+    scored,
+    excludedCount: excludedEmptyGenerations,
+    setupCount: excludedSetup,
+  } = partitionExcluded(results);
   const total = scored.length;
   const passed = scored.filter((r) => r.passed).length;
   const failed = total - passed;
+
+  // Where the retired trajectory assertions disagree with the outcome score.
+  // Not a failure count — each disagreement is either a scenario whose
+  // expectation no longer describes the behavior, or a real change in how the
+  // model reaches its result. Both are worth a look; neither is a verdict.
+  const trajectoryDisagreements = scored.filter(
+    (r) => r.trajectory !== undefined && r.trajectory.passed !== r.passed,
+  ).length;
 
   // Uniform 0% or 100% across every SCORED scenario is a harness signature —
   // an environment that preflight could not catch (e.g. every send silently
@@ -591,7 +666,14 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     eval: fixture.name,
     label,
     provenance,
-    summary: { total, passed, failed, excludedEmptyGenerations },
+    summary: {
+      total,
+      passed,
+      failed,
+      excludedEmptyGenerations,
+      excludedSetup,
+      trajectoryDisagreements,
+    },
     results,
   };
 
@@ -632,6 +714,15 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
       `   Excluded: ${excludedEmptyGenerations} (degenerate empty generation — not scored either way)`,
     );
   }
+  if (excludedSetup > 0) {
+    console.log(`   Setup:    ${excludedSetup} (fixture setup — not scored)`);
+  }
+  if (trajectoryDisagreements > 0) {
+    console.log(
+      `   Trajectory disagrees on ${trajectoryDisagreements} scenario(s) — ` +
+        `diagnostic only, see 'trajectory' in the results file`,
+    );
+  }
   for (const line of fixture.summary?.(results) ?? []) {
     console.log(`   ${line}`);
   }
@@ -639,7 +730,13 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     `────────────────────────────────────────────────────────────────────`,
   );
   for (const r of results) {
-    const marker = r.excludedAsEmptyGeneration ? "⊘" : r.passed ? "✓" : "✗";
+    const marker = r.excludedAsEmptyGeneration
+      ? "⊘"
+      : r.excludedAsSetup
+        ? "⊙"
+        : r.passed
+          ? "✓"
+          : "✗";
     console.log(`  ${marker} ${r.id}`);
     if (!r.passed) console.log(`      ↳ ${r.failure}`);
   }

@@ -7,6 +7,8 @@
  * scripts/eval/runner.ts and is not reimplemented per eval.
  */
 
+import type { GraphDiff } from "./graph.ts";
+
 /**
  * One tool call's outcome, beyond its name.
  *
@@ -163,6 +165,22 @@ export interface Scenario {
    */
   priorTurns?: string[];
   /**
+   * This scenario exists only to establish state for later ones — run and
+   * recorded, but NOT scored.
+   *
+   * Scenarios within a group share a chat node, so an early failure craters
+   * every scenario after it and the results stop being independent
+   * observations: one ambiguous verb in a setup turn has been traced through
+   * three downstream failures that were all the same failure counted three
+   * times. Marking setup as setup keeps the state it establishes while
+   * removing the phantom failures from the denominator.
+   *
+   * A setup turn is still recorded in full, and the runner reports whether it
+   * did what it was supposed to — a setup turn that silently did nothing makes
+   * its successors unwinnable, so it must not vanish from the results file.
+   */
+  setup?: boolean;
+  /**
    * Free-form per-eval fields (expectation shape, load-bearing flags, ...).
    * The runner passes these back to `score` untouched and records them in the
    * results file; it never interprets them.
@@ -198,6 +216,34 @@ export interface ScenarioResult {
    * failure silently deflates every cell it appears in.
    */
   excludedAsEmptyGeneration?: boolean;
+  /**
+   * This scenario was fixture setup (see `Scenario.setup`) — run and recorded,
+   * excluded from the scored denominator.
+   *
+   * `passed` still carries the verdict so a setup turn that failed to establish
+   * its state is visible rather than silently invalidating its successors; it
+   * simply does not count as a scored observation.
+   */
+  excludedAsSetup?: boolean;
+  /**
+   * What the graph actually did this turn: the diff between the pre-turn and
+   * post-turn snapshots.
+   *
+   * Recorded so a verdict carries its evidence. Reading a results file should
+   * not require re-running the eval to find out what was written.
+   */
+  graphDiff?: unknown;
+  /**
+   * The verdict the retired TRAJECTORY assertions would have returned, kept as
+   * a diagnostic alongside the outcome score that replaced them.
+   *
+   * Not scored. It is here because trajectory answers a question outcome
+   * cannot — HOW the model got there, which is what a debugging session
+   * actually needs — and because a scenario where the two disagree is the
+   * signal that either the expectation or the model changed. Absent on results
+   * files written before outcome grading landed.
+   */
+  trajectory?: { passed: boolean; failure?: string };
 }
 
 /**
@@ -221,6 +267,32 @@ export interface EvalFixture {
    * Must be pure and daemon-free so it is unit-testable without a model.
    */
   score(scenario: Scenario, turns: TurnRecord[]): Verdict;
+  /**
+   * Opt in to graph end-state grading.
+   *
+   * Present only on evals whose scenarios act on the graph. The routing eval
+   * scores which SKILL fired and writes nothing, so snapshotting it would cost
+   * a CLI round-trip per turn to diff a graph that never changes — hence a
+   * capability a fixture declares rather than a behavior every eval pays for.
+   *
+   * When present, the runner captures a snapshot before and after each scored
+   * turn and passes the diff to `scoreOutcome`, whose verdict is THE score.
+   * `score` still runs, and its verdict is recorded as a trajectory
+   * diagnostic (see `ScenarioResult.trajectory`).
+   */
+  graph?: {
+    /**
+     * Node types to enumerate when snapshotting. Types created during the run
+     * are discovered from the schema list and do not need to be listed here;
+     * this is the seed set for types that may already exist.
+     */
+    types: string[];
+    /**
+     * Score one scenario from what the graph actually did. Must be pure over
+     * the diff, so it is unit-testable without a daemon.
+     */
+    scoreOutcome(scenario: Scenario, diff: GraphDiff): Verdict;
+  };
   /**
    * Optional per-scenario fields to record in the results file beyond
    * pass/fail — routing signals, matched skill, and similar.
@@ -289,7 +361,7 @@ export interface EvalResults {
   label: string;
   provenance: Provenance;
   summary: {
-    /** Scored scenarios only — excludes empty-generation exclusions. */
+    /** Scored scenarios only — excludes empty-generation and setup exclusions. */
     total: number;
     passed: number;
     failed: number;
@@ -301,6 +373,21 @@ export interface EvalResults {
      * file rather than a run with none.
      */
     excludedEmptyGenerations?: number;
+    /**
+     * Scenarios excluded as fixture setup (see `Scenario.setup`), not scored
+     * either way. Reported separately from `excludedEmptyGenerations` because
+     * the two mean opposite things: an empty generation is a fault whose rate
+     * matters, while a setup turn is a deliberate, fixed part of the fixture.
+     */
+    excludedSetup?: number;
+    /**
+     * How many scored scenarios' trajectory diagnostic DISAGREED with the
+     * outcome score. Not a failure count — it is the number worth looking at
+     * after a run, because each disagreement is either a scenario whose
+     * expectation no longer describes the behavior or a real change in how the
+     * model reaches its result.
+     */
+    trajectoryDisagreements?: number;
   };
   results: ScenarioResult[];
 }
