@@ -347,7 +347,19 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             content: None,
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
-                "description": "Delete nodes from the knowledge graph. Use when user wants to remove, delete, or trash a node or record.",
+                // Leads with the destructive verbs and stops there. The
+                // earlier wording ended "...remove, delete, or trash a node or
+                // record", and that trailing generic noun made this skill an
+                // attractor for anything node-shaped: it was retrieved as a
+                // candidate on turns that recorded a decision, marked a status,
+                // set a due date, and asked a plain question — none of which
+                // asked to remove anything. Every one of those prompts is
+                // *about* a node or record; only the verb distinguishes them,
+                // so a description whose tail is the shared noun buries the one
+                // signal that separates deletion from everything else. Keep the
+                // discriminating verbs; do not reintroduce a generic noun tail
+                // for readability.
+                "description": "Delete, remove, discard, or trash something the user no longer wants kept. Use ONLY when the user is asking for existing content to be taken out of the knowledge graph — not to record, update, mark, or look something up.",
                 "tool_whitelist": ["delete_node", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),

@@ -1746,6 +1746,46 @@ impl Tool {
         matches!(self.write_semantics(), WriteSemantics::DuplicableWrite)
     }
 
+    /// Whether this tool irreversibly removes data the user already has.
+    ///
+    /// A strict subset of [`Tool::is_write`], and deliberately narrower:
+    /// `is_write` asks whether the graph changes at all, this asks whether
+    /// something the user already stored goes away. Creating an unwanted node
+    /// or setting a wrong status is a write the user can see and correct;
+    /// deleting the node they meant to update is not. Routing uses that
+    /// distinction to gate the surface hardest against the one error that
+    /// cannot be walked back (ADR-038: "the expensive error ... is gated
+    /// hardest").
+    ///
+    /// Note this is a different question from [`Tool::duplicate_is_destructive`],
+    /// whose "destructive" is about *repeating* a call across turns — a second
+    /// `create_node` duplicating the user's data. That is a cross-turn
+    /// idempotency property; this one is about what a single successful call
+    /// does.
+    ///
+    /// An exhaustive match rather than a list, for the same reason
+    /// [`Tool::write_semantics`] is: a tool added later must not silently
+    /// default to "safe", it has to be classified by whoever adds it.
+    pub fn removes_user_data(self) -> bool {
+        match self {
+            Tool::DeleteNode => true,
+            Tool::SearchNodes
+            | Tool::ResolveQuery
+            | Tool::SearchSemantic
+            | Tool::GetNode
+            | Tool::GetRelatedNodes
+            | Tool::SearchSkills
+            | Tool::RouteClarify
+            | Tool::UpdateNode
+            | Tool::UpdateTaskStatus
+            | Tool::UpdateSchema
+            | Tool::CreateNode
+            | Tool::CreateSchema
+            | Tool::CreateRelationship
+            | Tool::CreateNodesFromMarkdown => false,
+        }
+    }
+
     /// Whether this tool has a required parameter whose description sends the
     /// model to the `EXISTING SCHEMAS` block that only Stage-2 routing
     /// (`routing::render_candidates_for_prompt`) injects.
@@ -1835,6 +1875,22 @@ pub fn is_cross_turn_guarded_tool(tool: &str) -> bool {
 /// Whether a tool changes graph state, by wire name. Computed from the registry.
 pub fn is_write_tool(tool: &str) -> bool {
     Tool::from_name(tool).is_some_and(Tool::is_write)
+}
+
+/// Whether a tool irreversibly removes user data, by wire name. Computed from
+/// the registry.
+///
+/// An unrecognised name is **not** destructive. This is the opposite of how
+/// `routing::skill_is_mutating` treats an unknown name, and the asymmetry is
+/// deliberate: there, an unknown blast radius must not get the *lower* bar, so
+/// the unknown case is pushed up to "mutating". Here, an unknown name is
+/// already covered by that mutating classification, and calling it destructive
+/// as well would raise the strictest bar in the system on every skill that
+/// merely has a typo'd or externally-registered tool in its whitelist.
+/// Destructiveness is an affirmative claim about a tool this build actually
+/// knows.
+pub fn removes_user_data_tool(tool: &str) -> bool {
+    Tool::from_name(tool).is_some_and(Tool::removes_user_data)
 }
 
 /// All tool definitions for the graph executor, derived from the registry.
@@ -3750,6 +3806,40 @@ mod tests {
         );
         assert!(!Tool::RouteClarify.is_write());
         assert!(!Tool::RouteClarify.requires_routed_guidance());
+    }
+
+    #[test]
+    fn removing_user_data_is_a_strict_subset_of_writing() {
+        // Routing gates hardest on the tools that cannot be walked back, so
+        // this classification must never widen past the writes — a read that
+        // claimed to remove data would raise the strictest bar over a search.
+        for tool in Tool::ALL {
+            if tool.removes_user_data() {
+                assert!(
+                    tool.is_write(),
+                    "{} removes user data but is not classified as a write",
+                    tool.name()
+                );
+            }
+        }
+
+        let destructive: Vec<&str> = Tool::ALL
+            .iter()
+            .filter(|t| t.removes_user_data())
+            .map(|t| t.name())
+            .collect();
+        // Pinned deliberately rather than asserted loosely: adding a second
+        // destructive tool should make an author confirm the routing bar is
+        // what they want for it, not slip in silently.
+        assert_eq!(destructive, vec!["delete_node"]);
+    }
+
+    #[test]
+    fn an_unregistered_tool_name_does_not_count_as_removing_user_data() {
+        // The asymmetry with `is_write_tool`'s unknown handling is deliberate
+        // and load-bearing — see `removes_user_data_tool`'s doc comment.
+        assert!(!removes_user_data_tool("some_external_tool"));
+        assert!(removes_user_data_tool("delete_node"));
     }
 
     #[test]

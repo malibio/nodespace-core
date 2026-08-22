@@ -1308,6 +1308,26 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // the mechanism actually implicated is turned off.
         let mut tools = routing::stage2_tools(&routed.candidates, &all_tools);
 
+        // A destructive tool withheld because its skill placed but did not win
+        // retrieval. Logged because the *absence* of a tool is otherwise
+        // indistinguishable from a model that declined to call it: nothing in
+        // the log or the turn output flagged the surface as wrong, so a
+        // retrieval defect read as a model defect for as long as it went
+        // unnoticed. `info` rather than `warn` — withholding here is the
+        // system working as designed, and the interesting case is being able
+        // to correlate it with a turn that then behaved oddly.
+        let withheld = routing::destructive_tools_withheld(&routed.candidates);
+        if !withheld.is_empty() {
+            tracing::info!(
+                session_id = %session.id,
+                withheld_tools = %withheld.join(", "),
+                routed_skills = %routing::routed_skill_names(&routed.candidates),
+                "Stage-2 scoping withheld a destructive tool from a skill that did not win \
+                 retrieval. If this turn looks like the model failed to act, check whether it \
+                 needed a tool no eligible skill offered."
+            );
+        }
+
         // Declares write-tool `field_values` sub-properties from the same
         // retrieved-schema data `candidate_block` below renders into the
         // prompt — content, not tool-list scoping, so it is gated behind the
