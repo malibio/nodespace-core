@@ -313,6 +313,26 @@ describe("aggregateReps", () => {
     });
   });
 
+  // A rep that aborted partway contributes fewer scenarios than the others.
+  // Each scenario's reliability must then be judged against the reps that
+  // actually reached it, not against the run's rep count — otherwise every
+  // scenario after the abort point reads as unreliable because of where the
+  // run stopped rather than because of how the model behaved.
+  test("scenarios present in only some reps are judged on the reps that reached them", () => {
+    const agg = aggregateReps([
+      [result({ id: "1" }), result({ id: "2" })],
+      [result({ id: "1" })], // rep 2 stopped after scenario 1
+      [result({ id: "1" }), result({ id: "2", passed: false })],
+    ]);
+    expect(agg.reps).toBe(3);
+    expect(agg.scenarios[0]).toMatchObject({ scoredReps: 3, passedReps: 3, passedAll: true });
+    expect(agg.scenarios[1]).toMatchObject({ scoredReps: 2, passedReps: 1, flipped: true });
+    expect(agg.passAtK).toBe(1);
+    // pass^1 averages the per-rep scored counts (2, 1, 1) — it is a mean of
+    // what each rep actually scored, not a rate over the run's scenario list.
+    expect(agg.passAt1).toBeCloseTo(4 / 3, 5);
+  });
+
   test("keeps fixture order and preserves scenario descriptions", () => {
     const agg = aggregateReps([
       [

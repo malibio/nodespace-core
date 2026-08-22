@@ -999,9 +999,18 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
       `   pass^${aggregate.reps}:   ${aggregate.passAtK}/${aggregate.scoredScenarios}` +
         `  (passed in every rep)`,
     );
+    // pass^1's denominator is the mean number of scenarios SCORED per rep,
+    // which is below `scoredScenarios` whenever exclusions were uneven across
+    // reps. Printing it over `scoredScenarios` would render e.g. "2.50/3"
+    // beside "pass^3: 3/3" — both correct, but inviting the reader to take the
+    // pair as a rate over one population when the two are computed over
+    // different ones.
+    const meanScored =
+      reps.reduce((n, r) => n + r.summary.total, 0) / reps.length;
     console.log(
-      `   pass^1:   ${aggregate.passAt1.toFixed(2)}/${aggregate.scoredScenarios}` +
-        `  (mean of per-rep scores)`,
+      `   pass^1:   ${aggregate.passAt1.toFixed(2)}/${
+        Number.isInteger(meanScored) ? meanScored : meanScored.toFixed(2)
+      }  (mean of per-rep scores)`,
     );
   }
   if (aggregate.reps > 1) {
