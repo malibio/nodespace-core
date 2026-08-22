@@ -451,10 +451,16 @@ const GROUPS: MatrixScenario[][] = [
       //   - the day count         → the value scenario 4 supplies, and the
       //     discriminator scenarios 6 ("the five-day one") and 7 ("longer than
       //     forty days") both resolve against.
-      // The day-count clause is deliberate: scenario 6 exists to test
-      // resolve_query on an *indirect* reference. Re-keying it to the spec's
-      // own name would make the referent a direct string match that plain
-      // search_nodes resolves, and the assertion would pass while testing less.
+      // The day-count clause is still required, but no longer for the reason
+      // it was written. It was there because scenario 6 tested resolve_query on
+      // an *indirect* reference, and re-keying that scenario to the spec's own
+      // name would have made the referent a direct string match. The #2242
+      // audit found the referent was ALREADY a direct match — the rendered
+      // history replays scenario 4's write with its property values and id
+      // inline — so 6 now asserts the outcome rather than the route. The day
+      // count remains load-bearing as scenario 7's filter value and as the
+      // phrase scenario 6's prompt names its target by, which is why the clause
+      // stays.
       prompt:
         "I want somewhere to keep the feature write-ups my team drafts, whether each has been signed off, and how many days we think it takes",
       expect: { kind: "noExtraTypes" },
@@ -485,12 +491,49 @@ const GROUPS: MatrixScenario[][] = [
       // node directly (see ADR-064 rule 4) — the model acts on it via
       // update_node without a separate search_nodes call of its own.
       prompt: "The five-day one got signed off — mark it that way",
-      // minProperties: 1 requires the requested state change to actually reach
-      // update_node. Resolving the right node and then calling update_node with
-      // only its id changes nothing, and without this scores as a pass.
+      // ASSERTS THE OUTCOME, NOT THE ROUTE — changed by the #2242 audit, which
+      // found this scenario failing for EVERY model measured including one
+      // passing 17/20 overall. It previously required the
+      // `[resolve_query, update_node]` subsequence.
+      //
+      // The scenario's design intent was that "the five-day one" is an
+      // INDIRECT reference only `resolve_query` can resolve — deliberately
+      // chosen over the write-up's own name so a plain lookup could not
+      // shortcut it. That intent does not survive contact with the rendered
+      // history. Scenario 4's create_node is replayed into this turn as a
+      // terse fact carrying its property values AND its id inline —
+      // "properties estimated_days 5, signed_off false (id nodespace://fw1)" —
+      // so the discriminator and the target id are both sitting in the prompt
+      // as plain text. See
+      // `scenario_6_history_resolves_its_indirect_reference_directly` in
+      // daemon/src/services/local_agent_service.rs, which renders the real
+      // history and pins both.
+      //
+      // So a model that goes straight to update_node with the right id has not
+      // skipped a step — there is no indirection left for resolve_query to
+      // resolve. Requiring the call anyway scored a correct end state red for
+      // taking a shorter route that the fixture's own setup made available,
+      // which measures the fixture rather than the model.
+      //
+      // What is still worth asserting is everything the outcome depends on,
+      // and `toolOnce` + `minProperties: 1` keeps all of it: the right node was
+      // updated exactly once, the write was not rejected, and the sign-off
+      // value actually reached storage rather than an update carrying only an
+      // id. `scenario_6_ideal_update_is_accepted_and_persists_the_state_change`
+      // in packages/agent/tests/matrix_scenario_winnability.rs verifies against
+      // a live backend that this ideal call is accepted and reports a persisted
+      // property, so the assertion is satisfiable.
+      //
+      // The cost, stated rather than hidden: this no longer measures whether
+      // the model can decompose an indirect reference at all, and no other
+      // scenario does either — `toolSequence` is now unused by any live
+      // scenario. That behavior needs one whose referent is NOT recoverable
+      // from history, which this chain cannot provide: every write it makes is
+      // replayed with its particulars. Tracked as its own issue rather than
+      // left as an unowned gap in this comment; see #2248.
       expect: {
-        kind: "toolSequence",
-        tools: ["resolve_query", "update_node"],
+        kind: "toolOnce",
+        tool: "update_node",
         minProperties: 1,
       },
     },
@@ -503,11 +546,20 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "9",
       scenario: "9. Set property on existing node",
-      // Distinct from scenario 6, which tests resolving an INDIRECT reference
-      // ("the five-day one") and happens to update it. Here the referent is a
-      // direct string match, so nothing is being tested about resolution —
-      // the whole assertion is that the *value the prompt supplies* reaches
-      // storage.
+      // Now the same assertion shape as scenario 6, which the #2242 audit
+      // moved off its `[resolve_query, update_node]` subsequence and onto the
+      // outcome. The two are no longer distinguished by WHAT they assert, and
+      // pretending otherwise would be the stale claim this comment used to
+      // make (that 6 tests indirect-reference resolution — it does not, because
+      // the rendered history hands the model the id).
+      //
+      // They remain worth keeping as separate observations. 6 updates a
+      // BOOLEAN state the prompt names obliquely ("mark it that way"); this
+      // one overwrites an existing NUMBER with a correction the prompt states
+      // outright. Different value types and different phrasings of the same
+      // write, scored independently — but a red here and a red on 6 now mean
+      // the same thing, and should be read as two samples of one behavior
+      // rather than two behaviors.
       //
       // This is the shape that reached production returning `updated: true`
       // with `property_count: 0`: the model resolved the right node, called
@@ -586,7 +638,40 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "8e",
       scenario: "8e. Query across types",
-      prompt: "Run through those calls for me",
+      // WINNABILITY — reworded by the #2242 audit, which found this failing for
+      // every model measured. The previous prompt was "Run through those calls
+      // for me", and the referent was the problem.
+      //
+      // "Those calls" points back THREE turns, past 8d, which created a
+      // Planning Cycle named Harbour. The rendered history the turn receives
+      // ends on that cycle — see the terse-fact replay in
+      // `node_history_from_messages` — so the nearest antecedent to a bare
+      // demonstrative is the wrong type. That is not a hypothetical reading:
+      // one model's reply on this turn described creating a Planning Cycle,
+      // i.e. it answered 8d's prompt rather than this one.
+      //
+      // Two further problems compounded it. "Calls" is a pun the chain sets up
+      // deliberately — 8a introduces the decision type as "the calls we make on
+      // how the system is built" — but it is also the ordinary word for
+      // telephone calls and for tool invocations, and it never appears as the
+      // stored type's name. And "run through" reads as much like "walk me
+      // through what you did" (a meta question, which `TOOL_STRATEGY_RULES`
+      // explicitly says to answer with NO tools) as like "list them".
+      //
+      // The rewording fixes all three: it names the type by the words 8a used
+      // to define it rather than by a demonstrative, and it asks with an
+      // unambiguous retrieval verb. A type-filtered read is verified against a
+      // live backend by
+      // `scenario_8e_ideal_cross_type_read_is_accepted_and_discriminates` in
+      // packages/agent/tests/matrix_scenario_winnability.rs — it returns the
+      // decision and NOT the planning cycle, so the read this asks for is both
+      // legal and correctly discriminating.
+      //
+      // The scenario title still says "Query across types" and that is still
+      // what it measures: two custom types exist, and a correct answer reads
+      // only one of them. Asking about both at once would make `toolOnce`
+      // wrong, since two type-filtered reads is a legitimate shape for that.
+      prompt: "List every decision we've recorded about how the system is built",
       expect: { kind: "toolOnce", tool: "search_nodes" },
     },
   ],
@@ -768,11 +853,38 @@ const GROUPS: MatrixScenario[][] = [
       },
     },
     {
+      id: "11c2",
+      scenario: "11c2. Record a second link to the same node",
+      // Exists so 11d's question has a real answer to aggregate rather than a
+      // single edge the history already spells out in one line. See 11d's
+      // WINNABILITY note: with one edge, "which records point at that
+      // decision" is answerable by reading the one create_relationship fact;
+      // with two edges recorded a turn apart, nothing in history states the
+      // set, and assembling it is the traversal's job.
+      //
+      // Scored the same way as 11c, deliberately. It is a second observation of
+      // the same linking behavior on a DIFFERENT source type (a text note
+      // rather than a task), which is worth having on its own — 11c's `mentions`
+      // pass could otherwise be a property of `task` specifically — and it costs
+      // nothing to assert given the turn has to happen for 11d's sake.
+      //
+      // Creates its own source node in the same turn, so this is one of the few
+      // scenarios where a second action tool is expected. `toolOnce` tolerates
+      // that: it counts only calls to the named tool and ignores the rest.
+      prompt:
+        "Jot down that the caching layer also depends on it, and point that at the same decision",
+      expect: {
+        kind: "toolOnce",
+        tool: "create_relationship",
+      },
+    },
+    {
       id: "11d",
       scenario: "11d. Traverse a link back",
-      // The read half. This is the query the product's framing is built on —
-      // "what constrains this piece of work" — and it is only answerable by
-      // following the edge 11c recorded, not by matching text.
+      // The read half — the query the product's framing is built on, asked
+      // from the decision's side: which pieces of work are bound by it. It is
+      // answered by following the edges 11c and 11c2 recorded, not by matching
+      // text.
       //
       // `noRetry` with `minCalls: 1`. The `minCalls` half is what this
       // scenario is for: the failure worth catching is the model answering
@@ -786,10 +898,12 @@ const GROUPS: MatrixScenario[][] = [
       // second `search_nodes` is a genuine blind retry of the same lookup.
       // Here, a second `get_related_nodes` could be a legitimate walk of the
       // OTHER endpoint of a bidirectional edge — correct exploration, scored
-      // red. This prompt asks about one endpoint ("what the rebuild has to
-      // respect"), so one traversal is the expected shape and the two-call
-      // case should not arise; it is kept because a genuine blind retry loop
-      // is still worth catching, and relaxing it would leave that unmeasured.
+      // red. This prompt asks about ONE node's inbound edges ("which records
+      // point at that decision"), which `get_related_nodes` answers in a
+      // single call regardless of how many edges come back — the two links
+      // 11c and 11c2 recorded share a target, so enumerating them is one
+      // traversal, not two. One call therefore remains the expected shape, and
+      // the false-positive below stays as narrow as it was.
       //
       // If a run reds out here with exactly two `get_related_nodes` calls,
       // check the trace for the two-endpoint shape BEFORE recording it as a
@@ -801,7 +915,54 @@ const GROUPS: MatrixScenario[][] = [
       // came back non-empty. That is deliberate. Making it conditional on 11c's
       // success would fold two independent behaviors into one score and make a
       // link-side regression read as two failures instead of one.
-      prompt: "What did we settle on that the rebuild has to respect?",
+      //
+      // WINNABILITY — the constraint the #2242 audit exposed, and the reason
+      // this prompt is worded the way it is rather than the way it reads most
+      // naturally.
+      //
+      // An earlier draft asked "What did we settle on that the rebuild has to
+      // respect?" and failed for EVERY model measured, including one passing
+      // 17/20 overall. The audit's first hypothesis was that the prompt
+      // template drops `role="tool"` history, making the edge invisible and the
+      // scenario unwinnable. That is REFUTED — see
+      // `scenario_11d_history_already_contains_the_link_it_asks_about` in
+      // daemon/src/services/local_agent_service.rs, which renders the real
+      // history for this chain. Tool-role messages are dropped, but the writes
+      // they carried are re-rendered as terse "Fact: ..." lines plus a
+      // system-role write record, so the turn could see BOTH endpoint ids, the
+      // `mentions` edge, and the decision's own text.
+      //
+      // The failure was the opposite of a missing fact: the history HANDED the
+      // model the answer. "What did we settle on" was answerable by reading the
+      // decision's text three messages up, and `TOOL_STRATEGY_RULES`'s first
+      // bullet tells the model to answer such a turn directly in text. Every
+      // model returning `tools: []` was following its instructions against a
+      // prompt that did not need the graph.
+      //
+      // A scenario measuring traversal must therefore ask for something the
+      // conversation CANNOT answer. Within this chain that is a hard
+      // constraint: the terse fact for each created node states its title, its
+      // type AND its id, so every read-only question about either endpoint is
+      // answerable from history. Re-wording alone cannot fix that — which is
+      // why this scenario now asks for the CURRENT set of links on the
+      // decision, and 11c2 records a second edge for the set to be non-trivial.
+      //
+      // A set is the one thing the history genuinely does not state. It holds
+      // two separate "Fact: create_relationship completed" lines, recorded a
+      // turn apart; nothing anywhere says how many edges the decision now
+      // carries, and assembling that from two scattered lines is exactly the
+      // aggregation a traversal exists to do. A model that answers from
+      // history can still get it right by counting — so this is a weaker
+      // guarantee than "unanswerable", and it is stated rather than hidden —
+      // but it is the strongest available without adding a turn whose only
+      // purpose is to defeat the history renderer.
+      //
+      // The ideal call is verified end to end against a live backend by
+      // `scenario_11d_ideal_traversal_is_accepted_and_finds_the_link` in
+      // packages/agent/tests/matrix_scenario_winnability.rs — the traversal is
+      // accepted and returns the linked records, so a correct model CAN pass,
+      // which is the minimum bar for the scenario to measure anything.
+      prompt: "Which records point at that rendering decision right now?",
       expect: { kind: "noRetry", tool: "get_related_nodes", minCalls: 1 },
     },
   ],
