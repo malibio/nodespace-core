@@ -1050,9 +1050,18 @@ fn def_create_relationship() -> ToolDefinition {
                     "type": "string",
                     "description": "Id of the record acted upon — the one being superseded, blocked, or belonged to. Copied exactly from a tool result."
                 },
+                // Stated as prose rather than a JSON `enum`, deliberately —
+                // ADR-064 rule 1 otherwise prefers the schema channel, because
+                // a stated constraint measurably outperforms prose. It cannot
+                // apply here: the legal set is SOURCE-NODE-DEPENDENT (whatever
+                // that node's own type declares, plus the four universals), so
+                // no static list is correct for every call. An enum naming only
+                // the universals would be wrong in the other direction —
+                // forbidding the schema-declared names this parameter exists to
+                // encourage.
                 "relationship_type": {
                     "type": "string",
-                    "description": "The relation's name, lowercase snake_case. Use a name defined on the relevant schema(s) (e.g. 'supersedes', 'has_task') if one applies, otherwise a generic label (member_of, mentions, related_to, etc.)."
+                    "description": "The relation's name, lowercase snake_case. Must be either a relationship DECLARED on the source record's own type (e.g. 'supersedes', 'has_task'), or one of these four universal names, which are legal between any two records: member_of, has_child, mentions, has_role. Any other name is rejected — when no declared relation fits, use 'mentions'."
                 }
             },
             "required": ["from_id", "to_id", "relationship_type"]
@@ -3865,17 +3874,56 @@ mod tests {
     }
 
     /// `relationship_type` should steer the model toward schema-defined
-    /// relationship names before generic labels.
+    /// relationship names before generic labels, and must not offer a name the
+    /// validator rejects.
+    ///
+    /// The second half is the one that shipped broken (#2234): this test used
+    /// to assert only the literal phrase "relevant schema", which the old
+    /// description satisfied while also recommending `related_to` — a name
+    /// `NodeService::create_relationship` refuses unless the source node's own
+    /// schema declares it. Asserting a phrase let the contradiction through, so
+    /// the checks below are on the description's SUBSTANCE: it must point at
+    /// schema-declared names, and every generic label it names must actually be
+    /// legal.
     #[test]
     fn create_relationship_type_prefers_schema_defined_names() {
+        use nodespace_core::models::schema::BUILTIN_RELATIONSHIP_NAMES;
+
         let def = Tool::CreateRelationship.definition();
         let desc = def.parameters_schema["properties"]["relationship_type"]["description"]
             .as_str()
             .unwrap()
             .to_string();
+        // Asserts that the description states the CONSTRAINT — that a name
+        // outside the legal set is refused — rather than that it contains some
+        // particular noun. Three drafts of this check were weaker than they
+        // looked, which is the whole reason this test is being rewritten:
+        //   - `contains("relevant schema")` (the original) passed on the
+        //     broken description that also recommended `related_to`;
+        //   - `contains("schema") || contains("type")` was near-vacuous, since
+        //     the parameter is itself named `relationship_type`;
+        //   - `contains("declared")` looked precise but is satisfied by the
+        //     trailing "when no declared relation fits" clause, so a
+        //     description that DROPPED the requirement still passed —
+        //     verified by mutation.
+        // "rejected" is the one word that has to survive: it is what tells the
+        // model the set is closed, and no other clause supplies it.
         assert!(
-            desc.contains("relevant schema"),
-            "relationship_type description must point at schema-defined relationship names, got: {desc:?}"
+            desc.contains("rejected"),
+            "relationship_type description must state that a name outside the legal set is \
+             REJECTED — without it the model has no signal the set is closed, got: {desc:?}"
+        );
+        for name in BUILTIN_RELATIONSHIP_NAMES {
+            assert!(
+                desc.contains(name),
+                "relationship_type description must name the universal relationship {name:?} \
+                 so the model has a legal fallback, got: {desc:?}"
+            );
+        }
+        assert!(
+            !desc.contains("related_to"),
+            "relationship_type description offers 'related_to', which the validator \
+             rejects unless the source node's schema declares it (#2234), got: {desc:?}"
         );
     }
 
