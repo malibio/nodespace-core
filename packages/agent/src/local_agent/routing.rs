@@ -623,6 +623,37 @@ pub fn stage2_tools(candidates: &[SkillCandidate], all: &[ToolDefinition]) -> Ve
 /// Neither the daemon log nor the turn output distinguished that from a model
 /// that simply failed to call the tool, so a routing defect read as a model
 /// defect.
+/// Destructive candidates that retrieval returned but
+/// [`DESTRUCTIVE_SKILL_SCORE_BAR`] rejected, as `(name, score)`.
+///
+/// Distinct from [`destructive_tools_withheld`], which reports a skill that
+/// *was* eligible but did not win. This reports one that never became
+/// eligible: it would have cleared the mutating bar and been actionable before
+/// the destructive rung existed.
+///
+/// Exists to make a specific, acknowledged risk measurable in the field
+/// instead of waiting for a user to report it. Two changes landed together
+/// that push the same quantity in opposite directions: the bar a deletion
+/// match must clear went **up** to `DESTRUCTIVE_SKILL_SCORE_BAR`, while the
+/// `Node Deletion` description was narrowed — and a narrower description
+/// embeds *further* from an indirectly-phrased real request ("get rid of that
+/// old meeting note"). Both moves are individually justified and the bar is a
+/// documented placeholder, but neither was measured against live embeddings,
+/// so the band a genuine deletion has to land in is not known.
+///
+/// A turn appearing here is the signal that the bar is too high: the user
+/// asked for something the system read as deletion, and it was dropped
+/// entirely rather than offered. Scores logged alongside the names so the
+/// distribution can be read off existing logs rather than needing a new eval
+/// run to discover it.
+pub fn destructive_candidates_below_bar(candidates: &[SkillCandidate]) -> Vec<(&str, f32)> {
+    candidates
+        .iter()
+        .filter(|c| skill_is_destructive(c) && !clears_score_gate(c))
+        .map(|c| (c.name.as_str(), c.score))
+        .collect()
+}
+
 pub fn destructive_tools_withheld(candidates: &[SkillCandidate]) -> Vec<&str> {
     let offered: std::collections::HashSet<&str> = stage2_permitted_names(candidates);
     let mut withheld: Vec<&str> = candidates
@@ -1051,6 +1082,28 @@ mod tests {
         assert!(skill_is_mutating(&unknown));
         assert!(!skill_is_destructive(&unknown));
         assert_eq!(score_bar_for(&unknown), MUTATING_SKILL_SCORE_BAR);
+    }
+
+    #[test]
+    fn destructive_candidates_rejected_by_the_bar_are_reported_for_the_log() {
+        // The band between the mutating and destructive bars — where a real
+        // deletion request would be silently dropped if the bar is too high.
+        let cands = vec![
+            candidate("Node Deletion", 0.35, &["delete_node"]),
+            candidate("Node Creation", 0.9, &["create_node"]),
+        ];
+        let rejected = destructive_candidates_below_bar(&cands);
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].0, "Node Deletion");
+
+        // A deletion match that clears the bar is not "rejected" — it is
+        // simply routed, and must not show up as evidence the bar is wrong.
+        let ok = vec![candidate("Node Deletion", 0.9, &["delete_node"])];
+        assert!(destructive_candidates_below_bar(&ok).is_empty());
+
+        // Nor does a non-destructive skill below its own (lower) bar.
+        let unrelated = vec![candidate("Research & Search", 0.01, &["search_nodes"])];
+        assert!(destructive_candidates_below_bar(&unrelated).is_empty());
     }
 
     #[test]

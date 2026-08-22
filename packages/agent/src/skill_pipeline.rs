@@ -779,20 +779,31 @@ mod tests {
     /// declare. This pins the classification against the real seed data rather
     /// than a stub, and fails if a seed's whitelist gains or loses a write tool
     /// without that being an intentional change to its Stage-2 bar.
+    ///
+    /// Both rungs are pinned, not just the mutating one. `Node Deletion` is
+    /// currently the only *destructive* seed, and that is a property of the
+    /// seed data rather than of the registry: `removes_user_data` pins that
+    /// `delete_node` is the only destructive tool, but nothing there stops a
+    /// second seed from whitelisting it. Without the third column, adding
+    /// `delete_node` to (say) `Organization` would silently move that skill to
+    /// the strictest bar in the system — and change which candidate may
+    /// contribute destructive tools at all — while every assertion here still
+    /// passed, because `should_mutate` was already `true` for it.
     #[test]
     fn seeded_skills_classify_by_blast_radius_as_expected() {
-        let expected_mutating = [
-            ("Node Creation", true),
-            ("Schema Creation", true),
-            ("Graph Editing", true),
-            ("Relationship Management", true),
-            ("Node Deletion", true),
-            ("Bulk Import", true),
-            ("Organization", true),
-            ("Research & Search", false),
+        let expected_blast_radius = [
+            // (title, mutating, destructive)
+            ("Node Creation", true, false),
+            ("Schema Creation", true, false),
+            ("Graph Editing", true, false),
+            ("Relationship Management", true, false),
+            ("Node Deletion", true, true),
+            ("Bulk Import", true, false),
+            ("Organization", true, false),
+            ("Research & Search", false, false),
         ];
 
-        for (title, should_mutate) in expected_mutating {
+        for (title, should_mutate, should_destroy) in expected_blast_radius {
             let seed = seed_skill_nodes()
                 .into_iter()
                 .find(|t| t.title == title)
@@ -815,6 +826,13 @@ mod tests {
             assert_eq!(
                 mutates, should_mutate,
                 "skill '{title}' blast radius changed; whitelist is {tools:?}"
+            );
+            let destroys = crate::local_agent::routing::skill_is_destructive(&candidate);
+            assert_eq!(
+                destroys, should_destroy,
+                "skill '{title}' gained or lost the ability to irreversibly remove user data; \
+                 whitelist is {tools:?}. This changes its Stage-2 score bar AND whether it may \
+                 contribute destructive tools when it is not the retrieved winner."
             );
         }
     }

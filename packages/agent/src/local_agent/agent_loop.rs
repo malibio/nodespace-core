@@ -1316,6 +1316,31 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // unnoticed. `info` rather than `warn` — withholding here is the
         // system working as designed, and the interesting case is being able
         // to correlate it with a turn that then behaved oddly.
+        // A destructive skill retrieval surfaced but the destructive bar
+        // rejected outright. Logged separately from the withheld case below
+        // because it is the failure mode in the other direction: not "a
+        // destructive tool leaked onto the surface" but "a real deletion
+        // request may have been dropped". `DESTRUCTIVE_SKILL_SCORE_BAR` is an
+        // unmeasured placeholder and the skill's description was narrowed in
+        // the same change, so this is the line that would show the bar is set
+        // too high — with the scores attached, so the distribution can be read
+        // from ordinary logs instead of a dedicated eval run.
+        let below_bar = routing::destructive_candidates_below_bar(&routed.candidates);
+        if !below_bar.is_empty() {
+            tracing::info!(
+                session_id = %session.id,
+                rejected = %below_bar
+                    .iter()
+                    .map(|(n, s)| format!("{n}={s:.3}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                bar = routing::DESTRUCTIVE_SKILL_SCORE_BAR,
+                "Stage-2 rejected a destructive skill below its score bar. If the user was in \
+                 fact asking to delete something, the bar is set too high for how that request \
+                 embeds."
+            );
+        }
+
         let withheld = routing::destructive_tools_withheld(&routed.candidates);
         if !withheld.is_empty() {
             tracing::info!(
