@@ -982,12 +982,20 @@ const fixture: EvalFixture = {
   },
   graph: {
     /**
-     * Seed types for snapshot enumeration. Custom types the model invents
-     * during a run are discovered from the schema list and do not need to be
-     * named here — these are the types that may already exist when a run
-     * starts, plus the core types the scenarios act on directly.
+     * Extra types to enumerate beyond the registered schemas.
+     *
+     * Empty, and correctly so: `captureSnapshot` enumerates `schema list`
+     * first, the daemon refuses to create a node whose type has no schema, and
+     * `task`/`text` are core schemas already in that list. So every type a
+     * scenario can touch — including one the model invents mid-run — is
+     * covered without naming any here, and a named type that is not a schema
+     * (an earlier draft listed `note`) buys nothing but a failed CLI
+     * round-trip per snapshot.
+     *
+     * The seed is kept as a mechanism for a type that could exist without a
+     * schema; nothing needs it today.
      */
-    types: ["task", "text", "note"],
+    types: [],
     scoreOutcome(scenario, diff) {
       return assertEndState((scenario as MatrixScenario).end, diff);
     },

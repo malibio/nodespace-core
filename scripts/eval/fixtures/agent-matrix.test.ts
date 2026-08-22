@@ -806,6 +806,19 @@ describe("end-state fixture invariants", () => {
     }
   });
 
+  // An edge expectation that names no relation passes on any turn that merely
+  // created a node: a new node had no edges walked in the "before" snapshot,
+  // so every edge on it — including one the daemon materialized at creation
+  // time — is reported as added. Naming the relation is what keeps the
+  // assertion about the link the scenario actually asked for.
+  test("every edge expectation names its relation", () => {
+    for (const s of all) {
+      if (!s.end.createdEdge) continue;
+      expect(s.end.createdEdge.relation).toBeDefined();
+      expect(s.end.createdEdge.relation).not.toBe("");
+    }
+  });
+
   // Setup scenarios are excluded from the denominator, so marking a scored
   // scenario as setup silently removes a measurement. Pin the exact set.
   test("only the link-setup scenarios are marked as setup", () => {

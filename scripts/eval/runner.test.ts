@@ -19,6 +19,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildTraceLines,
   checkUniformity,
+  markerFor,
   parseTurnOutput,
   partitionExcluded,
 } from "./runner.ts";
@@ -118,6 +119,28 @@ describe("partitionExcluded", () => {
     expect(scored.map((r) => r.id)).toEqual(["11c"]);
     expect(excludedCount).toBe(1);
     expect(setupCount).toBe(0);
+  });
+});
+
+describe("markerFor", () => {
+  test("renders pass, fail, setup and exclusion distinctly", () => {
+    expect(markerFor({ passed: true })).toBe("✓");
+    expect(markerFor({ passed: false })).toBe("✗");
+    expect(markerFor({ passed: true, excludedAsSetup: true })).toBe("⊙");
+    expect(markerFor({ passed: false, excludedAsEmptyGeneration: true })).toBe("⊘");
+  });
+
+  // The two call sites used to duplicate this precedence and disagree on it.
+  // Empty generation wins, matching partitionExcluded, which counts such a
+  // scenario in the exclusion bucket whose rate is itself a result.
+  test("empty generation outranks setup", () => {
+    expect(
+      markerFor({
+        passed: false,
+        excludedAsSetup: true,
+        excludedAsEmptyGeneration: true,
+      }),
+    ).toBe("⊘");
   });
 });
 

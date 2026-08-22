@@ -232,7 +232,7 @@ export interface ScenarioResult {
    * Recorded so a verdict carries its evidence. Reading a results file should
    * not require re-running the eval to find out what was written.
    */
-  graphDiff?: unknown;
+  graphDiff?: GraphDiff;
   /**
    * The verdict the retired TRAJECTORY assertions would have returned, kept as
    * a diagnostic alongside the outcome score that replaced them.

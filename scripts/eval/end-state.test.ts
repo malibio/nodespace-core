@@ -92,6 +92,39 @@ describe("diffSnapshots", () => {
     expect(d.changedNodes).toEqual([]);
   });
 
+  // Plain JSON.stringify is key-order sensitive, so a daemon reserializing a
+  // node's properties differently would report a change that did not happen —
+  // and `expectNoWrites` fails on ANY changed node, so a read scenario would
+  // red out for something the model had no part in.
+  test("a property key reordering is not a change", () => {
+    const before = snapshot([
+      node("a", "spec", "x", { days: 5, signed_off: false }),
+    ]);
+    const after = snapshot([
+      node("a", "spec", "x", { signed_off: false, days: 5 }),
+    ]);
+    expect(diffSnapshots(before, after).changedNodes).toEqual([]);
+  });
+
+  test("a nested property reordering is not a change either", () => {
+    const before = snapshot([node("a", "spec", "x", { meta: { b: 1, a: 2 } })]);
+    const after = snapshot([node("a", "spec", "x", { meta: { a: 2, b: 1 } })]);
+    expect(diffSnapshots(before, after).changedNodes).toEqual([]);
+  });
+
+  // The normalization must not hide a real change.
+  test("a real property change is still detected", () => {
+    const before = snapshot([node("a", "spec", "x", { days: 5 })]);
+    const after = snapshot([node("a", "spec", "x", { days: 8 })]);
+    expect(diffSnapshots(before, after).changedNodes).toHaveLength(1);
+  });
+
+  test("array order is still significant", () => {
+    const before = snapshot([node("a", "spec", "x", { tags: ["p", "q"] })]);
+    const after = snapshot([node("a", "spec", "x", { tags: ["q", "p"] })]);
+    expect(diffSnapshots(before, after).changedNodes).toHaveLength(1);
+  });
+
   test("reports added schemas and edges", () => {
     const before = snapshot([], ["task"]);
     const after = snapshot([], ["task", "spec"], [
@@ -183,6 +216,16 @@ describe("valueMatches", () => {
     expect(valueMatches("Signed off", "signed_off")).toBe(true);
     expect(valueMatches("in_progress", "In Progress")).toBe(true);
     expect(valueMatches("open", "done")).toBe(false);
+  });
+
+  // `Number([8]) === 8`, so a bare Number() coercion would accept a
+  // single-element array as the scalar the prompt asked for. The string/number
+  // tolerance is deliberate; array coercion is not.
+  test("does not accept an array as a scalar number", () => {
+    expect(valueMatches([8], 8)).toBe(false);
+    expect(valueMatches(["8"], 8)).toBe(false);
+    expect(valueMatches({ v: 8 }, 8)).toBe(false);
+    expect(valueMatches(null, 8)).toBe(false);
   });
 
   test("`true` asserts presence rather than a value", () => {

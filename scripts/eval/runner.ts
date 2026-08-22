@@ -309,6 +309,25 @@ async function compareToBaseline(
  * Kept out of `runEval`'s body so uniformity/totals math is independently
  * testable against a fixed `ScenarioResult[]`, without spawning a daemon.
  */
+/**
+ * The status marker for one result: ⊘ excluded, ⊙ setup, ✓ pass, ✗ fail.
+ *
+ * Shared by the per-turn line and the summary list because the two were
+ * duplicating the precedence and disagreeing on it: a setup turn that also
+ * came back an empty generation rendered ⊙ in one place and ⊘ in the other.
+ * Empty generation wins, matching `partitionExcluded`, which counts such a
+ * scenario in the exclusion bucket whose rate is itself a result.
+ */
+export function markerFor(r: {
+  excludedAsEmptyGeneration?: boolean;
+  excludedAsSetup?: boolean;
+  passed: boolean;
+}): string {
+  if (r.excludedAsEmptyGeneration) return "⊘";
+  if (r.excludedAsSetup) return "⊙";
+  return r.passed ? "✓" : "✗";
+}
+
 export function partitionExcluded(results: ScenarioResult[]): {
   scored: ScenarioResult[];
   excludedCount: number;
@@ -587,6 +606,16 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         // that edge. Node enumeration is cheap (one query per type); it is the
         // per-node relationship walk that is not, so the "after" pass runs in
         // two steps rather than snapshotting a third time.
+        //
+        // This makes the walk ASYMMETRIC — the "after" set is a strict superset
+        // — and the consequence is worth stating: a node new since `before` had
+        // no edges walked there, so every edge on it appears in `addedEdges`
+        // whether this turn recorded it or the daemon materialized it at
+        // creation time. `EdgeExpectation` therefore requires a named relation,
+        // enforced by a fixture invariant; an unpinned one would pass on any
+        // turn that merely created a node. Restricting the diff instead would
+        // be the alternative, but it would lose the create-and-link-in-one-turn
+        // case above, which is a legitimate shape.
         const after = fixture.graph
           ? captureSnapshot(env, fixture.graph.types, {
               edgesFor: (n) =>
@@ -648,7 +677,10 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           excludedAsSetup: scenario.setup === true ? true : undefined,
         });
 
-        const marker = scenario.setup ? "⊙" : verdict.passed ? "✓" : "✗";
+        const marker = markerFor({
+          excludedAsSetup: scenario.setup === true,
+          passed: verdict.passed,
+        });
         console.error(
           `[${fixture.name}]   ${marker} ` +
             `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms` +
@@ -769,14 +801,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
     `────────────────────────────────────────────────────────────────────`,
   );
   for (const r of results) {
-    const marker = r.excludedAsEmptyGeneration
-      ? "⊘"
-      : r.excludedAsSetup
-        ? "⊙"
-        : r.passed
-          ? "✓"
-          : "✗";
-    console.log(`  ${marker} ${r.id}`);
+    console.log(`  ${markerFor(r)} ${r.id}`);
     if (!r.passed) console.log(`      ↳ ${r.failure}`);
   }
   console.log(

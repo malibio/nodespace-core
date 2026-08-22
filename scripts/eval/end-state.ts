@@ -63,7 +63,21 @@ export interface NodeExpectation {
   hasPropertyValue?: unknown;
 }
 
-/** An edge the turn was supposed to record. */
+/**
+ * An edge the turn was supposed to record.
+ *
+ * ALWAYS name the `relation`. It is optional in the type only because an
+ * unnamed one is meaningful in the abstract, but leaving it off is unsafe in
+ * practice, and a fixture invariant rejects it.
+ *
+ * The reason is the runner's asymmetric edge walk: a node that did not exist
+ * before the turn had no edges walked in the "before" snapshot, so EVERY edge
+ * on a newly-created node lands in `addedEdges` — whether the turn recorded it
+ * or the daemon materialized it at creation time. An expectation that pins no
+ * relation would therefore pass on any turn that merely created a node.
+ * Naming the relation is what keeps the assertion about the link the scenario
+ * asked for.
+ */
 export interface EdgeExpectation {
   relation?: string;
 }
@@ -146,7 +160,17 @@ function isPresent(v: unknown): boolean {
 export function valueMatches(actual: unknown, expected: unknown): boolean {
   if (expected === true) return isPresent(actual);
   if (typeof expected === "number") {
-    const n = typeof actual === "number" ? actual : Number(actual);
+    // Only a number or a numeric string counts. Bare `Number(actual)` would
+    // also accept a single-element array — `Number([8]) === 8` — which is not
+    // a serialization the product wants to silently treat as the scalar the
+    // prompt asked for. The string/number tolerance below is deliberate
+    // (the model chooses the serialization); array coercion is not.
+    const n =
+      typeof actual === "number"
+        ? actual
+        : typeof actual === "string"
+          ? Number(actual)
+          : NaN;
     return !Number.isNaN(n) && n === expected;
   }
   if (typeof expected === "string") {

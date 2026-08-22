@@ -173,14 +173,19 @@ export function readRelatedIds(payload: unknown): string[] {
 /**
  * Capture the graph's current state.
  *
- * `types` is the set of node types to enumerate — the caller supplies it from
- * the types its scenarios can plausibly touch, because the daemon has no
- * "query every node" verb and probing every conceivable type would be a
- * round-trip per guess. Types created DURING the run (a model inventing a
- * custom type) are picked up via `schema list`, which is enumerated first and
- * folded into the query set, so a type nothing predicted still lands in the
- * snapshot — which is what makes `noUnexpectedNodes` able to see a node of a
- * type the fixture never anticipated.
+ * `types` is a SEED set the caller supplies, because the daemon has no "query
+ * every node" verb. It is not the coverage boundary: `schema list` is
+ * enumerated first and folded into the query set, so a type the fixture never
+ * anticipated still lands in the snapshot.
+ *
+ * That makes the enumeration COMPLETE, which is what the negative clauses
+ * (`expectNoWrites`, `noUnexpectedNodes`) rest on — they would silently pass
+ * on any write this function cannot see. The daemon rejects a node whose type
+ * has no schema outright ("Unknown node_type 'x': no such core type or schema.
+ * Create the schema first"), verified against a live daemon, so every node
+ * that can exist has a registered type and every registered type is queried.
+ * A model inventing a custom type must call create_schema first, which puts
+ * the type in `schema list` before any instance of it can exist.
  */
 export function captureSnapshot(
   env: EvalEnv,
@@ -229,12 +234,22 @@ export function captureSnapshot(
     for (const n of nodes) {
       if (!walk(n)) continue;
       for (const rel of UNIVERSAL_RELATIONS) {
-        let payload: unknown;
-        try {
-          payload = runCli(env, ["relationship", "get", n.id, "--type", rel]);
-        } catch {
-          continue;
-        }
+        // Deliberately NOT caught, unlike the node query above.
+        //
+        // That asymmetry is the point. A node query can fail for an expected
+        // reason (the seed set names types a run may never create), but
+        // `relationship get` is called on an id the daemon just handed back,
+        // for a relation that is universal by definition — it has no expected
+        // failure. Verified against a live daemon: it exits 0 for an undeclared
+        // relation AND for a nonexistent node id, so there is nothing
+        // legitimate here to tolerate.
+        //
+        // Swallowing it would therefore only ever hide a daemon that died
+        // mid-walk, and the snapshot would come back clean with a truncated
+        // edge list — scoring 11c as "no 'mentions' edge was recorded", a dead
+        // daemon filed as a model failure. Letting it reach the outer catch
+        // sets `captureError`, and every assertion then declines to score.
+        const payload = runCli(env, ["relationship", "get", n.id, "--type", rel]);
         for (const target of readRelatedIds(payload)) {
           edges.push({ from: n.id, relation: rel, to: target });
         }
@@ -274,6 +289,27 @@ function edgeKey(e: SnapshotEdge): string {
   return `${e.from}|${e.relation}|${e.to}`;
 }
 
+/**
+ * Serialize a value with object keys in a stable order.
+ *
+ * Plain `JSON.stringify` is key-order sensitive, so a daemon that reserializes
+ * a node's properties in a different order would report a change that did not
+ * happen. That direction is not harmless: `expectNoWrites` fails on any
+ * `changedNodes` entry, so a read scenario would red out because a JSON object
+ * came back with its keys in a different order — a false failure on five
+ * scenarios, from something the model had no part in.
+ */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 export function diffSnapshots(
   before: GraphSnapshot,
   after: GraphSnapshot,
@@ -303,7 +339,7 @@ export function diffSnapshots(
     if (!b) continue;
     if (
       b.content !== a.content ||
-      JSON.stringify(b.properties) !== JSON.stringify(a.properties)
+      stableStringify(b.properties) !== stableStringify(a.properties)
     ) {
       changedNodes.push({ before: b, after: a });
     }
