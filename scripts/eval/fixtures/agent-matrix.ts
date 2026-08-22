@@ -1256,6 +1256,15 @@ const GROUPS: MatrixScenario[][] = [
       // both routes are legitimate: enumerate-and-compare and resolve_query
       // both reach the correct node, and the winnability tests prove the read
       // path works. The score does not depend on which is taken.
+      //
+      // One route is currently booby-trapped and it is worth knowing when
+      // reading a red here: sorting descending with limit 1 and NO filters
+      // silently returns an unsorted row (#2249), so a model that reaches for
+      // the superlative that way gets the wrong node with no error. That is a
+      // production bug rather than a fixture defect, and it does not make 12d
+      // unwinnable — enumerate-and-compare works — but it does mean a 12d
+      // failure should be checked against the trajectory before it is read as
+      // a decomposition failure.
       expect: {
         kind: "toolSequence",
         tools: ["search_nodes", "update_node"],

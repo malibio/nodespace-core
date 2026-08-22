@@ -551,7 +551,7 @@ async fn scenario_12_ideal_comparative_chain_is_accepted_and_the_read_carries_th
 /// branch.
 ///
 /// That silent drop is a production bug, not a fixture defect, and it is
-/// deliberately NOT fixed here — see the issue filed from this audit. Scenario
+/// deliberately NOT fixed here — see #2249. Scenario
 /// 12 stays winnable regardless because enumerate-then-compare works and is the
 /// route its diagnostic names. This test pins the workaround so that when the
 /// bug is fixed, the filter can be removed and this test will still pass.
@@ -620,7 +620,7 @@ async fn scenario_12_sorted_single_result_route_is_also_accepted() {
 
 /// CHARACTERIZES A BUG: `sorting` is silently ignored when `filters` is empty.
 ///
-/// Surfaced by the scenario 12 winnability audit. `run_node_query` in
+/// Surfaced by the scenario 12 winnability audit; tracked as #2249. `run_node_query` in
 /// `packages/agent/src/local_agent/tools.rs` branches on `filters.is_empty()`:
 /// the filterless branch calls `node_ops::query_nodes`, whose input struct has
 /// no sorting field at all, so the argument is parsed, accepted, and dropped.
