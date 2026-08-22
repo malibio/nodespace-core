@@ -162,6 +162,11 @@ describe("snapshot parsing", () => {
       readRelatedIds({ related_nodes: [{ id: "a" }, "b", { nope: 1 }] }),
     ).toEqual(["a", "b"]);
   });
+
+  test("tolerates a payload with no related_nodes array", () => {
+    expect(readRelatedIds(null)).toEqual([]);
+    expect(readRelatedIds({ count: 0 })).toEqual([]);
+  });
 });
 
 describe("valueMatches", () => {

@@ -535,6 +535,16 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         `[${fixture.name}] chat ${chatId} for: ${group.map((s) => s.id).join(", ")}`,
       );
 
+      /**
+       * Nodes this group has created so far — the only nodes whose edges are
+       * worth walking when snapshotting (see the bracketing comment below).
+       *
+       * Per group rather than per run: a scenario can only link nodes its own
+       * chat established, and letting this accumulate across groups would
+       * restore the whole-database walk this exists to avoid.
+       */
+      const groupNodeIds = new Set<string>();
+
       for (const scenario of group) {
         console.error(`[${fixture.name}] → ${scenario.scenario}`);
 
@@ -549,15 +559,44 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         // opts into graph grading, and taken as late/early as possible around
         // the turn so the diff attributes to THIS turn rather than to anything
         // the harness did between scenarios.
+        //
+        // Edge discovery is the expensive half: the daemon exposes
+        // relationships per (node, relation) pair rather than as a whole-graph
+        // dump, so walking every node costs a round-trip per node per relation
+        // — ~3s on a 118-node database, and it would be paid twice per turn.
+        //
+        // Both snapshots therefore walk only the nodes THIS GROUP created,
+        // which is where every edge a scenario can assert must land: a turn
+        // can only link nodes its own chat established (11c links what 11a and
+        // 11b created). The restriction cannot instead be "walk what changed",
+        // because `create_relationship` leaves both endpoints byte-identical —
+        // verified against the daemon, same version and same modified_at — so
+        // that rule would find no edges at all and score 11c, the one scenario
+        // that measures linking, as a false pass.
         const before = fixture.graph
-          ? captureSnapshot(env, fixture.graph.types)
+          ? captureSnapshot(env, fixture.graph.types, {
+              edgesFor: (n) => groupNodeIds.has(n.id),
+            })
           : undefined;
 
         const scored = turn(chatId, scenario.prompt);
 
+        // Nodes created by THIS turn join the candidate set before its edges
+        // are walked: a turn that creates a node and links it in the same
+        // breath is legitimate, and walking only the pre-turn set would miss
+        // that edge. Node enumeration is cheap (one query per type); it is the
+        // per-node relationship walk that is not, so the "after" pass runs in
+        // two steps rather than snapshotting a third time.
         const after = fixture.graph
-          ? captureSnapshot(env, fixture.graph.types)
+          ? captureSnapshot(env, fixture.graph.types, {
+              edgesFor: (n) =>
+                groupNodeIds.has(n.id) ||
+                !before?.nodes.some((p) => p.id === n.id),
+            })
           : undefined;
+        for (const n of after?.nodes ?? []) {
+          if (!before?.nodes.some((p) => p.id === n.id)) groupNodeIds.add(n.id);
+        }
         const diff =
           before && after ? diffSnapshots(before, after) : undefined;
 

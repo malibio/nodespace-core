@@ -182,7 +182,11 @@ export function readRelatedIds(payload: unknown): string[] {
  * snapshot — which is what makes `noUnexpectedNodes` able to see a node of a
  * type the fixture never anticipated.
  */
-export function captureSnapshot(env: EvalEnv, types: string[]): GraphSnapshot {
+export function captureSnapshot(
+  env: EvalEnv,
+  types: string[],
+  options: { edgesFor?: (n: SnapshotNode) => boolean } = {},
+): GraphSnapshot {
   try {
     const schemaNodes = readNodeList(runCli(env, ["schema", "list"]));
     // A schema node's id IS the type identifier it defines (`schema get` takes
@@ -221,7 +225,9 @@ export function captureSnapshot(env: EvalEnv, types: string[]): GraphSnapshot {
     }
 
     const edges: SnapshotEdge[] = [];
+    const walk = options.edgesFor ?? (() => true);
     for (const n of nodes) {
+      if (!walk(n)) continue;
       for (const rel of UNIVERSAL_RELATIONS) {
         let payload: unknown;
         try {
