@@ -4022,6 +4022,121 @@ model = "model-b"
         );
     }
 
+    /// The counterpart to the test above, for the scenario that REPLACES the
+    /// indirect-reference coverage scenario 6 gave up (matrix scenario 12).
+    ///
+    /// The constraint 12 has to satisfy is the one 6 failed: its referent must
+    /// not be recoverable from the rendered history by string match. Scenario 6
+    /// lost its indirection because a single `create_node` fact carries the
+    /// discriminating value AND the id inline, so "the five-day one" matched
+    /// text that was already sitting in the prompt.
+    ///
+    /// 12 keys off a COMPARATIVE — "whichever is the biggest job" — over an
+    /// estimate spread across three separate create_node facts. Each fact still
+    /// renders its own value and id inline, and that is fine: the ordering
+    /// ACROSS them is not stated by any of them. No substring of this history
+    /// says which estimate is the largest, so the model cannot shortcut to an
+    /// id the way it can in 6 — it has to read the instances back and compare
+    /// them. That comparison is the decomposition step being measured.
+    ///
+    /// Asserts both directions deliberately. The negative assertion alone would
+    /// pass vacuously if the history rendered empty (a broken helper, a changed
+    /// role filter), so the positive assertions pin that the setup facts really
+    /// are present and that it is only the ORDERING that is absent.
+    #[test]
+    fn scenario_12_history_does_not_resolve_its_comparative_reference() {
+        let history = node_history_from_messages(vec![
+            user_turn("Log the checkout rewrite, we think nine days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw10".to_string()),
+                    summary: Some("checkout rewrite".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":9},"content":"checkout rewrite"}"#
+                            .to_string(),
+                },
+            ),
+            user_turn("Also the search indexer, that one's twenty-one days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw11".to_string()),
+                    summary: Some("search indexer".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":21},"content":"search indexer"}"#
+                            .to_string(),
+                },
+            ),
+            user_turn("And the audit log export, call it four days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw12".to_string()),
+                    summary: Some("audit log export".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":4},"content":"audit log export"}"#
+                            .to_string(),
+                },
+            ),
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Positive: the three instances and their estimates ARE in history.
+        // Without these, the negative assertion below could pass on an empty
+        // string — which would make the scenario look winnable while measuring
+        // nothing at all.
+        for (title, days, id) in [
+            ("checkout rewrite", "estimated_days 9", "nodespace://fw10"),
+            ("search indexer", "estimated_days 21", "nodespace://fw11"),
+            ("audit log export", "estimated_days 4", "nodespace://fw12"),
+        ] {
+            assert!(
+                rendered.contains(title),
+                "setup instance '{title}' must be in history, or scenario 12 has \
+                 nothing to compare: {rendered}"
+            );
+            assert!(
+                rendered.contains(days),
+                "'{days}' must be in history, or the comparison has no values to \
+                 range over: {rendered}"
+            );
+            assert!(
+                rendered.contains(id),
+                "'{id}' must be in history — the ids being present is what makes \
+                 this a test of the COMPARISON rather than of recall: {rendered}"
+            );
+        }
+
+        // Negative: nothing in history states the ORDERING. The model cannot
+        // pick the target by matching the prompt's words against this text; it
+        // has to read the instances back and compare their estimates.
+        let lowered = rendered.to_lowercase();
+        for phrase in [
+            "biggest",
+            "largest",
+            "longest",
+            "highest",
+            "most days",
+            "the max",
+        ] {
+            assert!(
+                !lowered.contains(phrase),
+                "history must not name the ordering ('{phrase}'), or scenario 12's \
+                 comparative reference degenerates into the direct string match \
+                 that cost scenario 6 its indirection: {rendered}"
+            );
+        }
+    }
+
     /// The blended retrieval query is assembled from the same history the turn
     /// renders, so this drives real `AiChatMessage`s through
     /// `node_history_from_messages` rather than hand-building `ChatMessage`s.

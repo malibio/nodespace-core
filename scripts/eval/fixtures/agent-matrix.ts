@@ -603,13 +603,16 @@ const GROUPS: MatrixScenario[][] = [
       // a live backend that this ideal call is accepted and reports a persisted
       // property, so the assertion is satisfiable.
       //
-      // The cost, stated rather than hidden: this no longer measures whether
-      // the model can decompose an indirect reference at all, and no other
-      // scenario does either — `toolSequence` is now unused by any live
-      // scenario. That behavior needs one whose referent is NOT recoverable
-      // from history, which this chain cannot provide: every write it makes is
-      // replayed with its particulars. Tracked as its own issue rather than
-      // left as an unowned gap in this comment; see #2248.
+      // The cost this scenario used to carry alone, now paid elsewhere: 6 no
+      // longer measures whether the model can decompose an indirect reference,
+      // because this chain cannot pose one — every write it makes is replayed
+      // with its particulars. Scenario 12 covers that behavior instead, keying
+      // off a COMPARATIVE whose ordering no single fact line states, and it is
+      // where `toolSequence` lives again as a diagnostic.
+      //
+      // 6 and 12d are deliberately the same write (a boolean sign-off) reached
+      // by different resolutions, so a red on 12d beside a green on 6 isolates
+      // the decomposition rather than the update.
       expect: {
         kind: "toolOnce",
         tool: "update_node",
@@ -1142,6 +1145,157 @@ const GROUPS: MatrixScenario[][] = [
       // folded in — that would make one link-side regression read as two
       // failures.
       end: { expectNoWrites: true },
+    },
+  ],
+  // Indirect-reference decomposition (scenario 12), in its own chat.
+  //
+  // Replaces the coverage scenario 6 gave up. 6 was the matrix's only test of
+  // multi-step decomposition — it asserted `[resolve_query, update_node]` for
+  // "the five-day one" — and the #2242 audit removed that assertion because the
+  // referent turned out to be recoverable from history by string match: a
+  // create_node write is replayed as a terse fact carrying its property values
+  // AND its id inline, so "the five-day one" matched text already in the
+  // prompt. Requiring the resolve step anyway scored a correct end state red.
+  //
+  // WHAT MAKES THIS ONE DIFFERENT. The referent is a COMPARATIVE ("whichever is
+  // the biggest job") over an estimate spread across three separate create_node
+  // facts. Each fact still renders its own value and id inline — that is
+  // unavoidable and not the point. What no fact states is the ORDERING across
+  // them. There is no substring of the history that says which estimate is
+  // largest, so the shortcut 6 fell to does not exist here: the model has to
+  // read the instances back and compare them.
+  //
+  // Proven, not assumed, per the winnability discipline #2242 established:
+  //   - `scenario_12_history_does_not_resolve_its_comparative_reference`
+  //     (daemon/src/services/local_agent_service.rs) renders the REAL history
+  //     for these turns and asserts the three instances and their estimates are
+  //     present while the ordering words are absent. Both directions, so it
+  //     cannot pass vacuously on an empty render.
+  //   - `scenario_12_ideal_comparative_chain_is_accepted_and_the_read_carries_the_values`
+  //     (agent/tests/matrix_scenario_winnability.rs) proves against a live
+  //     backend that the read surfaces all three instances WITH their estimates
+  //     and that the write on the winner persists a property. That read is the
+  //     half that could quietly make this unwinnable — values the model cannot
+  //     see cannot be compared.
+  //
+  // OWN GROUP, not appended to the 3-7/9 chain. Three setup instances would
+  // re-score that chain's create_node behavior three more times and stretch its
+  // history, and the 11-group set the precedent for isolating a scenario whose
+  // setup is substantial.
+  [
+    {
+      id: "12a",
+      scenario: "12a. Comparative setup: type",
+      // Names the estimate field 12d's comparison ranges over, for the same
+      // reason scenario 3 names its downstream fields: a type with nowhere to
+      // put the day count makes every later turn in this group unwinnable, and
+      // the model would degrade honestly and score red for the fixture's
+      // omission (#1846).
+      prompt:
+        "I want to track the build jobs we take on and roughly how many days each needs",
+      expect: { kind: "noExtraTypes" },
+      end: { createdSchemas: 1 },
+    },
+    {
+      id: "12b",
+      scenario: "12b. Comparative setup: first two instances",
+      // Two instances in one turn. The estimates are deliberately NOT in
+      // ascending order of creation, and the largest is not the most recent —
+      // so "the last one we mentioned" and "the biggest" pick different nodes,
+      // and 12d's `contentMatches` catches a model that resolves by recency
+      // instead of by comparison.
+      prompt:
+        "Log the checkout rewrite at nine days, and the search indexer at twenty-one",
+      expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
+      // Two nodes are expected, but `createdNode` states one and
+      // `noUnexpectedNodes` would then red-line the second. So this asserts the
+      // node whose estimate 12d has to find, and deliberately omits
+      // `noUnexpectedNodes` — the clause is only meaningful where the fixture
+      // can enumerate every expected addition, which a two-instance turn
+      // cannot. 12d carries that clause instead, where it discriminates.
+      end: {
+        createdNode: {
+          contentMatches: "search indexer",
+          hasPropertyValue: 21,
+        },
+      },
+    },
+    {
+      id: "12c",
+      scenario: "12c. Comparative setup: third instance",
+      // A third instance, smaller than both, created LAST. Its job is to make
+      // recency and magnitude disagree: the most recently created node is the
+      // smallest, so a model that reaches for the freshest fact lands on the
+      // wrong one.
+      prompt: "One more: the audit log export, call it four days",
+      expect: { kind: "toolOnce", tool: "create_node", minProperties: 1 },
+      end: {
+        createdNode: {
+          contentMatches: "audit log export",
+          hasPropertyValue: 4,
+        },
+        noUnexpectedNodes: true,
+      },
+    },
+    {
+      id: "12d",
+      scenario: "12d. Indirect reference: comparative",
+      // THE SCENARIO. Names no title, no id, and no estimate — only the
+      // ordering, which the daemon test proves is absent from history. The
+      // model has to read the three instances back and compare.
+      //
+      // "signed off" is the same state transition scenario 6 sets, chosen
+      // deliberately: it isolates the variable under test. 6 and 12d differ
+      // ONLY in how the target is identified (direct match vs. comparison), so
+      // a red on 12d against a green on 6 is a decomposition failure and not a
+      // difference in the write.
+      prompt: "Whichever is the biggest job — that one's signed off now",
+      // DIAGNOSTIC, not the score. Revives `toolSequence`, which no live
+      // scenario has used since #2242 left it dead in the type definition.
+      // Named as read-then-write rather than `resolve_query`-then-write because
+      // both routes are legitimate: enumerate-and-compare and resolve_query
+      // both reach the correct node, and the winnability tests prove the read
+      // path works. The score does not depend on which is taken.
+      expect: {
+        kind: "toolSequence",
+        tools: ["search_nodes", "update_node"],
+        minProperties: 1,
+      },
+      // THE SCORE. `contentMatches` pinned to the 21-day instance is what makes
+      // this measure the comparison rather than the write: a model that resolves
+      // the reference WRONGLY still calls update_node and still persists a
+      // property, so a bare `minProperties` clause would score picking the
+      // wrong node green. Naming the node is the whole assertion.
+      //
+      // `updatedNode` rather than `createdNode` for scenario 6's reason: a turn
+      // that records the sign-off on a NEW node leaves the original untouched
+      // and is a real failure.
+      //
+      // `minProperties: 2` rather than `properties: { signed_off: true }`
+      // because this group's type is model-built — naming the key would measure
+      // the fixture's vocabulary guess rather than the model's behavior (the
+      // same reason `createdSchemas` is a count).
+      //
+      // 2, not 1, and the count is doing real work. The node already carries
+      // its estimate from 12b, so `minProperties: 1` is satisfied by that
+      // pre-existing value alone — it would score green on a turn that resolved
+      // the right node and then persisted NOTHING, the `updated: true` with
+      // `property_count: 0` shape scenario 9 documents reaching production.
+      // Requiring a SECOND populated property is what makes the sign-off
+      // actually have to land.
+      //
+      // `hasPropertyValue` is deliberately NOT used here: it treats `true` as
+      // "any present value" (`valueMatches` in end-state.ts), so it would match
+      // the estimate rather than the sign-off and assert nothing about THIS
+      // turn. Its sibling clause on 12b asserts a NUMBER, where that ambiguity
+      // does not arise.
+      end: {
+        updatedNode: {
+          contentMatches: "search indexer",
+          minProperties: 2,
+        },
+        noUnexpectedNodes: true,
+      },
     },
   ],
 ];

@@ -405,3 +405,290 @@ async fn scenario_11d_one_traversal_enumerates_every_inbound_link() {
          returning nodes nothing linked: {out:?}"
     );
 }
+
+/// Scenario 12's ideal read-then-compare-then-write chain is accepted, and the
+/// read actually surfaces the values the comparison needs.
+///
+/// 12 replaces the indirect-reference coverage scenario 6 gave up. Its prompt
+/// names its target by a COMPARATIVE ("whichever is the biggest job"), which
+/// `scenario_12_history_does_not_resolve_its_comparative_reference` in the
+/// daemon proves is absent from the rendered history — so the model must read
+/// the instances back and compare their estimates rather than string-match an
+/// id out of the prompt.
+///
+/// That makes the read the load-bearing half here, and it is the half that
+/// could quietly make the scenario unwinnable. If `search_nodes` returned only
+/// titles, or truncated to fewer than the three instances, no amount of model
+/// capability would let it pick the largest — the values would simply not be
+/// there to compare, and 12 would red-line correct behavior the way 6 did. So
+/// this asserts the read surfaces all three instances AND their estimates,
+/// before asserting the write on the winner persists.
+///
+/// Uses plain `search_nodes` rather than `search_semantic`: `make_executor`
+/// builds an executor with no embedding service and no inference engine, so a
+/// semantic read is not available here — and the scenario's own diagnostic
+/// names `search_nodes` for the same reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn scenario_12_ideal_comparative_chain_is_accepted_and_the_read_carries_the_values() {
+    let (executor, _tmp) = make_executor().await;
+
+    let schema = call(
+        &executor,
+        "create_schema",
+        json!({
+            "name": "Feature Write-up",
+            "fields": [
+                {"name": "signed_off", "type": "boolean"},
+                {"name": "estimated_days", "type": "number"},
+            ],
+        }),
+    )
+    .await;
+    let writeup_type = schema["schemaId"].as_str().unwrap().to_string();
+
+    // The three instances 12's setup turns create. The largest estimate is
+    // deliberately NOT the most recently created one, so a model that picks
+    // "the last thing we talked about" lands on the wrong node and the
+    // scenario's `contentMatches` clause catches it.
+    let mut ids = Vec::new();
+    for (title, days) in [
+        ("checkout rewrite", 9),
+        ("search indexer", 21),
+        ("audit log export", 4),
+    ] {
+        let created = call(
+            &executor,
+            "create_node",
+            json!({
+                "content": title,
+                "node_type": writeup_type,
+                "field_values": {"signed_off": false, "estimated_days": days},
+            }),
+        )
+        .await;
+        ids.push((title, bare(created["id"].as_str().unwrap()).to_string()));
+    }
+
+    // The read the comparison depends on.
+    let found = call(
+        &executor,
+        "search_nodes",
+        // `"*"` is the enumerate form (`search_ops::normalize_enumerate_query`):
+        // scope to the type, apply no title keyword filter. A literal phrase
+        // here would be matched against node TITLES with `contains` when no
+        // property filters are supplied, which returns nothing — the values the
+        // comparison needs would be invisible for a reason that has nothing to
+        // do with the model.
+        json!({"query": "*", "node_type": writeup_type}),
+    )
+    .await;
+    let text = serde_json::to_string(&found).unwrap();
+
+    for (title, _) in &ids {
+        assert!(
+            text.contains(title),
+            "the read did not surface '{title}', so fewer than three instances are \
+             visible and the comparison scenario 12 asks for cannot be made — the \
+             scenario would be unwinnable by construction: {found:?}"
+        );
+    }
+    for days in ["9", "21", "4"] {
+        assert!(
+            text.contains(days),
+            "the read did not surface the estimate {days}, so the values the \
+             comparative ranges over are not in the result — a model could not \
+             pick the largest from this no matter how capable: {found:?}"
+        );
+    }
+
+    // The write on the winner (the 21-day search indexer).
+    let target = ids
+        .iter()
+        .find(|(title, _)| *title == "search indexer")
+        .map(|(_, id)| id.clone())
+        .unwrap();
+
+    let updated = call(
+        &executor,
+        "update_node",
+        json!({
+            "id": target,
+            "field_values": {"signed_off": true},
+        }),
+    )
+    .await;
+
+    // Same reasoning as scenario 6: the end clause scores off a persisted
+    // property value, so assert the count rather than the `updated` flag.
+    let persisted = updated
+        .get("property_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert!(
+        persisted >= 1,
+        "the ideal update reported {persisted} persisted properties — scenario 12's \
+         `hasPropertyValue` clause could not be satisfied by any model: {updated:?}"
+    );
+}
+
+/// The OTHER route to scenario 12's answer — sort descending, take one — is
+/// accepted, BUT ONLY WITH A FILTER PRESENT.
+///
+/// 12 is scored on its end state, so both routes must reach it or the scenario
+/// silently penalises the better one. Enumerate-then-compare (proved above)
+/// puts the comparison in the model; `sorting` + `limit: 1` pushes it into the
+/// query. The second is arguably the stronger answer.
+///
+/// THE FILTER IN THIS CALL IS LOAD-BEARING, AND IT IS COMPENSATING FOR A BUG.
+/// `run_node_query` (tools.rs, the `if filters.is_empty()` branch) routes a
+/// filterless search to `node_ops::query_nodes`, which is never passed
+/// `sorting` — so the argument is accepted and then silently DROPPED. Measured
+/// here: the same call without `"filters"` returns the 9-day node while
+/// reporting success, because that is simply the first row. A model asking for
+/// "the biggest" that way is told the wrong node with no error to notice.
+/// `filters` routes to `QueryService` instead, which honours sorting; the
+/// `gt 0` predicate is true of every instance and exists only to reach that
+/// branch.
+///
+/// That silent drop is a production bug, not a fixture defect, and it is
+/// deliberately NOT fixed here — see the issue filed from this audit. Scenario
+/// 12 stays winnable regardless because enumerate-then-compare works and is the
+/// route its diagnostic names. This test pins the workaround so that when the
+/// bug is fixed, the filter can be removed and this test will still pass.
+///
+/// Asserts the top result is the 21-day instance specifically, not merely that
+/// something came back: a sort that silently ignored its direction would return
+/// a different node and still look like a working call — which is exactly how
+/// the bug above hid.
+#[tokio::test(flavor = "multi_thread")]
+async fn scenario_12_sorted_single_result_route_is_also_accepted() {
+    let (executor, _tmp) = make_executor().await;
+
+    let schema = call(
+        &executor,
+        "create_schema",
+        json!({
+            "name": "Feature Write-up",
+            "fields": [
+                {"name": "signed_off", "type": "boolean"},
+                {"name": "estimated_days", "type": "number"},
+            ],
+        }),
+    )
+    .await;
+    let writeup_type = schema["schemaId"].as_str().unwrap().to_string();
+
+    for (title, days) in [
+        ("checkout rewrite", 9),
+        ("search indexer", 21),
+        ("audit log export", 4),
+    ] {
+        call(
+            &executor,
+            "create_node",
+            json!({
+                "content": title,
+                "node_type": writeup_type,
+                "field_values": {"signed_off": false, "estimated_days": days},
+            }),
+        )
+        .await;
+    }
+
+    let found = call(
+        &executor,
+        "search_nodes",
+        json!({
+            "query": "*",
+            "node_type": writeup_type,
+            "filters": [{"property": "estimated_days", "operator": "gt", "value": 0}],
+            "sorting": [{"field": "estimated_days", "direction": "desc"}],
+            "limit": 1,
+        }),
+    )
+    .await;
+
+    let text = serde_json::to_string(&found).unwrap();
+    assert!(
+        text.contains("search indexer"),
+        "sorting by estimated_days descending with limit 1 did not return the \
+         21-day instance, so the query-side route to scenario 12's answer does \
+         not work and the scenario would score a correct model red for taking \
+         it: {found:?}"
+    );
+}
+
+/// CHARACTERIZES A BUG: `sorting` is silently ignored when `filters` is empty.
+///
+/// Surfaced by the scenario 12 winnability audit. `run_node_query` in
+/// `packages/agent/src/local_agent/tools.rs` branches on `filters.is_empty()`:
+/// the filterless branch calls `node_ops::query_nodes`, whose input struct has
+/// no sorting field at all, so the argument is parsed, accepted, and dropped.
+/// The filtered branch routes to `query_ops::execute_query`, which honours it.
+///
+/// The failure mode is the dangerous kind: no error, no warning, a plausible
+/// node returned. A model that asks for "the longest-running one" via
+/// `sorting: [{estimated_days, desc}], limit: 1` is handed whichever row came
+/// first and has no way to tell it was not sorted. Asking for a superlative is
+/// a natural way to answer a comparative question, so this is reachable from
+/// ordinary phrasing rather than an exotic call shape.
+///
+/// This test asserts the CURRENT (wrong) behavior deliberately, so the bug is
+/// pinned rather than merely known. When it is fixed, this test will fail —
+/// that is the intent. Replace the assertion with the 21-day expectation and
+/// drop the compensating filter from
+/// `scenario_12_sorted_single_result_route_is_also_accepted`.
+#[tokio::test(flavor = "multi_thread")]
+async fn filterless_search_silently_ignores_sorting() {
+    let (executor, _tmp) = make_executor().await;
+
+    let schema = call(
+        &executor,
+        "create_schema",
+        json!({
+            "name": "Feature Write-up",
+            "fields": [{"name": "estimated_days", "type": "number"}],
+        }),
+    )
+    .await;
+    let writeup_type = schema["schemaId"].as_str().unwrap().to_string();
+
+    // Insertion order is deliberately not sort order: the first-inserted node
+    // has the SMALLEST estimate, so "returns the first row" and "returns the
+    // largest" are distinguishable outcomes.
+    for (title, days) in [("small", 4), ("large", 21)] {
+        call(
+            &executor,
+            "create_node",
+            json!({
+                "content": title,
+                "node_type": writeup_type,
+                "field_values": {"estimated_days": days},
+            }),
+        )
+        .await;
+    }
+
+    let found = call(
+        &executor,
+        "search_nodes",
+        json!({
+            "query": "*",
+            "node_type": writeup_type,
+            "sorting": [{"field": "estimated_days", "direction": "desc"}],
+            "limit": 1,
+        }),
+    )
+    .await;
+
+    let text = serde_json::to_string(&found).unwrap();
+    assert!(
+        text.contains("small") && !text.contains("large"),
+        "BUG FIXED? This test pins the CURRENT wrong behavior: a filterless \
+         search drops `sorting`, so descending-by-estimate returns the 4-day \
+         node rather than the 21-day one. Getting 'large' here means sorting is \
+         now honoured on the filterless path — good. Update this test to assert \
+         the correct result and remove the compensating `filters` argument from \
+         scenario_12_sorted_single_result_route_is_also_accepted: {found:?}"
+    );
+}
