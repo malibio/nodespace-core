@@ -24,6 +24,7 @@ import {
   checkGuidanceDrift,
   checkUniformity,
   formatReliabilityTable,
+  markerFor,
   parseTurnOutput,
   partitionExcluded,
   readBaselineReliability,
@@ -77,6 +78,75 @@ describe("partitionExcluded", () => {
     const { scored, excludedCount } = partitionExcluded(results);
     expect(scored).toHaveLength(0);
     expect(excludedCount).toBe(2);
+  });
+
+  // Setup scenarios establish state for later ones and are not observations.
+  // Scoring them let one ambiguous verb in a setup turn cost three points:
+  // itself, plus the two successors it left with nothing to act on.
+  test("excludes scenarios flagged as fixture setup", () => {
+    const results = [
+      result({ id: "11a", excludedAsSetup: true }),
+      result({ id: "11b", excludedAsSetup: true }),
+      result({ id: "11c" }),
+    ];
+    const { scored, setupCount } = partitionExcluded(results);
+    expect(scored.map((r) => r.id)).toEqual(["11c"]);
+    expect(setupCount).toBe(2);
+  });
+
+  // The two exclusions mean opposite things — an empty generation is a fault
+  // whose rate is itself a result, a setup turn is a fixed part of the fixture
+  // — so collapsing them would hide a rising empty-generation rate.
+  test("counts setup and empty-generation exclusions separately", () => {
+    const results = [
+      result({ id: "1", excludedAsEmptyGeneration: true, passed: false }),
+      result({ id: "11a", excludedAsSetup: true }),
+      result({ id: "2" }),
+    ];
+    const { scored, excludedCount, setupCount } = partitionExcluded(results);
+    expect(scored.map((r) => r.id)).toEqual(["2"]);
+    expect(excludedCount).toBe(1);
+    expect(setupCount).toBe(1);
+  });
+
+  // A setup turn that also came back an empty generation must not be counted
+  // twice — the totals would stop adding up to the number of scenarios run.
+  test("a setup scenario that was also an empty generation counts once", () => {
+    const results = [
+      result({
+        id: "11a",
+        excludedAsSetup: true,
+        excludedAsEmptyGeneration: true,
+        passed: false,
+      }),
+      result({ id: "11c" }),
+    ];
+    const { scored, excludedCount, setupCount } = partitionExcluded(results);
+    expect(scored.map((r) => r.id)).toEqual(["11c"]);
+    expect(excludedCount).toBe(1);
+    expect(setupCount).toBe(0);
+  });
+});
+
+describe("markerFor", () => {
+  test("renders pass, fail, setup and exclusion distinctly", () => {
+    expect(markerFor({ passed: true })).toBe("✓");
+    expect(markerFor({ passed: false })).toBe("✗");
+    expect(markerFor({ passed: true, excludedAsSetup: true })).toBe("⊙");
+    expect(markerFor({ passed: false, excludedAsEmptyGeneration: true })).toBe("⊘");
+  });
+
+  // The two call sites used to duplicate this precedence and disagree on it.
+  // Empty generation wins, matching partitionExcluded, which counts such a
+  // scenario in the exclusion bucket whose rate is itself a result.
+  test("empty generation outranks setup", () => {
+    expect(
+      markerFor({
+        passed: false,
+        excludedAsSetup: true,
+        excludedAsEmptyGeneration: true,
+      }),
+    ).toBe("⊘");
   });
 });
 
@@ -202,6 +272,63 @@ describe("buildTraceLines", () => {
       }),
     ];
     expect(buildTraceLines(results, 3)[0].rep).toBe(3);
+  });
+});
+
+describe("aggregateReps × setup exclusion", () => {
+  // The seam between outcome grading (which introduced setup scenarios) and
+  // --runs (which introduced pass^k). A setup scenario counted here would put
+  // the cascade back one level up: a flaky setup turn would be reported as an
+  // unreliable SCENARIO, when what it actually means is that its successors'
+  // reps are not comparable.
+  test("setup scenarios are excluded from the pass^k denominator", () => {
+    const agg = aggregateReps([
+      [result({ id: "11a", excludedAsSetup: true }), result({ id: "11c" })],
+      [result({ id: "11a", excludedAsSetup: true }), result({ id: "11c" })],
+    ]);
+    expect(agg.scoredScenarios).toBe(1);
+    expect(agg.passAtK).toBe(1);
+  });
+
+  test("a setup scenario is marked, not reported as never scored", () => {
+    const agg = aggregateReps([
+      [result({ id: "11a", excludedAsSetup: true, passed: false })],
+      [result({ id: "11a", excludedAsSetup: true, passed: true })],
+    ]);
+    const s = agg.scenarios.find((x) => x.id === "11a")!;
+    expect(s.setup).toBe(true);
+    expect(s.scoredReps).toBe(0);
+    // A setup turn that passed in one rep and failed in another is NOT a flip
+    // worth reporting — it was never an observation in the first place.
+    expect(s.flipped).toBe(false);
+    expect(agg.flipped).toBe(0);
+  });
+
+  // It must render as setup rather than as a degenerate empty generation,
+  // which would name an inference bug that did not happen.
+  test("the reliability table renders a setup scenario as setup", () => {
+    const agg = aggregateReps([
+      [result({ id: "11a", excludedAsSetup: true }), result({ id: "11c" })],
+    ]);
+    const lines = formatReliabilityTable(agg);
+    const setupLine = lines.find((l) => l.includes("11a"))!;
+    expect(setupLine).toContain("⊙");
+    expect(setupLine).toContain("fixture setup");
+    expect(setupLine).not.toContain("empty generation");
+  });
+
+  // A setup scenario and a genuinely-excluded one both have scoredReps === 0
+  // and must stay distinguishable.
+  test("setup and all-excluded scenarios render differently", () => {
+    const agg = aggregateReps([
+      [
+        result({ id: "11a", excludedAsSetup: true }),
+        result({ id: "5", excludedAsEmptyGeneration: true, passed: false }),
+      ],
+    ]);
+    const lines = formatReliabilityTable(agg);
+    expect(lines.find((l) => l.includes("11a"))).toContain("fixture setup");
+    expect(lines.find((l) => l.includes(" 5 "))).toContain("empty generation");
   });
 });
 

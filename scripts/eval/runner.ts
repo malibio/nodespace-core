@@ -12,6 +12,7 @@
  */
 
 import { readEnv, ENV_USAGE, REPO_ROOT, type EvalEnv } from "./env.ts";
+import { captureSnapshot, diffSnapshots } from "./graph.ts";
 import {
   abortOnEnvironment,
   preflight,
@@ -300,6 +301,18 @@ async function compareToBaseline(
       );
       continue;
     }
+    // Setup scenarios are not scored, so their verdict is not a result to
+    // regress against — but a baseline predating the setup reclassification
+    // still carries a scored verdict for the same id, and comparing the two
+    // would report a REGRESSION the moment a setup turn takes a different
+    // (still perfectly valid) path. Its failure is surfaced during the run
+    // instead, where it means something: the state its successors needed.
+    if (cur.setup) {
+      console.log(
+        `   SETUP       ${cur.id}: fixture setup, not scored — not compared`,
+      );
+      continue;
+    }
     // A scenario excluded in every rep was never scored this run — an
     // inference bug, not a scoring outcome. Comparing it against a baseline
     // verdict would report a spurious REGRESSION on a scenario the model was
@@ -345,8 +358,43 @@ async function compareToBaseline(
 // ---------------------------------------------------------------------------
 
 /**
+ * The status marker for one result: ⊘ excluded, ⊙ setup, ✓ pass, ✗ fail.
+ *
+ * Shared by the per-turn line and the summary list so the two cannot drift
+ * apart, which they had already started to do by spelling the precedence out
+ * twice. The ordering here is defensive rather than observable: a result can
+ * only be flagged `excludedAsSetup` after the empty-generation branch has
+ * already `continue`d, so nothing carries both flags today. It is pinned
+ * anyway, because the day one does, the two call sites disagreeing is exactly
+ * the kind of silent divergence this file exists to prevent — and the choice
+ * matches `partitionExcluded`, which counts such a scenario in the exclusion
+ * bucket whose rate is itself a result.
+ */
+export function markerFor(r: {
+  excludedAsEmptyGeneration?: boolean;
+  excludedAsSetup?: boolean;
+  passed: boolean;
+}): string {
+  if (r.excludedAsEmptyGeneration) return "⊘";
+  if (r.excludedAsSetup) return "⊙";
+  return r.passed ? "✓" : "✗";
+}
+
+/**
  * Split a run's results into scenarios that were actually scored and those
- * excluded as degenerate empty generations (see `TurnRecord.emptyGeneration`).
+ * excluded — as degenerate empty generations (see `TurnRecord.emptyGeneration`)
+ * or as fixture setup (see `Scenario.setup`).
+ *
+ * The two exclusions are counted separately because they mean opposite things:
+ * an empty generation is a fault whose RATE is a result in itself, while a
+ * setup turn is a deliberate, fixed part of the fixture. Collapsing them would
+ * make a run with a rising empty-generation rate look unchanged.
+ *
+ * Note that a snapshot that could not be captured is NOT a third bucket: it
+ * scores `passed: false` and lands in `failed`. That is deliberate — an
+ * environment fault should be loud rather than quietly shrinking the
+ * denominator — but it does mean a run against a dying daemon reads as a
+ * failing run, not a short one.
  *
  * Kept out of `runEval`'s body so uniformity/totals math is independently
  * testable against a fixed `ScenarioResult[]`, without spawning a daemon.
@@ -354,9 +402,18 @@ async function compareToBaseline(
 export function partitionExcluded(results: ScenarioResult[]): {
   scored: ScenarioResult[];
   excludedCount: number;
+  setupCount: number;
 } {
-  const scored = results.filter((r) => !r.excludedAsEmptyGeneration);
-  return { scored, excludedCount: results.length - scored.length };
+  const scored = results.filter(
+    (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup,
+  );
+  return {
+    scored,
+    excludedCount: results.filter((r) => r.excludedAsEmptyGeneration).length,
+    setupCount: results.filter(
+      (r) => r.excludedAsSetup && !r.excludedAsEmptyGeneration,
+    ).length,
+  };
 }
 
 /**
@@ -397,8 +454,18 @@ export function aggregateReps(reps: ScenarioResult[][]): RunAggregate {
 
   const scenarios: ScenarioReliability[] = order.map((id) => {
     const { scenario, results } = byId.get(id)!;
-    const excludedReps = results.filter((r) => r.excludedAsEmptyGeneration).length;
-    const scored = results.filter((r) => !r.excludedAsEmptyGeneration);
+    // Setup scenarios are excluded from pass^k for the same reason they are
+    // excluded from a single run's denominator: they are not observations.
+    // Counting them here would put the cascade back one level up — a setup
+    // turn that flipped would be reported as an unreliable SCENARIO, when what
+    // it actually means is that its successors' reps are not comparable.
+    const setup = results.length > 0 && results.every((r) => r.excludedAsSetup);
+    const excludedReps = results.filter(
+      (r) => r.excludedAsEmptyGeneration,
+    ).length;
+    const scored = setup
+      ? []
+      : results.filter((r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup);
     const passedReps = scored.filter((r) => r.passed).length;
     return {
       id,
@@ -408,6 +475,7 @@ export function aggregateReps(reps: ScenarioResult[][]): RunAggregate {
       excludedReps,
       passedAll: scored.length > 0 && passedReps === scored.length,
       flipped: passedReps > 0 && passedReps < scored.length,
+      ...(setup ? { setup: true } : {}),
     };
   });
 
@@ -566,6 +634,12 @@ export function buildTraceLines(
 export function formatReliabilityTable(aggregate: RunAggregate): string[] {
   const single = aggregate.reps === 1;
   return aggregate.scenarios.map((s) => {
+    // Setup before the exclusion branch: a setup scenario also has
+    // `scoredReps === 0`, and reporting it as a degenerate empty generation
+    // would name an inference bug that did not happen.
+    if (s.setup) {
+      return `  ⊙ ${s.id}  fixture setup — not scored`;
+    }
     if (s.scoredReps === 0) {
       return single
         ? `  ⊘ ${s.id}  excluded (degenerate empty generation) — never scored`
@@ -698,6 +772,16 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
       `[${fixture.name}] chat ${chatId} for: ${group.map((s) => s.id).join(", ")}`,
     );
 
+    /**
+     * Nodes this group has created so far — the only nodes whose edges are
+     * worth walking when snapshotting (see the bracketing comment below).
+     *
+     * Per group rather than per run: a scenario can only link nodes its own
+     * chat established, and letting this accumulate across groups would
+     * restore the whole-database walk this exists to avoid.
+     */
+    const groupNodeIds = new Set<string>();
+
     for (const scenario of group) {
       console.error(`[${fixture.name}] → ${scenario.scenario}`);
 
@@ -708,7 +792,59 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         priorTurns.push(turn(chatId, prior));
       }
 
+      // Snapshot bracketing the scored turn. Captured only when the fixture
+      // opts into graph grading, and taken as late/early as possible around
+      // the turn so the diff attributes to THIS turn rather than to anything
+      // the harness did between scenarios.
+      //
+      // Edge discovery is the expensive half: the daemon exposes
+      // relationships per (node, relation) pair rather than as a whole-graph
+      // dump, so walking every node costs a round-trip per node per relation
+      // — ~11s on a 120-node database, and it would be paid twice per turn.
+      //
+      // Both snapshots therefore walk only the nodes THIS GROUP created,
+      // which is where every edge a scenario can assert must land: a turn
+      // can only link nodes its own chat established (11c links what 11a and
+      // 11b created). The restriction cannot instead be "walk what changed",
+      // because `create_relationship` leaves both endpoints byte-identical —
+      // verified against the daemon, same version and same modified_at — so
+      // that rule would find no edges at all and score 11c, the one scenario
+      // that measures linking, as a false pass.
+      const before = fixture.graph
+        ? captureSnapshot(env, fixture.graph.types, {
+            edgesFor: (n) => groupNodeIds.has(n.id),
+          })
+        : undefined;
+
       const scored = turn(chatId, scenario.prompt);
+
+      // Nodes created by THIS turn join the candidate set before its edges
+      // are walked: a turn that creates a node and links it in the same
+      // breath is legitimate, and walking only the pre-turn set would miss
+      // that edge. Node enumeration is cheap (one query per type); it is the
+      // per-node relationship walk that is not, so the "after" pass runs in
+      // two steps rather than snapshotting a third time.
+      //
+      // This makes the walk ASYMMETRIC — the "after" set is a strict superset
+      // — and the consequence is worth stating: a node new since `before` had
+      // no edges walked there, so every edge on it appears in `addedEdges`
+      // whether this turn recorded it or the daemon materialized it at
+      // creation time. `EdgeExpectation` therefore requires a named relation,
+      // enforced by a fixture invariant; an unpinned one would pass on any
+      // turn that merely created a node. Restricting the diff instead would
+      // be the alternative, but it would lose the create-and-link-in-one-turn
+      // case above, which is a legitimate shape.
+      const after = fixture.graph
+        ? captureSnapshot(env, fixture.graph.types, {
+            edgesFor: (n) =>
+              groupNodeIds.has(n.id) ||
+              !before?.nodes.some((p) => p.id === n.id),
+          })
+        : undefined;
+      for (const n of after?.nodes ?? []) {
+        if (!before?.nodes.some((p) => p.id === n.id)) groupNodeIds.add(n.id);
+      }
+      const diff = before && after ? diffSnapshots(before, after) : undefined;
 
       // The degenerate-empty-generation failure mode (agent_loop.rs: the
       // model opens a turn and emits neither text nor a tool call) is an
@@ -734,7 +870,16 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         continue;
       }
 
-      const verdict = fixture.score(scenario, [scored]);
+      // The trajectory assertions still run, but they no longer decide the
+      // score when the fixture grades on outcome — they are recorded as a
+      // diagnostic. Trajectory answers "how did the model get there", which
+      // is what a debugging session needs and what an outcome score cannot
+      // say; it just is not the thing being graded.
+      const trajectory = fixture.score(scenario, [scored]);
+      const verdict =
+        fixture.graph && diff
+          ? fixture.graph.scoreOutcome(scenario, diff)
+          : trajectory;
 
       results.push({
         id: scenario.id,
@@ -744,14 +889,29 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         failure: verdict.failure,
         turns: [...priorTurns, scored],
         extra: fixture.extra?.(scenario, [scored]),
+        graphDiff: diff,
+        trajectory: fixture.graph ? trajectory : undefined,
+        excludedAsSetup: scenario.setup === true ? true : undefined,
       });
 
+      const marker = markerFor({
+        excludedAsSetup: scenario.setup === true,
+        passed: verdict.passed,
+      });
       console.error(
-        `[${fixture.name}]   ${verdict.passed ? "✓" : "✗"} ` +
-          `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms`,
+        `[${fixture.name}]   ${marker} ` +
+          `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms` +
+          (scenario.setup ? " (setup — not scored)" : ""),
       );
       if (!verdict.passed)
         console.error(`[${fixture.name}]     ↳ ${verdict.failure}`);
+      // A setup turn that failed to establish its state makes every scenario
+      // after it unwinnable. It is not scored, but it must not pass silently.
+      if (scenario.setup && !verdict.passed)
+        console.error(
+          `[${fixture.name}]     ⚠ setup did not establish its state — ` +
+            `later scenarios in this group may be unwinnable`,
+        );
     }
   }
 
@@ -903,8 +1063,21 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
       if (runs > 1) console.error(`[${fixture.name}] ── rep ${rep}/${runs} ──`);
 
       const results = runRep(fixture, env);
-      const { scored, excludedCount } = partitionExcluded(results);
+      const {
+        scored,
+        excludedCount,
+        setupCount,
+      } = partitionExcluded(results);
       const passed = scored.filter((r) => r.passed).length;
+
+      // Where the retired trajectory assertions disagree with the outcome
+      // score. Not a failure count — each disagreement is either a scenario
+      // whose expectation no longer describes the behavior, or a real change
+      // in how the model reaches its result. Both are worth a look; neither is
+      // a verdict.
+      const trajectoryDisagreements = scored.filter(
+        (r) => r.trajectory !== undefined && r.trajectory.passed !== r.passed,
+      ).length;
 
       // Uniform 0% or 100% across every SCORED scenario is a harness signature —
       // an environment that preflight could not catch (e.g. every send silently
@@ -924,6 +1097,8 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           passed,
           failed: scored.length - passed,
           excludedEmptyGenerations: excludedCount,
+          excludedSetup: setupCount,
+          trajectoryDisagreements,
         },
         results,
       });
@@ -1026,6 +1201,27 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   if (excluded > 0) {
     console.log(
       `   Excluded: ${excluded} scenario-rep(s) (degenerate empty generation — not scored either way)`,
+    );
+  }
+  // Summed across reps for the same reason `excluded` is: these are per-rep
+  // counts, and a run's headline should not silently report only its first.
+  const setupExcluded = reps.reduce(
+    (n, r) => n + (r.summary.excludedSetup ?? 0),
+    0,
+  );
+  if (setupExcluded > 0) {
+    console.log(
+      `   Setup:    ${setupExcluded} scenario-rep(s) (fixture setup — not scored)`,
+    );
+  }
+  const disagreements = reps.reduce(
+    (n, r) => n + (r.summary.trajectoryDisagreements ?? 0),
+    0,
+  );
+  if (disagreements > 0) {
+    console.log(
+      `   Trajectory disagrees on ${disagreements} scenario-rep(s) — ` +
+        `diagnostic only, see 'trajectory' in the results file`,
     );
   }
   if (aggregate.reps > 1) {
