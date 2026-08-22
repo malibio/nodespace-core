@@ -298,6 +298,16 @@ function edgeKey(e: SnapshotEdge): string {
  * `changedNodes` entry, so a read scenario would red out because a JSON object
  * came back with its keys in a different order — a false failure on five
  * scenarios, from something the model had no part in.
+ *
+ * SOUNDNESS RESTS ON THE INPUT DOMAIN, so state it: this is the only
+ * comparator behind `changedNodes`, and `changedNodes` is what
+ * `expectNoWrites` reads, making it one of the few places a false PASS could
+ * originate. It is safe because the values it sees always come from
+ * `JSON.parse` of the CLI's stdout (see `toSnapshotNode`), which can only
+ * produce objects, arrays, strings, numbers, booleans and null. The `?? "null"`
+ * fallback collapses `undefined` with `null`, and a `Date` would render as
+ * `{}` — neither is reachable from parsed JSON. Feed this anything that did
+ * not come from a parse and that guarantee is gone.
  */
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;

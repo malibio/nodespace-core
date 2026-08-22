@@ -297,26 +297,17 @@ async function compareToBaseline(
 // ---------------------------------------------------------------------------
 
 /**
- * Split a run's results into scenarios that were actually scored and those
- * excluded — as degenerate empty generations (see `TurnRecord.emptyGeneration`)
- * or as fixture setup (see `Scenario.setup`).
- *
- * The two exclusions are counted separately because they mean opposite things:
- * an empty generation is a fault whose RATE is a result in itself, while a
- * setup turn is a deliberate, fixed part of the fixture. Collapsing them would
- * make a run with a rising empty-generation rate look unchanged.
- *
- * Kept out of `runEval`'s body so uniformity/totals math is independently
- * testable against a fixed `ScenarioResult[]`, without spawning a daemon.
- */
-/**
  * The status marker for one result: ⊘ excluded, ⊙ setup, ✓ pass, ✗ fail.
  *
- * Shared by the per-turn line and the summary list because the two were
- * duplicating the precedence and disagreeing on it: a setup turn that also
- * came back an empty generation rendered ⊙ in one place and ⊘ in the other.
- * Empty generation wins, matching `partitionExcluded`, which counts such a
- * scenario in the exclusion bucket whose rate is itself a result.
+ * Shared by the per-turn line and the summary list so the two cannot drift
+ * apart, which they had already started to do by spelling the precedence out
+ * twice. The ordering here is defensive rather than observable: a result can
+ * only be flagged `excludedAsSetup` after the empty-generation branch has
+ * already `continue`d, so nothing carries both flags today. It is pinned
+ * anyway, because the day one does, the two call sites disagreeing is exactly
+ * the kind of silent divergence this file exists to prevent — and the choice
+ * matches `partitionExcluded`, which counts such a scenario in the exclusion
+ * bucket whose rate is itself a result.
  */
 export function markerFor(r: {
   excludedAsEmptyGeneration?: boolean;
@@ -328,6 +319,25 @@ export function markerFor(r: {
   return r.passed ? "✓" : "✗";
 }
 
+/**
+ * Split a run's results into scenarios that were actually scored and those
+ * excluded — as degenerate empty generations (see `TurnRecord.emptyGeneration`)
+ * or as fixture setup (see `Scenario.setup`).
+ *
+ * The two exclusions are counted separately because they mean opposite things:
+ * an empty generation is a fault whose RATE is a result in itself, while a
+ * setup turn is a deliberate, fixed part of the fixture. Collapsing them would
+ * make a run with a rising empty-generation rate look unchanged.
+ *
+ * Note that a snapshot that could not be captured is NOT a third bucket: it
+ * scores `passed: false` and lands in `failed`. That is deliberate — an
+ * environment fault should be loud rather than quietly shrinking the
+ * denominator — but it does mean a run against a dying daemon reads as a
+ * failing run, not a short one.
+ *
+ * Kept out of `runEval`'s body so uniformity/totals math is independently
+ * testable against a fixed `ScenarioResult[]`, without spawning a daemon.
+ */
 export function partitionExcluded(results: ScenarioResult[]): {
   scored: ScenarioResult[];
   excludedCount: number;
