@@ -283,24 +283,124 @@ export interface GuidanceProvenance {
   [nodeType: string]: Array<{ key: string; version: string }>;
 }
 
-/** The results file an eval run writes. */
+/** One repetition's scored scenarios and the conditions that produced them. */
+export interface RepResult {
+  /** 1-based index of this repetition within the run. */
+  rep: number;
+  /**
+   * Provenance for THIS rep, not the run.
+   *
+   * Recorded per rep rather than once per file because the whole point of
+   * repeating is that reps are not interchangeable: one that hit a degraded
+   * environment — a daemon restarted onto different guidance, a model that
+   * loaded into a smaller window the second time, a working tree that went
+   * dirty mid-run — must be identifiable after the fact. A single file-level
+   * provenance block would silently attribute every rep to the first rep's
+   * conditions.
+   */
+  provenance: Provenance;
+  summary: RepSummary;
+  results: ScenarioResult[];
+}
+
+/** One rep's scored totals. */
+export interface RepSummary {
+  /** Scored scenarios only — excludes empty-generation exclusions. */
+  total: number;
+  passed: number;
+  failed: number;
+  /**
+   * Scenarios excluded as degenerate empty generations, not scored either
+   * way. Kept separate from `failed` so the rate is visible rather than
+   * silently deflating the pass rate; present (possibly 0) whenever the
+   * runner supports the exclusion, so its absence marks an older results
+   * file rather than a run with none.
+   */
+  excludedEmptyGenerations?: number;
+}
+
+/**
+ * One scenario's outcome across every rep of a run.
+ *
+ * This is the unit the multi-rep summary is built from, and the reason the
+ * eval repeats at all: "fails 3/3" and "fails 1/3" are different findings that
+ * a single run renders identically, and only the second one is debuggable.
+ */
+export interface ScenarioReliability {
+  id: string;
+  scenario: string;
+  /** Reps in which this scenario was actually scored (exclusions removed). */
+  scoredReps: number;
+  /** Scored reps in which it passed. */
+  passedReps: number;
+  /**
+   * Reps excluded as degenerate empty generations. Counted toward neither
+   * `passedReps` nor the pass^k denominator — an inference bug is not evidence
+   * either way about the scenario, so a rep that hit one must not make a
+   * scenario look unreliable.
+   */
+  excludedReps: number;
+  /**
+   * The scenario passed in every rep where it was scored, and was scored at
+   * least once. This is the pass^k predicate: an all-or-nothing verdict, which
+   * is what makes the aggregate a reliability measure rather than a best-case
+   * one.
+   */
+  passedAll: boolean;
+  /** It both passed and failed across reps — the score is not reproducible. */
+  flipped: boolean;
+}
+
+/**
+ * A run's aggregate across reps.
+ *
+ * `passAtK` is the headline and `passAt1` sits alongside it deliberately: the
+ * property that matters for a model writing to a user's graph is whether it
+ * does the right thing every time, not whether it can. Two models with the
+ * same pass^1 and different flip rates are not equally good, and only pass^k
+ * separates them.
+ */
+export interface RunAggregate {
+  /** Number of reps that ran. */
+  reps: number;
+  /**
+   * Scenarios scored in at least one rep — the denominator for both metrics
+   * below. A scenario excluded as an empty generation in EVERY rep was never
+   * scored at all and is counted here as neither passing nor failing.
+   */
+  scoredScenarios: number;
+  /** Scenarios that passed in every rep where they were scored. */
+  passAtK: number;
+  /**
+   * Mean scored pass count across reps — the single-run number this project
+   * has historically quoted, kept alongside pass^k so the gap between
+   * best-case capability and reliability is readable rather than lost.
+   */
+  passAt1: number;
+  /** Scenarios that both passed and failed across reps. */
+  flipped: number;
+  /** Per-scenario detail, in fixture order. */
+  scenarios: ScenarioReliability[];
+}
+
+/**
+ * The results file an eval run writes.
+ *
+ * Always rep-shaped, including for `--runs 1`: a single-rep file that looked
+ * structurally different from a multi-rep one would mean every reader needs
+ * two code paths, and the single-rep shape is exactly the one that produced
+ * the confident wrong conclusions repeating exists to prevent.
+ */
 export interface EvalResults {
   eval: string;
   label: string;
+  /**
+   * Provenance of the FIRST rep, for readers that want one block without
+   * walking `reps`. The per-rep blocks in `reps[].provenance` are
+   * authoritative — a rep that drifted is only visible there.
+   */
   provenance: Provenance;
-  summary: {
-    /** Scored scenarios only — excludes empty-generation exclusions. */
-    total: number;
-    passed: number;
-    failed: number;
-    /**
-     * Scenarios excluded as degenerate empty generations, not scored either
-     * way. Kept separate from `failed` so the rate is visible rather than
-     * silently deflating the pass rate; present (possibly 0) whenever the
-     * runner supports the exclusion, so its absence marks an older results
-     * file rather than a run with none.
-     */
-    excludedEmptyGenerations?: number;
-  };
-  results: ScenarioResult[];
+  /** Aggregate across every rep: pass^k, pass^1, and per-scenario flips. */
+  aggregate: RunAggregate;
+  reps: RepResult[];
 }
