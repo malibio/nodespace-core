@@ -347,7 +347,19 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             content: None,
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
-                "description": "Delete nodes from the knowledge graph. Use when user wants to remove, delete, or trash a node or record.",
+                // Leads with the destructive verbs and stops there. The
+                // earlier wording ended "...remove, delete, or trash a node or
+                // record", and that trailing generic noun made this skill an
+                // attractor for anything node-shaped: it was retrieved as a
+                // candidate on turns that recorded a decision, marked a status,
+                // set a due date, and asked a plain question — none of which
+                // asked to remove anything. Every one of those prompts is
+                // *about* a node or record; only the verb distinguishes them,
+                // so a description whose tail is the shared noun buries the one
+                // signal that separates deletion from everything else. Keep the
+                // discriminating verbs; do not reintroduce a generic noun tail
+                // for readability.
+                "description": "Delete, remove, discard, or trash something the user no longer wants kept. Use ONLY when the user is asking for existing content to be taken out of the knowledge graph — not to record, update, mark, or look something up.",
                 "tool_whitelist": ["delete_node", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
@@ -767,20 +779,31 @@ mod tests {
     /// declare. This pins the classification against the real seed data rather
     /// than a stub, and fails if a seed's whitelist gains or loses a write tool
     /// without that being an intentional change to its Stage-2 bar.
+    ///
+    /// Both rungs are pinned, not just the mutating one. `Node Deletion` is
+    /// currently the only *destructive* seed, and that is a property of the
+    /// seed data rather than of the registry: `removes_user_data` pins that
+    /// `delete_node` is the only destructive tool, but nothing there stops a
+    /// second seed from whitelisting it. Without the third column, adding
+    /// `delete_node` to (say) `Organization` would silently move that skill to
+    /// the strictest bar in the system — and change which candidate may
+    /// contribute destructive tools at all — while every assertion here still
+    /// passed, because `should_mutate` was already `true` for it.
     #[test]
     fn seeded_skills_classify_by_blast_radius_as_expected() {
-        let expected_mutating = [
-            ("Node Creation", true),
-            ("Schema Creation", true),
-            ("Graph Editing", true),
-            ("Relationship Management", true),
-            ("Node Deletion", true),
-            ("Bulk Import", true),
-            ("Organization", true),
-            ("Research & Search", false),
+        let expected_blast_radius = [
+            // (title, mutating, destructive)
+            ("Node Creation", true, false),
+            ("Schema Creation", true, false),
+            ("Graph Editing", true, false),
+            ("Relationship Management", true, false),
+            ("Node Deletion", true, true),
+            ("Bulk Import", true, false),
+            ("Organization", true, false),
+            ("Research & Search", false, false),
         ];
 
-        for (title, should_mutate) in expected_mutating {
+        for (title, should_mutate, should_destroy) in expected_blast_radius {
             let seed = seed_skill_nodes()
                 .into_iter()
                 .find(|t| t.title == title)
@@ -803,6 +826,13 @@ mod tests {
             assert_eq!(
                 mutates, should_mutate,
                 "skill '{title}' blast radius changed; whitelist is {tools:?}"
+            );
+            let destroys = crate::local_agent::routing::skill_is_destructive(&candidate);
+            assert_eq!(
+                destroys, should_destroy,
+                "skill '{title}' gained or lost the ability to irreversibly remove user data; \
+                 whitelist is {tools:?}. This changes its Stage-2 score bar AND whether it may \
+                 contribute destructive tools when it is not the retrieved winner."
             );
         }
     }
