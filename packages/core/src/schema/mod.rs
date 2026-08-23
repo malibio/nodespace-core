@@ -91,6 +91,49 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
     )))
 }
 
+/// Drop entries from a `fields`-shaped array whose every value is null.
+///
+/// An entry like `{"description":null,"name":null}` declares nothing: there is
+/// no field name to store under and no type to store. Rejecting it is
+/// technically correct and practically harmful — it fails a call whose other
+/// entries were complete, and the caller's next attempt mutates the parts that
+/// were already right.
+///
+/// Observed live on the locked model, on the retry that had just correctly
+/// repaired a missing top-level `name`:
+///
+/// ```json
+/// {"fields":[ …status…, …estimated_days…, {"description":null,"name":null}],
+///  "name":"Feature Write-up"}
+/// ```
+///
+/// Both real fields were well-formed and the schema name was right. The call
+/// was rejected for the null entry, and the following attempt added a stray
+/// `field_values` key, then the one after abandoned `create_schema` entirely
+/// and called `create_node` against a type that had never been created. One
+/// informationless entry cost the whole chain.
+///
+/// Deliberately narrow, and NOT a general "ignore bad fields" rule. An entry
+/// with a real `name` but a missing `type` is a genuine mistake the caller must
+/// see and fix — `describe_malformed_fields` still reports it, and still
+/// reports an all-null entry's siblings. This drops only entries that carry no
+/// signal at all, so nothing a caller expressed is silently discarded.
+fn drop_empty_field_entries(params: &mut Value, key: &str) {
+    let Some(fields) = params.get_mut(key).and_then(Value::as_array_mut) else {
+        return;
+    };
+    fields.retain(|entry| {
+        let Some(obj) = entry.as_object() else {
+            // Not an object: leave it for `describe_malformed_fields` to report
+            // with its position, which is more useful than silent removal.
+            return true;
+        };
+        // Keep anything carrying at least one non-null value. An empty object
+        // (`{}`) is dropped for the same reason as an all-null one.
+        obj.values().any(|v| !v.is_null())
+    });
+}
+
 /// Report a missing REQUIRED TOP-LEVEL key on `create_schema` with an
 /// instruction the caller can act on, before serde reports it as a bare name.
 ///
@@ -440,6 +483,12 @@ pub async fn handle_create_schema(
     // `type`") with no indication of WHICH array element is at fault, which
     // leaves an LLM caller unable to repair the call: it re-sends with a
     // different part mutated and degrades the arguments further on each retry.
+    // Runs BEFORE validation: an entry whose every value is null carries no
+    // information to validate, and rejecting the whole call over one is what
+    // drives the caller to mutate a payload that was otherwise correct.
+    let mut params = params;
+    drop_empty_field_entries(&mut params, "fields");
+
     describe_malformed_fields(&params, "fields")?;
     // Runs after the per-entry check so a payload wrong in both places reports
     // the field problems first: those are what the caller must rebuild, whereas

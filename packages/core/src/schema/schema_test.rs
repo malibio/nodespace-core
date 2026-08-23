@@ -1599,11 +1599,7 @@ async fn test_create_schema_empty_name_is_rejected_like_a_missing_one() {
 async fn test_create_schema_reports_field_problems_before_missing_name() {
     let (svc, _tmp) = create_test_service().await;
 
-    let result = handle_create_schema(
-        &svc,
-        json!({ "fields": [{ "name": "status" }] }),
-    )
-    .await;
+    let result = handle_create_schema(&svc, json!({ "fields": [{ "name": "status" }] })).await;
 
     let msg = result.expect_err("both problems present").to_string();
     assert!(
@@ -1630,6 +1626,99 @@ async fn test_create_schema_with_name_still_succeeds() {
     assert!(
         result.is_ok(),
         "a complete call must be unaffected: {result:?}"
+    );
+}
+
+// ============================================================================
+// An informationless field entry must not fail an otherwise-correct call
+// ============================================================================
+//
+// Observed live: on the retry that had just CORRECTLY repaired a missing
+// top-level `name`, the model appended `{"description":null,"name":null}` to a
+// fields array whose other two entries were complete. The call was rejected for
+// that entry; the next attempt added a stray `field_values` key; the one after
+// abandoned create_schema and called create_node against a type that had never
+// been created. One entry carrying no information cost the whole chain.
+
+#[tokio::test]
+async fn test_create_schema_ignores_an_all_null_field_entry() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The exact payload observed live, including the null entry.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Feature Write-up",
+            "fields": [
+                {
+                    "coreValues": [
+                        { "label": "Drafting", "value": "drafting" },
+                        { "label": "Signed Off", "value": "signed_off" }
+                    ],
+                    "friendlyName": "Status",
+                    "name": "status",
+                    "type": "enum"
+                },
+                { "name": "estimated_days", "type": "number" },
+                { "description": null, "name": null }
+            ]
+        }),
+    )
+    .await;
+
+    let value = result.expect("an all-null entry must not fail the call");
+    let fields = value["fields"]
+        .as_array()
+        .expect("fields array in the response");
+    assert_eq!(
+        fields.len(),
+        2,
+        "the informationless entry must be dropped, not stored: {fields:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_ignores_an_empty_field_entry() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Venue",
+            "fields": [{ "name": "capacity", "type": "number" }, {}]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "an empty object declares nothing and must be dropped like an all-null \
+         entry: {result:?}"
+    );
+}
+
+/// The narrowness is the point: an entry with a real name but no type is a
+/// genuine mistake the caller must see. Dropping it would silently discard a
+/// field the user asked for.
+#[tokio::test]
+async fn test_create_schema_still_reports_a_named_entry_missing_its_type() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Venue",
+            "fields": [{ "name": "capacity", "type": "number" }, { "name": "city" }]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a named entry with no type is a real error")
+        .to_string();
+    assert!(
+        msg.contains("city"),
+        "the offending entry must still be named: {msg}"
     );
 }
 
