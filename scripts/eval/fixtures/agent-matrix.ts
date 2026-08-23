@@ -105,7 +105,7 @@ import type {
   TurnRecord,
   Verdict,
 } from "../types.ts";
-import { assertEndState, type EndState } from "../end-state.ts";
+import { assertEndState, turnAskedForClarification, type EndState } from "../end-state.ts";
 
 // ---------------------------------------------------------------------------
 // Structured expectation model
@@ -930,6 +930,13 @@ const GROUPS: MatrixScenario[][] = [
       prompt: "New cycle: Harbour, it wraps up on the 30th",
       expect: { kind: "toolOnce", tool: "create_node" },
       end: {
+        // The prompt gives an END date and no start date, and the field list
+        // comes from the type the model itself defined in 8b — so a required
+        // start date cannot be satisfied from the prompt. Asking is then the
+        // correct move, and was the one scoring zero: measured here, Laguna
+        // asked and FAILED while E4B guessed, had the write REJECTED, and
+        // passed on tool name alone.
+        clarifyOk: true,
         createdNode: { contentMatches: "harbour" },
         noUnexpectedNodes: true,
       },
@@ -1699,8 +1706,19 @@ const fixture: EvalFixture = {
      * schema; nothing needs it today.
      */
     types: [],
-    scoreOutcome(scenario, diff) {
-      return assertEndState((scenario as MatrixScenario).end, diff);
+    scoreOutcome(scenario, diff, turns?) {
+      // ROUTING_TOOLS is this fixture's notion of "not an action", so the
+      // shared helper takes it as a predicate rather than importing the list
+      // and drifting from it.
+      // Defaulted: a caller that only has a diff (unit tests, and any future
+      // consumer scoring a recorded run) still gets the graph assertions.
+      const seen = turns ?? [];
+      const toolsCalled = seen.flatMap((t) => t.toolsCalled);
+      const reply = seen.length ? seen[seen.length - 1].reply : undefined;
+      const asked = turnAskedForClarification(toolsCalled, reply, (t) =>
+        ROUTING_TOOLS.includes(t),
+      );
+      return assertEndState((scenario as MatrixScenario).end, diff, asked);
     },
   },
   extra(scenario, turns: TurnRecord[]) {

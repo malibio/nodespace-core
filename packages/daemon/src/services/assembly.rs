@@ -208,10 +208,11 @@ pub async fn build_database_services(
         node_service.clone(),
         embedding_svc_state.clone(),
     ));
-    let capture_config_path = {
-        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        home.join(".nodespace").join("daemon.toml")
-    };
+    // Resolved through `nodespace_dir` so it follows NODESPACE_HOME, exactly as
+    // the database and the ADR-053 registry do. Reading it from the real home
+    // instead left an isolated daemon serving a temp database while taking its
+    // OpenAI-compat provider configs from the user's own `~/.nodespace`.
+    let capture_config_path = crate::nodespace_dir()?.join("daemon.toml");
     let agent_session = AgentSessionHandler::new(
         shared.pty_manager.clone(),
         assembler,

@@ -405,7 +405,7 @@ export function partitionExcluded(results: ScenarioResult[]): {
   setupCount: number;
 } {
   const scored = results.filter(
-    (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup,
+    (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup && !r.excludedAsToolNotOffered,
   );
   return {
     scored,
@@ -465,7 +465,7 @@ export function aggregateReps(reps: ScenarioResult[][]): RunAggregate {
     ).length;
     const scored = setup
       ? []
-      : results.filter((r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup);
+      : results.filter((r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup && !r.excludedAsToolNotOffered);
     const passedReps = scored.filter((r) => r.passed).length;
     return {
       id,
@@ -892,6 +892,42 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         continue;
       }
 
+      // Stage-2 scopes each turn's tool surface to the retrieved skills'
+      // whitelists, so a retrieval miss can remove the tool a scenario needs.
+      // The turn then cannot make the graph change either, so BOTH the
+      // trajectory and outcome verdicts red out — for a turn the model had no
+      // way to complete. Observed live: "Put down that we went with
+      // event-based cache clearing, Priya's call" retrieved Node Deletion, so
+      // the surface carried delete/search tools and no create_node (#2240).
+      //
+      // Excluded on the same grounds as a degenerate empty generation: the
+      // assertion was unreachable, so neither verdict is a statement about the
+      // model. Still recorded, so the rate stays visible.
+      const required = fixture.requiredTools?.(scenario) ?? [];
+      const offeredTools = scored.toolsOffered
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const missingTools = required.filter((t) => !offeredTools.includes(t));
+      if (missingTools.length > 0 && offeredTools.length > 0) {
+        results.push({
+          id: scenario.id,
+          scenario: scenario.scenario,
+          prompt: scenario.prompt,
+          passed: false,
+          failure:
+            `excluded: asserted tool(s) ${missingTools.join(", ")} were never ` +
+            `offered this turn (Stage-2 routing scoped to: ${offeredTools.join(", ")})`,
+          turns: [...priorTurns, scored],
+          extra: fixture.extra?.(scenario, [scored]),
+          excludedAsToolNotOffered: true,
+        });
+        console.error(
+          `[${fixture.name}]   ⊘ excluded (tool not offered: ${missingTools.join(", ")}) ${scored.latencyMs}ms`,
+        );
+        continue;
+      }
+
       // The trajectory assertions still run, but they no longer decide the
       // score when the fixture grades on outcome — they are recorded as a
       // diagnostic. Trajectory answers "how did the model get there", which
@@ -900,7 +936,7 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
       const trajectory = fixture.score(scenario, [scored]);
       const verdict =
         fixture.graph && diff
-          ? fixture.graph.scoreOutcome(scenario, diff)
+          ? fixture.graph.scoreOutcome(scenario, diff, [scored])
           : trajectory;
 
       results.push({

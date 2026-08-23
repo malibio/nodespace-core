@@ -21,6 +21,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertEndState,
+  turnAskedForClarification,
   populatedCount,
   nodeSatisfies,
   valueMatches,
@@ -491,5 +492,72 @@ describe("the disagreements that motivated outcome grading", () => {
     test("a read that never searched leaves no end-state trace, by construction", () => {
       expect(assertEndState({ expectNoWrites: true }, NOTHING).passed).toBe(true);
     });
+  });
+});
+
+describe("clarifyOk", () => {
+  const empty: GraphDiff = {
+    addedNodes: [],
+    changedNodes: [],
+    addedEdges: [],
+    addedSchemas: [],
+  };
+  const wantWrite: EndState = {
+    clarifyOk: true,
+    createdNode: { contentMatches: "harbour" },
+  };
+  const notAction = (t: string) => t === "route_clarify";
+
+  test("credits a turn that called route_clarify", () => {
+    const asked = turnAskedForClarification(["route_clarify"], "Which one?", notAction);
+    expect(assertEndState(wantWrite, empty, asked).passed).toBe(true);
+  });
+
+  test("credits a no-action turn whose reply asks a question", () => {
+    const asked = turnAskedForClarification([], "What is the start date?", notAction);
+    expect(assertEndState(wantWrite, empty, asked).passed).toBe(true);
+  });
+
+  test("does NOT credit a clarification when the scenario did not opt in", () => {
+    const asked = turnAskedForClarification([], "What is the start date?", notAction);
+    const want: EndState = { createdNode: { contentMatches: "harbour" } };
+    expect(assertEndState(want, empty, asked).passed).toBe(false);
+  });
+
+  test("does NOT credit a silent no-op — a question mark is required", () => {
+    const asked = turnAskedForClarification([], "Done.", notAction);
+    expect(asked).toBe(false);
+    expect(assertEndState(wantWrite, empty, asked).passed).toBe(false);
+  });
+
+  test("does NOT credit a turn that acted and merely ended on a question", () => {
+    // The write happened; a trailing question must not convert a wrong
+    // outcome into a pass.
+    const asked = turnAskedForClarification(
+      ["create_node"],
+      "Created it. Anything else?",
+      notAction,
+    );
+    expect(asked).toBe(false);
+  });
+
+  test("a correct write still passes when clarifyOk is set", () => {
+    const diff: GraphDiff = {
+      ...empty,
+      addedNodes: [
+        { id: "n1", type: "planning_cycle", content: "Harbour", properties: {} },
+      ],
+    };
+    const asked = turnAskedForClarification(["create_node"], "Created.", notAction);
+    expect(assertEndState(wantWrite, diff, asked).passed).toBe(true);
+  });
+
+  test("an uncapturable snapshot still reports the environment fault", () => {
+    // clarifyOk must not mask a dead daemon: the capture error is the more
+    // important signal and is checked first.
+    const broken: GraphDiff = { ...empty, captureError: "daemon gone" };
+    const v = assertEndState(wantWrite, broken, false);
+    expect(v.passed).toBe(false);
+    expect(v.failure).toContain("could not be captured");
   });
 });
