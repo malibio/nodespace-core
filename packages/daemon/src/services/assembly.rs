@@ -287,11 +287,14 @@ async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
 
 /// Resolve the NLP model path without loading it. Returns `None` when absent.
 ///
-/// Deliberately reads the REAL home rather than [`crate::nodespace_dir`], unlike
-/// the config path above. Two reasons: models are multi-GB, read-only, and meant
-/// to be shared across instances — an isolated daemon should reuse them, not
-/// demand its own copy — and `NODESPACED_MODEL_PATH` already provides an
-/// override for a run that genuinely needs a different file.
+/// Always `~/.nodespace/models` by default, reading the REAL home rather than
+/// [`crate::nodespace_dir`] — deliberately unlike the config path above.
+///
+/// That directory is the shared model store: read-only, and large enough that
+/// sharing is the whole point (a dev machine mid-evaluation held 9 GGUFs
+/// totalling 39 GB). An isolated daemon should reuse them, not start from an
+/// empty directory and re-download. `NODESPACED_MODEL_PATH` overrides it for a
+/// run that genuinely needs a different file.
 ///
 /// The config path is not analogous: `daemon.toml` is WRITTEN to (the routing
 /// probe caches verdicts there), so resolving it against the real home let an
