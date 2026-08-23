@@ -15,6 +15,7 @@ import { readEnv, ENV_USAGE, REPO_ROOT, type EvalEnv } from "./env.ts";
 import { captureSnapshot, diffSnapshots } from "./graph.ts";
 import {
   abortOnEnvironment,
+  awaitSkillIndex,
   preflight,
   readDaemonStatus,
   readGuidanceProvenance,
@@ -737,6 +738,15 @@ function gate(fixture: EvalFixture, env: EvalEnv): DaemonStatus {
   try {
     const s = readDaemonStatus(env);
     preflight(env, s);
+    // Runs after the checks above and before any scenario: embeddings are
+    // generated on a ~30s debounce, so a daemon freshly started against a
+    // purged database — which is exactly what the documented `--between-runs`
+    // command produces before every rep — serves its first turns with an EMPTY
+    // skill index. Those turns fail open to the full tool surface with no skill
+    // guidance, and the resulting malformed write cascades through the rest of
+    // its group. Waiting here costs seconds once; not waiting silently reds out
+    // whichever group happens to run first.
+    awaitSkillIndex(env);
     return s;
   } catch (e) {
     if (e instanceof EnvironmentError) abortOnEnvironment(fixture.name, e);

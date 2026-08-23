@@ -161,6 +161,123 @@ export function readDaemonStatus(env: EvalEnv): DaemonStatus {
 }
 
 /**
+ * How many seeded skills must be semantically retrievable before scoring.
+ *
+ * All eight, not "at least one": a partially-populated index is the same defect
+ * in a quieter form. Stage-2 scopes the tool surface to the retrieved skills'
+ * whitelists, so a run where `Graph Editing` alone is missing scores every
+ * update scenario against a surface with no `update_node`.
+ */
+const SEEDED_SKILL_COUNT = 8;
+
+/** How long to wait for the skill index, and how often to re-probe. */
+const SKILL_INDEX_TIMEOUT_MS = 120_000;
+const SKILL_INDEX_POLL_MS = 3_000;
+
+/**
+ * Number of seeded skill nodes that are semantically retrievable right now.
+ *
+ * Counts via a `--type skill` semantic search rather than a plain node count:
+ * the question is not whether the rows exist (they are inserted synchronously
+ * at startup) but whether they carry EMBEDDINGS, which is what skill retrieval
+ * actually queries. A type-only enumeration returns all eight the instant the
+ * daemon boots and would wave through exactly the broken state this detects.
+ */
+function retrievableSkillCount(env: EvalEnv): number {
+  const r = Bun.spawnSync(
+    [
+      env.nsBin,
+      "--socket",
+      env.socket,
+      "--json",
+      "search",
+      "update an existing node",
+      "--type",
+      "skill",
+      "--threshold",
+      "0.01",
+      "--limit",
+      String(SEEDED_SKILL_COUNT),
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) return 0;
+  try {
+    const parsed = JSON.parse(r.stdout.toString()) as { count?: number };
+    return parsed.count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Block until the seeded skills are semantically retrievable.
+ *
+ * Embeddings are generated on a **30-second debounce** (`EmbeddingService`'s
+ * `debounce_duration_secs`), so a daemon started against a purged database
+ * serves turns for half a minute with an EMPTY skill index. Stage-1 still emits
+ * a query, retrieval returns nothing, and `stage2_tools` fails open to the full
+ * tool surface with no skill guidance injected — the daemon logs
+ * `candidates=0 routed_skills=`.
+ *
+ * Measured cost of not waiting, on the locked model: the first turn of a fresh
+ * chain got 13 tools and no guidance, emitted a `create_schema` call missing the
+ * required top-level `name`, and failed twice. The following turns then
+ * cascaded — `create_node` naming a type that was never created, `update_node`
+ * inventing an id — so a single cold first turn reds out an entire group. The
+ * same chain passes end to end once the index is populated.
+ *
+ * This is why the check waits rather than failing: the condition resolves
+ * itself, and the documented setup (`--between-runs` purging the database and
+ * restarting the daemon) re-creates it before EVERY rep. A gate that only
+ * reported it would make each rep a manual retry.
+ */
+export function awaitSkillIndex(
+  env: EvalEnv,
+  timeoutMs: number = SKILL_INDEX_TIMEOUT_MS,
+  // Injected so the wait/timeout logic is testable without a daemon: the
+  // interesting behaviour is "waits for a late index, gives up on one that
+  // never arrives", and neither is expressible against a live process.
+  probe: (env: EvalEnv) => number = retrievableSkillCount,
+  sleep: (ms: number) => void = (ms) => Bun.sleepSync(ms),
+  now: () => number = Date.now,
+): void {
+  const started = now();
+  let count = probe(env);
+  if (count >= SEEDED_SKILL_COUNT) return;
+
+  console.error(
+    `[preflight] Skill index not ready (${count}/${SEEDED_SKILL_COUNT} retrievable). ` +
+      `Embeddings run on a ~30s debounce; waiting so turns are not scored against ` +
+      `an empty index.`,
+  );
+
+  while (now() - started < timeoutMs) {
+    sleep(SKILL_INDEX_POLL_MS);
+    count = probe(env);
+    if (count >= SEEDED_SKILL_COUNT) {
+      console.error(
+        `[preflight] Skill index ready (${count}/${SEEDED_SKILL_COUNT}) after ` +
+          `${Math.round((now() - started) / 1000)}s.`,
+      );
+      return;
+    }
+  }
+
+  throw new EnvironmentError(
+    `Only ${count} of ${SEEDED_SKILL_COUNT} seeded skills are semantically retrievable ` +
+      `after ${Math.round(timeoutMs / 1000)}s, so Stage-2 routing would score against an ` +
+      `incomplete skill index.\n` +
+      `  Retrieval scopes the tool surface: a missing skill means its tools are never ` +
+      `offered, and the turn reds out for "not calling" a tool it was never given.`,
+    `Confirm the embedding worker is running and the database is the seeded one:\n` +
+      `    sqlite3 <db> "SELECT n.node_type, COUNT(DISTINCT e.node_id) FROM node n\n` +
+      `      LEFT JOIN embedding e ON e.node_id=n.id WHERE n.node_type='skill' GROUP BY 1"\n` +
+      `  An empty embedding table with 8 skill rows means the worker never ran.`,
+  );
+}
+
+/**
  * The database file the daemon resolved to serve.
  *
  * Read from the daemon rather than inferred from the environment because the
