@@ -675,70 +675,90 @@ async fn filterless_search_honours_sorting() {
     );
 }
 
-/// A sorted search that ALSO carries a keyword still finds and orders its
-/// matches.
+/// A keyword means the same thing whether or not the search is sorted, EVEN
+/// when the type's title is built from a template rather than from content.
 ///
-/// This is the one call shape the sorting fix changes the behavior of. Routing
-/// a sorted filterless search to `QueryService` means its keyword becomes a
-/// CONTENT filter, where the unsorted path uses a TITLE filter — `QueryService`
-/// has no title path. For nodes created through `create_node` the two coincide
-/// (the title is derived from the content), so the keyword still narrows; this
-/// pins that, because a keyword that quietly matched nothing would turn the fix
-/// into a different silent-wrong-answer bug.
+/// Sorting changes which backend runs the search, so the keyword must not
+/// change meaning across that boundary. Both paths filter on TITLE, and this
+/// pins that with the fixture where title and content genuinely DIVERGE: a
+/// `title_template` builds the title from properties, so `compute_title` never
+/// falls back to the content. Matching content on the sorted path here returned
+/// ZERO of two real matches while reporting success — the dropped-`sorting` bug
+/// traded for a dropped-keyword one.
+///
+/// A schema with no template cannot catch that: title is derived from content
+/// there, so the two filters coincide and the test passes either way.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_sorted_search_still_narrows_by_keyword() {
+async fn a_keyword_means_the_same_sorted_or_not_under_a_title_template() {
     let (executor, _tmp) = make_executor().await;
 
+    // The title comes from `venue`; the content deliberately shares no word
+    // with it, so a content-matching search finds NONE of these nodes.
     let schema = call(
         &executor,
         "create_schema",
         json!({
-            "name": "Feature Write-up",
-            "fields": [{"name": "estimated_days", "type": "number"}],
+            "name": "Booking",
+            "fields": [
+                {"name": "venue", "type": "text"},
+                {"name": "head_count", "type": "number"},
+            ],
+            "title_template": "{venue} hall",
         }),
     )
     .await;
-    let writeup_type = schema["schemaId"].as_str().unwrap().to_string();
+    let booking_type = schema["schemaId"].as_str().unwrap().to_string();
 
-    // The node with the LARGEST estimate does not match the keyword, so
-    // "narrowed then sorted" and "sorted, keyword ignored" differ.
-    for (title, days) in [
-        ("payments retry", 5),
-        ("payments ledger", 12),
-        ("search indexer", 30),
-    ] {
+    // The largest head_count does NOT match the keyword, so "narrowed then
+    // sorted" and "sorted with the keyword dropped" name different nodes.
+    for (venue, head_count) in [("payments", 40), ("payments", 120), ("indexer", 300)] {
         call(
             &executor,
             "create_node",
             json!({
-                "content": title,
-                "node_type": writeup_type,
-                "field_values": {"estimated_days": days},
+                "content": "body text sharing no word with the title",
+                "node_type": booking_type,
+                "field_values": {"venue": venue, "head_count": head_count},
             }),
         )
         .await;
     }
 
-    let found = call(
+    let unsorted = call(
+        &executor,
+        "search_nodes",
+        json!({"query": "payments", "node_type": booking_type, "limit": 10}),
+    )
+    .await;
+    assert_eq!(
+        unsorted["count"], 2,
+        "the unsorted keyword search must match both `payments hall` bookings \
+         before the sorted one is meaningful to compare against: {unsorted:?}"
+    );
+
+    let sorted = call(
         &executor,
         "search_nodes",
         json!({
             "query": "payments",
-            "node_type": writeup_type,
-            "sorting": [{"field": "estimated_days", "direction": "desc"}],
-            "limit": 1,
+            "node_type": booking_type,
+            "sorting": [{"field": "head_count", "direction": "desc"}],
+            "limit": 10,
         }),
     )
     .await;
+    assert_eq!(
+        sorted["count"], 2,
+        "adding `sorting` must not change WHICH nodes a keyword matches. Zero \
+         here means the sorted path matched on content instead of title, \
+         silently dropping both real matches while reporting success: {sorted:?}"
+    );
 
-    let text = serde_json::to_string(&found).unwrap();
+    // And having matched the right two, it orders them.
+    let top = serde_json::to_string(&sorted["nodes"][0]).unwrap();
     assert!(
-        text.contains("payments ledger"),
-        "a keyword search sorted descending by `estimated_days` must return the \
-         12-day `payments ledger` — the largest node that MATCHES. Getting \
-         `search indexer` means the keyword was dropped; getting nothing means \
-         the keyword stopped matching when the call routed through \
-         QueryService: {found:?}"
+        top.contains("120"),
+        "the 120-head_count booking must sort ahead of the 40 one: {sorted:?}"
     );
 }
 
@@ -855,5 +875,75 @@ async fn scenario_13_ideal_lookup_then_write_is_accepted() {
         persisted >= 1,
         "the ideal update reported {persisted} persisted properties — scenario \
          13's minProperties clause could not be satisfied by any model: {updated:?}"
+    );
+}
+
+/// A sorted search with NO `node_type` orders by the real property values.
+///
+/// Sorting now routes a filterless search to `QueryService`, which makes the
+/// typeless shape — `query: "*"` and no type, the plainest "sort everything by
+/// X" a model can write — newly reachable. Under a wildcard the properties
+/// namespace differs row by row, so a fixed `$.<field>` path is NULL for EVERY
+/// row. SQL still ORDERs and LIMITs on that NULL key, and the in-Rust re-sort
+/// only ever sees what survived the LIMIT: measured at `limit: 3`, the three
+/// seeded nodes were cut entirely and three unrelated schema-registry rows came
+/// back reported as a success.
+///
+/// The small limit is the whole point — a limit large enough to admit every row
+/// hides this, because then the re-sort receives the full set and repairs the
+/// order after the fact.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_typeless_sorted_search_orders_by_the_property() {
+    let (executor, _tmp) = make_executor().await;
+
+    let schema = call(
+        &executor,
+        "create_schema",
+        json!({
+            "name": "Feature Write-up",
+            "fields": [{"name": "estimated_days", "type": "number"}],
+        }),
+    )
+    .await;
+    let writeup_type = schema["schemaId"].as_str().unwrap().to_string();
+
+    for (title, days) in [("small", 4), ("mid", 9), ("large", 21)] {
+        call(
+            &executor,
+            "create_node",
+            json!({
+                "content": title,
+                "node_type": writeup_type,
+                "field_values": {"estimated_days": days},
+            }),
+        )
+        .await;
+    }
+
+    // No `node_type`, and a limit smaller than the total row count.
+    let found = call(
+        &executor,
+        "search_nodes",
+        json!({
+            "query": "*",
+            "sorting": [{"field": "estimated_days", "direction": "desc"}],
+            "limit": 3,
+        }),
+    )
+    .await;
+
+    let text = serde_json::to_string(&found).unwrap();
+    assert!(
+        text.contains("large") && text.contains("mid") && text.contains("small"),
+        "a typeless sorted search must rank the seeded nodes by their real \
+         `estimated_days`. Missing them means the wildcard ORDER BY key was \
+         NULL for every row, so LIMIT cut the matches before any re-sort could \
+         restore them — and the call still reported success: {found:?}"
+    );
+
+    let top = serde_json::to_string(&found["nodes"][0]).unwrap();
+    assert!(
+        top.contains("large"),
+        "the 21-day node must sort first under `desc`: {found:?}"
     );
 }
