@@ -532,34 +532,23 @@ async fn scenario_12_ideal_comparative_chain_is_accepted_and_the_read_carries_th
 }
 
 /// The OTHER route to scenario 12's answer — sort descending, take one — is
-/// accepted, BUT ONLY WITH A FILTER PRESENT.
+/// accepted, with no filter needed.
 ///
 /// 12 is scored on its end state, so both routes must reach it or the scenario
 /// silently penalises the better one. Enumerate-then-compare (proved above)
 /// puts the comparison in the model; `sorting` + `limit: 1` pushes it into the
 /// query. The second is arguably the stronger answer.
 ///
-/// THE FILTER IN THIS CALL IS LOAD-BEARING, AND IT IS COMPENSATING FOR A BUG.
-/// `run_node_query` (tools.rs, the `if filters.is_empty()` branch) routes a
-/// filterless search to `node_ops::query_nodes`, which is never passed
-/// `sorting` — so the argument is accepted and then silently DROPPED. Measured
-/// here: the same call without `"filters"` returns the 9-day node while
-/// reporting success, because that is simply the first row. A model asking for
-/// "the biggest" that way is told the wrong node with no error to notice.
-/// `filters` routes to `QueryService` instead, which honours sorting; the
-/// `gt 0` predicate is true of every instance and exists only to reach that
-/// branch.
-///
-/// That silent drop is a production bug, not a fixture defect, and it is
-/// deliberately NOT fixed here — see #2249. Scenario
-/// 12 stays winnable regardless because enumerate-then-compare works and is the
-/// route its diagnostic names. This test pins the workaround so that when the
-/// bug is fixed, the filter can be removed and this test will still pass.
+/// The call carried a `gt 0` predicate that was true of every instance and
+/// existed only to route around a bug: a filterless search dropped `sorting`
+/// on the floor. `run_node_query` now routes on the presence of `sorting`
+/// rather than on filters alone, so the plain phrasing — the one a model
+/// actually reaches for — works, and the compensating filter is gone.
 ///
 /// Asserts the top result is the 21-day instance specifically, not merely that
 /// something came back: a sort that silently ignored its direction would return
 /// a different node and still look like a working call — which is exactly how
-/// the bug above hid.
+/// the bug hid.
 #[tokio::test(flavor = "multi_thread")]
 async fn scenario_12_sorted_single_result_route_is_also_accepted() {
     let (executor, _tmp) = make_executor().await;
@@ -601,7 +590,6 @@ async fn scenario_12_sorted_single_result_route_is_also_accepted() {
         json!({
             "query": "*",
             "node_type": writeup_type,
-            "filters": [{"property": "estimated_days", "operator": "gt", "value": 0}],
             "sorting": [{"field": "estimated_days", "direction": "desc"}],
             "limit": 1,
         }),
@@ -618,28 +606,24 @@ async fn scenario_12_sorted_single_result_route_is_also_accepted() {
     );
 }
 
-/// CHARACTERIZES A BUG: `sorting` is silently ignored when `filters` is empty.
+/// REGRESSION: a filterless search must honour `sorting`.
 ///
-/// Surfaced by the scenario 12 winnability audit; tracked as #2249. `run_node_query` in
-/// `packages/agent/src/local_agent/tools.rs` branches on `filters.is_empty()`:
-/// the filterless branch calls `node_ops::query_nodes`, whose input struct has
-/// no sorting field at all, so the argument is parsed, accepted, and dropped.
-/// The filtered branch routes to `query_ops::execute_query`, which honours it.
+/// `run_node_query` used to branch on `filters.is_empty()` alone, and the
+/// filterless branch calls `node_ops::query_nodes`, whose input struct has no
+/// sorting field at all — so the argument was parsed, accepted, and dropped.
+/// It now routes on the presence of `sorting` too, reaching
+/// `query_ops::execute_query`, which honours it.
 ///
-/// The failure mode is the dangerous kind: no error, no warning, a plausible
-/// node returned. A model that asks for "the longest-running one" via
-/// `sorting: [{estimated_days, desc}], limit: 1` is handed whichever row came
-/// first and has no way to tell it was not sorted. Asking for a superlative is
+/// The old failure mode was the dangerous kind: no error, no warning, a
+/// plausible node returned. A model that asks for "the longest-running one" via
+/// `sorting: [{estimated_days, desc}], limit: 1` was handed whichever row came
+/// first and had no way to tell it was not sorted. Asking for a superlative is
 /// a natural way to answer a comparative question, so this is reachable from
-/// ordinary phrasing rather than an exotic call shape.
-///
-/// This test asserts the CURRENT (wrong) behavior deliberately, so the bug is
-/// pinned rather than merely known. When it is fixed, this test will fail —
-/// that is the intent. Replace the assertion with the 21-day expectation and
-/// drop the compensating filter from
-/// `scenario_12_sorted_single_result_route_is_also_accepted`.
+/// ordinary phrasing rather than an exotic call shape — which is why the
+/// assertion below names the 21-day node rather than merely checking that
+/// something came back.
 #[tokio::test(flavor = "multi_thread")]
-async fn filterless_search_silently_ignores_sorting() {
+async fn filterless_search_honours_sorting() {
     let (executor, _tmp) = make_executor().await;
 
     let schema = call(
@@ -683,13 +667,78 @@ async fn filterless_search_silently_ignores_sorting() {
 
     let text = serde_json::to_string(&found).unwrap();
     assert!(
-        text.contains("small") && !text.contains("large"),
-        "BUG FIXED? This test pins the CURRENT wrong behavior: a filterless \
-         search drops `sorting`, so descending-by-estimate returns the 4-day \
-         node rather than the 21-day one. Getting 'large' here means sorting is \
-         now honoured on the filterless path — good. Update this test to assert \
-         the correct result and remove the compensating `filters` argument from \
-         scenario_12_sorted_single_result_route_is_also_accepted: {found:?}"
+        text.contains("large") && !text.contains("small"),
+        "a filterless search sorted descending by `estimated_days` with \
+         `limit: 1` must return the 21-day node. Getting the 4-day node means \
+         `sorting` is being dropped again — the call reports success either \
+         way, so nothing else would catch it: {found:?}"
+    );
+}
+
+/// A sorted search that ALSO carries a keyword still finds and orders its
+/// matches.
+///
+/// This is the one call shape the sorting fix changes the behavior of. Routing
+/// a sorted filterless search to `QueryService` means its keyword becomes a
+/// CONTENT filter, where the unsorted path uses a TITLE filter — `QueryService`
+/// has no title path. For nodes created through `create_node` the two coincide
+/// (the title is derived from the content), so the keyword still narrows; this
+/// pins that, because a keyword that quietly matched nothing would turn the fix
+/// into a different silent-wrong-answer bug.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sorted_search_still_narrows_by_keyword() {
+    let (executor, _tmp) = make_executor().await;
+
+    let schema = call(
+        &executor,
+        "create_schema",
+        json!({
+            "name": "Feature Write-up",
+            "fields": [{"name": "estimated_days", "type": "number"}],
+        }),
+    )
+    .await;
+    let writeup_type = schema["schemaId"].as_str().unwrap().to_string();
+
+    // The node with the LARGEST estimate does not match the keyword, so
+    // "narrowed then sorted" and "sorted, keyword ignored" differ.
+    for (title, days) in [
+        ("payments retry", 5),
+        ("payments ledger", 12),
+        ("search indexer", 30),
+    ] {
+        call(
+            &executor,
+            "create_node",
+            json!({
+                "content": title,
+                "node_type": writeup_type,
+                "field_values": {"estimated_days": days},
+            }),
+        )
+        .await;
+    }
+
+    let found = call(
+        &executor,
+        "search_nodes",
+        json!({
+            "query": "payments",
+            "node_type": writeup_type,
+            "sorting": [{"field": "estimated_days", "direction": "desc"}],
+            "limit": 1,
+        }),
+    )
+    .await;
+
+    let text = serde_json::to_string(&found).unwrap();
+    assert!(
+        text.contains("payments ledger"),
+        "a keyword search sorted descending by `estimated_days` must return the \
+         12-day `payments ledger` — the largest node that MATCHES. Getting \
+         `search indexer` means the keyword was dropped; getting nothing means \
+         the keyword stopped matching when the call routed through \
+         QueryService: {found:?}"
     );
 }
 

@@ -1991,7 +1991,15 @@ impl GraphToolExecutor {
         // matches, silently returning zero results.
         let query = search_ops::normalize_enumerate_query(&query);
 
-        let output = if filters.is_empty() {
+        // `sorting` is only honoured by the QueryService path, so a sorted
+        // request routes there even with no property filters. Sending it down
+        // the `query_nodes` branch instead would accept the argument, drop it,
+        // and hand back an arbitrary row reported as a success — the shape a
+        // model reads as "the largest one" when asking for a superlative via
+        // `sorting` + `limit: 1`.
+        let sorted = sorting.as_ref().is_some_and(|s| !s.is_empty());
+
+        let output = if filters.is_empty() && !sorted {
             // Title/type listing: only `node_ops::query_nodes` filters by title.
             let filters = query.map(|q| {
                 vec![node_ops::QueryFilterItem {
@@ -2019,7 +2027,10 @@ impl GraphToolExecutor {
         } else {
             // Typed property query: route through QueryService (SQL json_extract).
             // A non-empty title keyword is added as a content filter alongside the
-            // property predicates (QueryService has no title path).
+            // property predicates (QueryService has no title path) — which is also
+            // why a filterless search only comes here when it is sorted: matching
+            // on content rather than title is a real difference, and it is worth
+            // paying only to make the requested ordering actually happen.
             let mut filters = filters;
             if let Some(q) = query {
                 filters.push(query_ops::AgentFilterItem {
