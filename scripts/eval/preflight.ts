@@ -163,27 +163,27 @@ export function readDaemonStatus(env: EvalEnv): DaemonStatus {
 /**
  * How many seeded skills must be semantically retrievable before scoring.
  *
- * All eight, not "at least one": a partially-populated index is the same defect
- * in a quieter form. Stage-2 scopes the tool surface to the retrieved skills'
- * whitelists, so a run where `Graph Editing` alone is missing scores every
- * update scenario against a surface with no `update_node`.
+ * EVERY seeded skill, not "at least one": a partially-populated index is the
+ * same defect in a quieter form. Stage-2 scopes the tool surface to the
+ * retrieved skills' whitelists, so a run where `Graph Editing` alone is missing
+ * scores every update scenario against a surface with no `update_node`.
+ *
+ * Read from the database rather than hardcoded. The seed list lives in Rust
+ * (`skill_pipeline::seed_skill_nodes`) and this harness cannot import it, so a
+ * literal here would silently under-wait the day a ninth skill is added — the
+ * gate would pass with the new skill unembedded, which is exactly the state it
+ * exists to prevent. Counting the rows is self-maintaining: they are inserted
+ * synchronously at daemon startup, so they are all present well before any of
+ * them is embedded.
  */
-const SEEDED_SKILL_COUNT = 8;
+const FALLBACK_SEEDED_SKILL_COUNT = 8;
 
 /** How long to wait for the skill index, and how often to re-probe. */
 const SKILL_INDEX_TIMEOUT_MS = 120_000;
 const SKILL_INDEX_POLL_MS = 3_000;
 
-/**
- * Number of seeded skill nodes that are semantically retrievable right now.
- *
- * Counts via a `--type skill` semantic search rather than a plain node count:
- * the question is not whether the rows exist (they are inserted synchronously
- * at startup) but whether they carry EMBEDDINGS, which is what skill retrieval
- * actually queries. A type-only enumeration returns all eight the instant the
- * daemon boots and would wave through exactly the broken state this detects.
- */
-function retrievableSkillCount(env: EvalEnv): number {
+/** Run a `--type skill` search and return the result count, or `null` on error. */
+function skillSearchCount(env: EvalEnv, query: string, limit: number): number | null {
   const r = Bun.spawnSync(
     [
       env.nsBin,
@@ -191,23 +191,53 @@ function retrievableSkillCount(env: EvalEnv): number {
       env.socket,
       "--json",
       "search",
-      "update an existing node",
+      query,
       "--type",
       "skill",
       "--threshold",
       "0.01",
       "--limit",
-      String(SEEDED_SKILL_COUNT),
+      String(limit),
     ],
     { stdout: "pipe", stderr: "pipe" },
   );
-  if (r.exitCode !== 0) return 0;
+  if (r.exitCode !== 0) return null;
   try {
     const parsed = JSON.parse(r.stdout.toString()) as { count?: number };
     return parsed.count ?? 0;
   } catch {
-    return 0;
+    return null;
   }
+}
+
+/**
+ * How many skill nodes exist, regardless of whether they are embedded yet.
+ *
+ * An empty query with `--type skill` enumerates by type, which does NOT depend
+ * on embeddings — the rows are inserted synchronously at daemon startup. That
+ * is what makes it usable as the denominator: it is known correct immediately,
+ * while the numerator below is what has to catch up.
+ *
+ * Falls back to the known seed count if the enumeration fails, so a CLI hiccup
+ * degrades to today's behaviour rather than waving the gate through with a
+ * denominator of zero.
+ */
+function seededSkillCount(env: EvalEnv): number {
+  const count = skillSearchCount(env, "", 100);
+  return count === null || count === 0 ? FALLBACK_SEEDED_SKILL_COUNT : count;
+}
+
+/**
+ * Number of seeded skill nodes that are semantically retrievable right now.
+ *
+ * Counts via a semantic `--type skill` search rather than a plain node count:
+ * the question is not whether the rows exist (they are inserted synchronously
+ * at startup) but whether they carry EMBEDDINGS, which is what skill retrieval
+ * actually queries. A type-only enumeration returns every skill the instant the
+ * daemon boots and would wave through exactly the broken state this detects.
+ */
+function retrievableSkillCount(env: EvalEnv, limit: number): number {
+  return skillSearchCount(env, "update an existing node", limit) ?? 0;
 }
 
 /**
@@ -238,16 +268,19 @@ export function awaitSkillIndex(
   // Injected so the wait/timeout logic is testable without a daemon: the
   // interesting behaviour is "waits for a late index, gives up on one that
   // never arrives", and neither is expressible against a live process.
-  probe: (env: EvalEnv) => number = retrievableSkillCount,
+  probe: (env: EvalEnv) => number = (e) => retrievableSkillCount(e, expected),
   sleep: (ms: number) => void = (ms) => Bun.sleepSync(ms),
   now: () => number = Date.now,
+  // Derived from the database by default (see `seededSkillCount`); injectable
+  // so the wait/timeout behaviour stays testable without a daemon.
+  expected: number = seededSkillCount(env),
 ): void {
   const started = now();
   let count = probe(env);
-  if (count >= SEEDED_SKILL_COUNT) return;
+  if (count >= expected) return;
 
   console.error(
-    `[preflight] Skill index not ready (${count}/${SEEDED_SKILL_COUNT} retrievable). ` +
+    `[preflight] Skill index not ready (${count}/${expected} retrievable). ` +
       `Embeddings run on a ~30s debounce; waiting so turns are not scored against ` +
       `an empty index.`,
   );
@@ -255,9 +288,9 @@ export function awaitSkillIndex(
   while (now() - started < timeoutMs) {
     sleep(SKILL_INDEX_POLL_MS);
     count = probe(env);
-    if (count >= SEEDED_SKILL_COUNT) {
+    if (count >= expected) {
       console.error(
-        `[preflight] Skill index ready (${count}/${SEEDED_SKILL_COUNT}) after ` +
+        `[preflight] Skill index ready (${count}/${expected}) after ` +
           `${Math.round((now() - started) / 1000)}s.`,
       );
       return;
@@ -265,7 +298,7 @@ export function awaitSkillIndex(
   }
 
   throw new EnvironmentError(
-    `Only ${count} of ${SEEDED_SKILL_COUNT} seeded skills are semantically retrievable ` +
+    `Only ${count} of ${expected} seeded skills are semantically retrievable ` +
       `after ${Math.round(timeoutMs / 1000)}s, so Stage-2 routing would score against an ` +
       `incomplete skill index.\n` +
       `  Retrieval scopes the tool surface: a missing skill means its tools are never ` +

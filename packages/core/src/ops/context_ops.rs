@@ -233,6 +233,14 @@ fn related_one_hop_schemas(
 /// (`custom:`-prefixed) — a core type reaching this block would make the
 /// model write a bare key onto a core type, the exact ADR-063 violation that
 /// guidance exists to prevent.
+fn parse_and_filter_non_core_schemas(results: Vec<(Node, f64)>) -> Vec<SchemaNode> {
+    results
+        .into_iter()
+        .filter_map(|(node, _score)| SchemaNode::from_node(node).ok())
+        .filter(|s| !s.is_core)
+        .collect()
+}
+
 /// Append any non-core schema the query names outright to the semantically
 /// retrieved set, skipping ones already present.
 ///
@@ -263,14 +271,6 @@ fn append_schemas_named_in_query(
         }
     }
     hits
-}
-
-fn parse_and_filter_non_core_schemas(results: Vec<(Node, f64)>) -> Vec<SchemaNode> {
-    results
-        .into_iter()
-        .filter_map(|(node, _score)| SchemaNode::from_node(node).ok())
-        .filter(|s| !s.is_core)
-        .collect()
 }
 
 /// Build the embedding query for schema retrieval from conversation context.
@@ -403,40 +403,42 @@ pub async fn build_workspace_context(
     // token-boundary matcher, for the same reason. Core schemas stay excluded
     // (as they are from the semantic path via `parse_and_filter_non_core_schemas`),
     // and dedup keeps a hit found by both signals from being injected twice.
-    let retrieved_hits = match query.filter(|q| !q.trim().is_empty()) {
-        Some(q) => match node_service.get_all_schemas().await {
-            Ok(all_schemas) => append_schemas_named_in_query(retrieved_hits, &all_schemas, q),
-            Err(e) => {
-                tracing::warn!(error = %e, "workspace_context: could not fetch schemas for the lexical backstop");
-                retrieved_hits
-            }
-        },
-        None => retrieved_hits,
+    // The schema corpus, fetched ONCE and shared by both consumers below: the
+    // lexical backstop needs it to match names, and the hydration step needs it
+    // in full anyway (incoming reachability depends on schemas outside the
+    // retrieved set). Two separate `get_all_schemas()` awaits here meant two
+    // full-table reads per turn where one serves.
+    let all_schemas = match node_service.get_all_schemas().await {
+        Ok(schemas) => Some(schemas),
+        Err(e) => {
+            tracing::warn!(error = %e, "workspace_context: fetching the schema corpus failed; the lexical backstop and relationship hydration are both skipped this turn");
+            None
+        }
+    };
+
+    let retrieved_hits = match (query.filter(|q| !q.trim().is_empty()), &all_schemas) {
+        (Some(q), Some(schemas)) => append_schemas_named_in_query(retrieved_hits, schemas, q),
+        _ => retrieved_hits,
     };
 
     // Search results are raw storage nodes, and relationship declarations are
     // relationship-table rows rather than a `properties` key — so the parsed
     // hits carry no relationships. Re-resolve each hit (preserving relevance
-    // order) from the hydrated schema corpus, which the one-hop traversal below
-    // needs in full anyway (incoming reachability depends on schemas outside
-    // the retrieved set).
-    let (relevant_schemas, related_schemas) = if retrieved_hits.is_empty() {
-        (vec![], vec![])
-    } else {
-        match node_service.get_all_schemas().await {
-            Ok(all_schemas) => {
-                let relevant: Vec<SchemaNode> = retrieved_hits
-                    .iter()
-                    .filter_map(|hit| all_schemas.iter().find(|s| s.id == hit.id).cloned())
-                    .collect();
-                let related = related_one_hop_schemas(&relevant, &all_schemas);
-                (relevant, related)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "workspace_context: fetching schema corpus failed; using unhydrated retrieval hits and omitting related schemas");
-                (retrieved_hits, vec![])
-            }
+    // order) from the hydrated schema corpus.
+    let (relevant_schemas, related_schemas) = match (&all_schemas, retrieved_hits.is_empty()) {
+        (_, true) => (vec![], vec![]),
+        (Some(schemas), false) => {
+            let relevant: Vec<SchemaNode> = retrieved_hits
+                .iter()
+                .filter_map(|hit| schemas.iter().find(|s| s.id == hit.id).cloned())
+                .collect();
+            let related = related_one_hop_schemas(&relevant, schemas);
+            (relevant, related)
         }
+        // Corpus unavailable: fall back to the unhydrated retrieval hits rather
+        // than dropping them, and omit related schemas. Same behaviour as
+        // before, now expressed once instead of in a second error arm.
+        (None, false) => (retrieved_hits, vec![]),
     };
 
     Ok(WorkspaceContext {

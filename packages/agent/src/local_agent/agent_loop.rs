@@ -1183,17 +1183,35 @@ fn looks_like_narrated_tool_call(text: &str) -> bool {
             //     call:create_schema{fields:[{"friendlyName":"Status", …}]}
             //
             // A brace alone is NOT enough — "create_node {" appears in ordinary
-            // prose about JSON — so this additionally requires the prefix a
-            // narrated call carries (`call:`, `tool:`, `>>>`, or a bare
-            // line/text start immediately followed by the name). Without that,
-            // sentences merely quoting an argument shape would trip it.
+            // prose about JSON — so this additionally requires a MARKER prefix:
+            // a delimiter a narrated call carries and prose does not.
+            //
+            // Two earlier admissions were removed after they were shown to fire
+            // on correct answers, which is the expensive error here: a positive
+            // verdict DISCARDS the model's text and substitutes a confirmation
+            // request, so a false positive destroys a good reply.
+            //
+            //   `ends_with("call")` matched "call" as an ordinary English verb —
+            //   "To do this I would call create_node {…}" is a model correctly
+            //   explaining itself, and "Recall create_node {a}" matched too.
+            //
+            //   `is_empty()` fired on any response merely BEGINNING with a tool
+            //   name — "update_node {id, field_values} takes two arguments." is
+            //   documentation, not a call.
+            //
+            // Only the marker forms survive. `\n` stays because a narrated call
+            // on its own line is a real observed shape, and a line starting with
+            // a bare tool name followed by `{` is not something prose does.
+            // The newline test reads `before` UNTRIMMED: `trim_end()` strips the
+            // very character it looks for, so trimming first would make the
+            // own-line case unreachable.
+            let starts_its_own_line =
+                before.ends_with('\n') || before.trim_end_matches([' ', '\t']).ends_with('\n');
             let prefix = before.trim_end();
             let call_prefixed = prefix.ends_with("call:")
                 || prefix.ends_with("tool:")
-                || prefix.ends_with("call")
                 || prefix.ends_with(">>>")
-                || prefix.is_empty()
-                || prefix.ends_with('\n');
+                || starts_its_own_line;
             if after.starts_with('{') && call_prefixed {
                 return true;
             }
@@ -5677,8 +5695,26 @@ mod tests {
         assert!(looks_like_narrated_tool_call(
             "tool:update_node{\"id\":\"x\",\"field_values\":{}}"
         ));
-        // At the very start of the response, with no prefix at all.
+        // On its own line — a real observed shape, and one prose does not take.
         assert!(looks_like_narrated_tool_call(
+            "Here is what I'll run:\ncreate_node{\"content\":\"Review billing docs\"}"
+        ));
+    }
+
+    /// A bare `create_node{…}` at the very start of a response, with no marker
+    /// prefix at all, is deliberately NOT detected.
+    ///
+    /// It is not distinguishable from documentation —
+    /// "update_node {id, field_values} takes two arguments." has the identical
+    /// shape — and the two errors are not symmetric. Missing a narrated call
+    /// shows the user pseudo-code, which is bad but visible and recoverable.
+    /// A false positive DISCARDS a correct answer and replaces it with a
+    /// confirmation request, which is a silent regression on a working turn.
+    /// This detector's whole purpose is that a turn must not misreport what
+    /// happened, so it errs toward letting text through.
+    #[test]
+    fn narrated_tool_call_declines_an_unmarked_call_at_text_start() {
+        assert!(!looks_like_narrated_tool_call(
             r#"create_node{"content":"Review billing docs"}"#
         ));
     }
@@ -5693,6 +5729,32 @@ mod tests {
         ));
         assert!(!looks_like_narrated_tool_call(
             "The create_schema {fields} parameter is required."
+        ));
+    }
+
+    /// The brace branch's prefix test decides whether a CORRECT answer survives:
+    /// a positive verdict discards the model's text and substitutes a
+    /// confirmation request. These are the shapes an earlier version of that
+    /// test admitted — "call" as an ordinary English verb, and a response that
+    /// merely begins with a tool name.
+    #[test]
+    fn narrated_tool_call_ignores_call_as_an_english_verb() {
+        // `ends_with("call")` matched the verb in "I would call create_node {…}",
+        // which is a model correctly explaining what it is about to do.
+        assert!(!looks_like_narrated_tool_call(
+            "To do this I would call create_node {\"content\":\"Buy milk\"} but I need the id first."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "Recall create_node {a} is one option."
+        ));
+    }
+
+    #[test]
+    fn narrated_tool_call_ignores_a_response_that_merely_starts_with_a_tool_name() {
+        // `prefix.is_empty()` fired on any response beginning with the name, so
+        // a sentence documenting a tool's arguments was suppressed outright.
+        assert!(!looks_like_narrated_tool_call(
+            "update_node {id, field_values} takes two arguments."
         ));
     }
 

@@ -88,6 +88,8 @@ describe("awaitSkillIndex", () => {
         return 8;
       },
       noSleep,
+      undefined,
+      8,
     );
     expect(probes).toBe(1);
   });
@@ -104,6 +106,8 @@ describe("awaitSkillIndex", () => {
         () => {
           slept++;
         },
+        undefined,
+        8,
       ),
     ).not.toThrow();
     expect(slept).toBe(2);
@@ -122,8 +126,28 @@ describe("awaitSkillIndex", () => {
           t += 4_000;
         },
         () => t,
+        8,
       ),
     ).toThrow(/seeded skills are semantically retrievable/);
+  });
+
+  // The denominator is read from the database, not hardcoded, so adding a
+  // ninth skill cannot silently make the gate under-wait. A run whose index
+  // holds 8 of 9 must still be treated as not ready.
+  test("waits for every seeded skill, not a hardcoded eight", () => {
+    let t = 0;
+    expect(() =>
+      awaitSkillIndex(
+        env,
+        10_000,
+        () => 8,
+        () => {
+          t += 4_000;
+        },
+        () => t,
+        9,
+      ),
+    ).toThrow(/Only 8 of 9/);
   });
 
   test("treats a partially-populated index as not ready", () => {
@@ -140,6 +164,7 @@ describe("awaitSkillIndex", () => {
           t += 4_000;
         },
         () => t,
+        8,
       ),
     ).toThrow(/Only 7 of 8/);
   });

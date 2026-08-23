@@ -1025,7 +1025,8 @@ mod tests {
         // guidance for it is long and specific (enum shapes, title templates,
         // relationship-vs-field). Duplicating that whitelist onto an
         // instance-writing skill would offer the type-editing tools on ordinary
-        // record writes — the failure #2240 fixed, in the other direction.
+        // record writes — the same over-broad-surface failure as a deletion
+        // skill being retrieved for a creation request, in the other direction.
         // Schema Creation also retrieves reliably on "I want to track X"
         // phrasing, which is what actually precedes these calls.
         //
