@@ -826,6 +826,74 @@ describe("end-state fixture invariants", () => {
     expect(setupIds).toEqual(["11a", "11b", "12a", "12b", "12b2", "12c"]);
   });
 
+  // Scenario 13's whole design is that its referent lives ONLY in seeded state.
+  // A prompt that named the target incident, its type, or the on-call property
+  // would hand the model the answer and silently turn 13 back into the direct
+  // string match that cost scenarios 6 and 12 their indirection — the failure
+  // would look like a pass.
+  //
+  // Checks every prompt in the fixture, not just 13's: the leak that matters
+  // most is an unrelated scenario mentioning the seeded title, because that is
+  // the one nobody would think to look for.
+  test("no prompt names scenario 13's seeded target", () => {
+    // The TITLES and the type. None of these may appear in any prompt: naming
+    // the target's title hands the model the answer, and naming a sibling's or
+    // the type lets it enumerate instead of resolving.
+    const neverInAnyPrompt = [
+      "search index corruption",
+      "checkout latency spike",
+      "auth token expiry storm",
+      "incident_report",
+      "on_call",
+    ];
+    for (const s of all) {
+      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
+        for (const f of neverInAnyPrompt) {
+          expect(
+            p.toLowerCase().includes(f),
+            `scenario ${s.id}'s prompt names "${f}", which must exist only in ` +
+              `seeded state — naming it in a prompt makes scenario 13's ` +
+              `target recoverable without a lookup`,
+          ).toBe(false);
+        }
+      }
+    }
+
+    // The on-call VALUE is different in kind: scenario 13's own prompt must
+    // name it — that is the reference. What matters is that it identifies the
+    // target only via seeded state, so no OTHER scenario may mention it (which
+    // would put it in a shared chat's history) and 13 must actually use it.
+    const onCall = "rowan";
+    for (const s of all) {
+      if (s.id === "13") continue;
+      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
+        expect(
+          p.toLowerCase().includes(onCall),
+          `scenario ${s.id} names the on-call value "${onCall}", which only ` +
+            `scenario 13 may reference`,
+        ).toBe(false);
+      }
+    }
+    const s13 = all.find((s) => s.id === "13");
+    expect(s13).toBeDefined();
+    expect(s13!.prompt.toLowerCase()).toContain(onCall);
+  });
+
+  // 13 is the only scenario whose route is genuinely forced (its referent is
+  // absent from history, so it cannot be resolved without a read), and that is
+  // the only condition under which asserting a SUBSEQUENCE is honest. Pinning
+  // this stops a future scenario from reviving `toolSequence` on a turn where a
+  // direct write is also correct — the mistake #2242 removed from scenario 6
+  // and #2250 removed from 12d.
+  test("toolSequence is asserted only where the route is forced", () => {
+    const seqIds = all
+      .filter((s) => s.expect.kind === "toolSequence")
+      .map((s) => s.id)
+      .sort();
+    expect(seqIds).toEqual(["13"]);
+  });
+
+
   // The scenarios whose whole purpose is that a VALUE reached storage. If one
   // of these stops asserting a property, it reverts to passing on a bare shell
   // — the `property_count: 0` shape that reached production.

@@ -4143,6 +4143,172 @@ model = "model-b"
         }
     }
 
+    /// Matrix scenario 13's referent is absent from its rendered history.
+    ///
+    /// This is the test scenarios 6 and 12 could not have passed, and it is the
+    /// point of seeding 13's state out of band.
+    ///
+    /// 6 named "the five-day one" and #2242 found `estimated_days 5` and the id
+    /// both rendered inline. 12 named a comparative over three written values,
+    /// and #2250's review found the values themselves inline, so the ranking was
+    /// derivable without a read. Both failed for one underlying reason: every
+    /// scalar a scored turn writes is replayed by `terse_write_fact`, so a
+    /// referent the AGENT wrote is always in the prompt as literal text.
+    ///
+    /// 13's incident records are created through the CLI before the group's
+    /// first turn, never by a tool call. `completed_writes_from` only records a
+    /// turn's own tool executions, so none of that state reaches the rendered
+    /// prompt — which this test asserts directly, on the real renderer.
+    ///
+    /// The history modelled here is 13's actual shape: the scored turn is the
+    /// FIRST turn of its group, so the only thing preceding it is nothing at
+    /// all. The assertions are written against a history containing an
+    /// unrelated earlier exchange as well, which is the stricter case: it
+    /// proves the referent is absent even when history is non-empty, so the
+    /// negative assertions cannot pass merely because there is nothing to
+    /// search.
+    #[test]
+    fn scenario_13_seeded_referent_is_absent_from_history() {
+        let history = node_history_from_messages(vec![
+            user_turn("What can you do?"),
+            AiChatMessage {
+                role: "assistant".to_string(),
+                content: "I can help you track work in your graph.".to_string(),
+                timestamp: None,
+                reasoning: None,
+                completed_writes: vec![],
+                question: None,
+                options: Vec::new(),
+            },
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Positive: history rendered at all. Without this the negative
+        // assertions below would pass on an empty string, which is precisely
+        // the vacuous-pass trap that let scenario 12's proof look sound.
+        assert!(
+            rendered.contains("What can you do?"),
+            "the unrelated turn must render, or the absence assertions below \
+             prove nothing: {rendered}"
+        );
+
+        // Negative: nothing about the seeded incidents is in the prompt. Each
+        // of these is a separate route by which a model could shortcut the
+        // lookup, and all must be closed for 13 to measure decomposition.
+        for absent in [
+            // The on-call name the prompt refers to.
+            "rowan",
+            // The target's title — what `contentMatches` scores on.
+            "search index corruption",
+            // The other two seeded records: present in the graph, and their
+            // absence here is what makes the lookup discriminate rather than
+            // guess.
+            "checkout latency spike",
+            "auth token expiry storm",
+            // The seeded type. If this leaked, the model could enumerate by
+            // type without ever resolving the on-call property.
+            "incident_report",
+            // The property name the reference keys off.
+            "on_call",
+        ] {
+            assert!(
+                !rendered.to_lowercase().contains(absent),
+                "'{absent}' must NOT be in the rendered history — scenario 13's \
+                 referent is seeded out of band precisely so no part of it \
+                 reaches the prompt. A leak here means 13 has degraded into the \
+                 direct string match that cost scenarios 6 and 12 their \
+                 indirection: {rendered}"
+            );
+        }
+    }
+
+    /// A turn's OWN write leaks the target's title into the next turn — which
+    /// is why scenario 13 is a single-turn group.
+    ///
+    /// Discovered while proving 13's referent absent. The `Fact:` line for an
+    /// `update_node` is id-and-values only, so that channel is clean. The
+    /// EVIDENCE BLOCK is not: `completed_writes_message` renders
+    /// `- update_node "<summary>" -> <id>`, and `write_summary_arg` resolves an
+    /// update's summary through `content`/`title`, so the node's title lands in
+    /// the prompt verbatim.
+    ///
+    /// For scenario 13 as written this is harmless: it is the only scenario in
+    /// its group, so nothing ever reads the history its write produces. It is
+    /// pinned anyway because it is a live constraint on that group — APPENDING
+    /// A SECOND SCENARIO TO 13'S GROUP WOULD HAND THE MODEL THE SEEDED TITLE,
+    /// re-creating exactly the direct-string-match defect that cost scenarios 6
+    /// and 12 their indirection, and it would do so silently.
+    ///
+    /// Asserts current behavior deliberately. If `write_summary_arg` is ever
+    /// narrowed for updates, this test fails and the constraint above can be
+    /// relaxed.
+    #[test]
+    fn a_turns_own_write_leaks_its_targets_title_via_the_evidence_block() {
+        let history = node_history_from_messages(vec![
+            user_turn("The incident Rowan was on call for — mark it resolved"),
+            assistant_turn(
+                "Marked it resolved.",
+                AiChatCompletedWrite {
+                    tool: "update_node".to_string(),
+                    node_id: Some("nodespace://inc2".to_string()),
+                    summary: Some("search index corruption".to_string()),
+                    canonical_args: r#"{"id":"nodespace://inc2","field_values":{"resolved":true}}"#
+                        .to_string(),
+                },
+            ),
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // The write's own fact renders — the turn did happen.
+        assert!(
+            rendered.contains("nodespace://inc2"),
+            "the turn's own write must render as a fact: {rendered}"
+        );
+
+        // The `Fact:` phrasing for update_node is id-and-values only.
+        assert!(
+            rendered.contains("was updated with resolved true"),
+            "update_node's fact should carry its values, not its title: {rendered}"
+        );
+
+        // But the evidence block DOES carry the title. Pinned as the constraint
+        // it is, not asserted away.
+        assert!(
+            rendered.contains(r#"update_node "search index corruption""#),
+            "EXPECTED LEAK: the evidence block renders the update's summary, \
+             which resolves to the node's title. If this no longer holds, \
+             `write_summary_arg` was narrowed and scenario 13's group may safely \
+             gain a second scenario — see this test's docstring: {rendered}"
+        );
+
+        // The on-call value is not part of the WRITE's rendering. It is in the
+        // rendered history — but only because the user's own prompt is replayed
+        // verbatim, which is unavoidable and harmless: the model already said
+        // it. What matters is that the write does not ALSO surface it as
+        // established fact, so scope this to the write's own lines rather than
+        // to the whole transcript.
+        let write_lines: String = rendered
+            .lines()
+            .filter(|l| l.starts_with("Fact:") || l.trim_start().starts_with("- "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !write_lines.to_lowercase().contains("rowan"),
+            "the on-call value is not part of this write and must not be \
+             rendered as a completed fact: {write_lines}"
+        );
+    }
+
     /// The blended retrieval query is assembled from the same history the turn
     /// renders, so this drives real `AiChatMessage`s through
     /// `node_history_from_messages` rather than hand-building `ChatMessage`s.

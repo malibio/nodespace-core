@@ -96,9 +96,11 @@
  * around those terms and checked against the guard, not assumed clear of it.
  */
 
+import type { EvalEnv } from "../env.ts";
 import type {
   EvalFixture,
   Scenario,
+  ScenarioGroup,
   ToolCallRecord,
   TurnRecord,
   Verdict,
@@ -448,6 +450,119 @@ export function assertExpectation(
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Out-of-band seeding (scenario 13)
+// ---------------------------------------------------------------------------
+
+/**
+ * The type scenario 13's seeded records carry, and the property its reference
+ * keys off.
+ *
+ * Named here rather than inline so the seed, the end-state clause and the
+ * winnability test cannot drift apart — the value the prompt refers to and the
+ * value the seed writes have to be the same one, and nothing else enforces it.
+ */
+const SEEDED_TYPE = "incident_report";
+const SEEDED_ONCALL_FIELD = "on_call";
+
+/** The engineer named ONLY in seeded state — never in any prompt. */
+const SEEDED_ONCALL = "rowan";
+
+/**
+ * The three seeded records. Exactly one carries `SEEDED_ONCALL`, which is what
+ * makes "the one Rowan was on call for" resolve to a single node.
+ *
+ * The titles are deliberately unrelated to the on-call name: a model cannot
+ * guess the target from the reference's wording, only by looking the property
+ * up. That is the whole point of the scenario.
+ */
+const SEEDED_INCIDENTS: Array<{ title: string; onCall: string }> = [
+  { title: "checkout latency spike", onCall: "dana" },
+  { title: "search index corruption", onCall: SEEDED_ONCALL },
+  { title: "auth token expiry storm", onCall: "sam" },
+];
+
+function runNs(env: EvalEnv, args: string[]): unknown {
+  const r = Bun.spawnSync([env.nsBin, "--socket", env.socket, "--json", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (r.exitCode !== 0) {
+    throw new Error(
+      `nodespace ${args.join(" ")} failed (exit ${r.exitCode}): ` +
+        r.stderr.toString().trim(),
+    );
+  }
+  const out = r.stdout.toString().trim();
+  return out ? JSON.parse(out) : null;
+}
+
+/**
+ * Seed scenario 13's incident records, outside any scored turn.
+ *
+ * WHY OUT OF BAND, in one sentence: a referent the AGENT wrote is replayed into
+ * later turns as a terse fact carrying its property values and id inline, so it
+ * is never actually indirect — which is the defect #2242 found in scenario 6
+ * and #2250 hit again in a subtler form. Nothing here goes through a turn, so
+ * `completed_writes` records none of it and the rendered prompt contains no
+ * trace of these nodes at all.
+ *
+ * Idempotent by type: `schema create` is skipped when the type already exists,
+ * so a repeated run against a database that was not purged does not fail on a
+ * duplicate type. The instances are NOT deduplicated — a re-run against a dirty
+ * database is already outside the harness's contract (preflight asserts an
+ * isolated DB), and silently reusing stale instances would hide exactly the
+ * kind of drift that contract exists to prevent.
+ */
+function seedIncidents(env: EvalEnv): void {
+  const existing = runNs(env, ["schema", "list"]) as
+    | { nodes?: Array<{ id?: string }> }
+    | Array<{ id?: string }>
+    | null;
+  const ids = (Array.isArray(existing) ? existing : (existing?.nodes ?? [])).map(
+    (s) => s?.id,
+  );
+
+  if (!ids.includes(SEEDED_TYPE)) {
+    runNs(env, [
+      "schema",
+      "create",
+      "--params",
+      JSON.stringify({
+        name: SEEDED_TYPE,
+        description: "A production incident and who was on call for it",
+        fields: [
+          { name: SEEDED_ONCALL_FIELD, type: "text" },
+          { name: "resolved", type: "boolean" },
+        ],
+      }),
+    ]);
+  }
+
+  for (const { title, onCall } of SEEDED_INCIDENTS) {
+    const created = runNs(env, [
+      "node",
+      "create",
+      "--type",
+      SEEDED_TYPE,
+      "--content",
+      title,
+    ]) as { id?: string } | null;
+    const id = created?.id;
+    if (!id) throw new Error(`seeding '${title}' returned no id`);
+    runNs(env, [
+      "node",
+      "update",
+      id.replace(/^nodespace:\/\//, ""),
+      "--property",
+      `${SEEDED_ONCALL_FIELD}=${onCall}`,
+      "--property",
+      "resolved=false",
+    ]);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Scenarios
 //
@@ -604,10 +719,11 @@ const GROUPS: MatrixScenario[][] = [
       // property, so the assertion is satisfiable.
       //
       // The cost, stated rather than hidden: this no longer measures whether
-      // the model can decompose an indirect reference, and NO scenario does.
-      // That behavior needs a referent not recoverable from history, which
-      // this chain cannot provide — every write it makes is replayed with its
-      // particulars. Still open; see #2248.
+      // the model can decompose an indirect reference. That behavior needs a
+      // referent not recoverable from history, which this chain cannot provide
+      // — every write it makes is replayed with its particulars. Scenario 13
+      // covers it instead, by seeding its referent outside any scored turn so
+      // nothing about it reaches the prompt.
       //
       // Scenario 12 is the nearest cover and is deliberately NOT claimed as a
       // replacement: it requires ranking three estimates rather than matching
@@ -1197,13 +1313,12 @@ const GROUPS: MatrixScenario[][] = [
   // one requires ranking three values before any id can be chosen. That is a
   // real capability and nothing else in the matrix covers it.
   //
-  // `toolSequence` is still used by no live scenario. A draft of 12d used it,
-  // naming `[search_nodes, update_node]`, but that pins ONE of four legitimate
-  // read spellings and reds out the shortest correct route (update_node alone,
-  // which the inline estimates make valid). Both are the mistake #2242 was
-  // cleaning up, so the kind stays dead here rather than being revived by
-  // asserting something untrue. Reviving it needs a scenario whose route is
-  // genuinely forced — which is the same thing #2248 needs.
+  // `toolSequence` deliberately does NOT live here, though a draft of 12d used
+  // it. Naming `[search_nodes, update_node]` pins one of four legitimate read
+  // spellings AND reds out the shortest correct route (update_node alone, which
+  // the inline estimates make valid) — both the mistake #2242 was cleaning up.
+  // It lives on scenario 13 instead, whose route is genuinely forced because
+  // its referent is seeded out of band and therefore absent from history.
   //
   // WINNABILITY, proved rather than assumed, per the #2242 discipline:
   //   - `scenario_12_history_states_the_values_but_not_the_ordering`
@@ -1364,12 +1479,110 @@ const GROUPS: MatrixScenario[][] = [
       },
     },
   ],
+  // Indirect-reference decomposition (scenario 13), on SEEDED state.
+  //
+  // THIS IS THE SCENARIO #2248 ASKED FOR, and the reason it needs seeding is
+  // the finding two prior attempts produced.
+  //
+  // Scenario 6 asserted a resolve-then-act chain for "the five-day one". #2242
+  // found the referent was a direct string match: a create_node write is
+  // replayed into later turns as a terse fact carrying its property values AND
+  // its id inline, so the discriminator was already in the prompt. Scenario 12
+  // then tried a COMPARATIVE over three written values; #2250's review found
+  // that fails the same way for a subtler reason — the values are all inline,
+  // so the ranking is derivable in-context without reading anything.
+  //
+  // The generalisation, which is what makes this group's shape necessary:
+  // NO VALUE A SCORED TURN WRITES CAN BE THE REFERENT. Every scalar the agent
+  // writes is replayed (`terse_write_fact`), so the target is always in the
+  // prompt as literal text. A genuinely indirect reference needs a referent the
+  // agent NEVER WROTE.
+  //
+  // Hence `seedGroup`: these incident records are created through the CLI
+  // before the group's first turn. `completed_writes` is built only from a
+  // turn's own tool executions, so seeded nodes leave NO trace in the rendered
+  // history — not a title, not a property, not an id. The model cannot know
+  // "rowan" is on-call for the search-index incident without looking it up.
+  //
+  // Pinned by `scenario_13_seeded_referent_is_absent_from_history` in
+  // daemon/src/services/local_agent_service.rs, which renders the real history
+  // for this group and asserts the referent, the type and the on-call name are
+  // all absent — the inverse of scenario 6's test, which pins that ITS referent
+  // is present.
+  //
+  // This is also the only scenario whose route is genuinely FORCED, which is
+  // why `toolSequence` lives here: with nothing in history, the model must read
+  // before it can write. That is the assertion kind #2242 left dead and neither
+  // prior attempt could honestly revive.
+  [
+    {
+      id: "13",
+      scenario: "13. Indirect reference: seeded referent",
+      // Names the on-call engineer, which appears ONLY in seeded state, and the
+      // incident by no other identifier. There is nothing in history to match
+      // against, so a lookup is the only route to the id.
+      //
+      // WINNABILITY: the seeded type carries `on_call`, so the value the prompt
+      // names is one the schema can actually hold and filter on (#1846). The
+      // ideal `search_nodes` + `update_node` pair is proved acceptable against a
+      // live backend by
+      // `scenario_13_ideal_lookup_then_write_is_accepted` in
+      // agent/tests/matrix_scenario_winnability.rs.
+      prompt: "The incident Rowan was on call for — mark it resolved",
+      // DIAGNOSTIC, and the one place a SUBSEQUENCE is honest. Both prior
+      // attempts had to drop `toolSequence` because a direct write was a
+      // legitimate route; here it is not, because the id cannot be known
+      // without a read. `search_nodes` is named as the read because the seeded
+      // records are queryable by property and it is the tool the winnability
+      // test proves; a model resolving via `resolve_query` instead will show as
+      // a trajectory mismatch against a passing outcome, which is exactly the
+      // disagreement worth reading after a run.
+      expect: {
+        kind: "toolSequence",
+        tools: ["search_nodes", "update_node"],
+        minProperties: 1,
+      },
+      // THE SCORE. `contentMatches` pins the ONE seeded incident Rowan was on
+      // call for, so resolving to either of the other two — both real nodes,
+      // both updatable, both scoring green under a clause that only counted
+      // properties — fails. Naming the node is what makes this measure the
+      // resolution rather than the write.
+      //
+      // `updatedNode`, not `createdNode`: the target already exists (seeded
+      // before the turn, so it is in the pre-turn snapshot). A turn that
+      // records the resolution on a NEW node has left the incident untouched.
+      //
+      // `minProperties: 2` for scenario 12d's reason — the seeded node already
+      // carries `on_call` and `resolved`, so a lower bar would pass on a turn
+      // that resolved correctly and then wrote nothing. Same residual weakness
+      // as 12d, documented there: this asserts a property became populated,
+      // not that it holds the right value.
+      end: {
+        updatedNode: {
+          contentMatches: "search index corruption",
+          minProperties: 2,
+        },
+        noUnexpectedNodes: true,
+      },
+    },
+  ],
 ];
 
 const fixture: EvalFixture = {
   name: "agent-matrix",
   description: "Agent Eval Results (end-to-end tool-call behavior)",
   groups: GROUPS,
+  /**
+   * Establish scenario 13's referent outside any scored turn.
+   *
+   * Keyed on the group containing scenario 13 rather than run unconditionally:
+   * every other group builds its own state through its scenarios, and seeding
+   * for them would put nodes in the graph that `noUnexpectedNodes` would then
+   * count against the turn under test.
+   */
+  seedGroup(env: EvalEnv, group: ScenarioGroup) {
+    if (group.some((s) => s.id === "13")) seedIncidents(env);
+  },
   // Trajectory. No longer the score — the runner records this as
   // `ScenarioResult.trajectory` and scores `graph.scoreOutcome` instead.
   score(scenario, turns) {

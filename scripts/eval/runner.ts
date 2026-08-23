@@ -772,6 +772,28 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
       `[${fixture.name}] chat ${chatId} for: ${group.map((s) => s.id).join(", ")}`,
     );
 
+    // Establish any graph state this group's scenarios refer to but do not
+    // create. Runs AFTER the chat node exists (so a seed may reference it) and
+    // BEFORE the first turn, so the seeded state is already in place when the
+    // pre-turn snapshot is taken — seeded nodes therefore appear in `before`
+    // and never register as this turn's `createdNode`, which is what lets a
+    // scenario assert `updatedNode` against them.
+    //
+    // A failure here is an ENVIRONMENT failure, not a scenario failure, and is
+    // rethrown as one: a seed that did not run leaves every scenario in the
+    // group referring to something absent, which would score as a string of
+    // model failures rather than the setup fault it is.
+    if (fixture.seedGroup) {
+      try {
+        fixture.seedGroup(env, group);
+      } catch (e) {
+        throw new EnvironmentError(
+          `Group seeding failed for: ${group.map((s) => s.id).join(", ")}\n  ` +
+            `${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+
     /**
      * Nodes this group has created so far — the only nodes whose edges are
      * worth walking when snapshotting (see the bracketing comment below).
