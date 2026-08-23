@@ -342,6 +342,14 @@ impl QueryService {
     ///
     /// Metadata fields accessed directly: created_at, modified_at, content, node_type, title
     /// Type-specific fields use json_extract: json_extract(properties, '$.task.status')
+    ///
+    /// NOTE the deliberate asymmetry with [`Self::build_property_filter`],
+    /// which resolves the namespaced path itself rather than calling here. A
+    /// sort entry is an ordering hint, so reading a same-named top-level column
+    /// is the useful reading of `title`; a property filter is an explicit
+    /// statement ABOUT the properties JSON, and silently redirecting it to a
+    /// column would answer a different question than the caller asked. Do not
+    /// "unify" the two without changing that contract first.
     fn resolve_field(&self, field: &str, target_type: &str) -> String {
         if ["created_at", "modified_at", "content", "node_type", "title"].contains(&field) {
             field.to_string()
