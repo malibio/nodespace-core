@@ -660,7 +660,9 @@ mod tests {
     /// A hosted endpoint under load can 429 indefinitely. Retrying is right,
     /// retrying forever is not: an eval that hangs is worse than one that
     /// reports an error, because it consumes the operator's time instead of
-    /// their attention. These bounds keep the worst case near two minutes.
+    /// their attention. These bounds keep the worst case at 80s — every attempt
+    /// honouring a `Retry-After` at the ceiling, which is the path that governs
+    /// it rather than the exponential backoff.
     #[test]
     fn retry_policy_is_bounded() {
         // The WORST case is every attempt honouring a `Retry-After` at the

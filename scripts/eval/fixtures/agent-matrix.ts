@@ -1721,10 +1721,16 @@ const fixture: EvalFixture = {
       return assertEndState((scenario as MatrixScenario).end, diff, asked);
     },
   },
-  // The action tools this scenario's expectation makes reachable. `noTools`
-  // and `noRetry` return nothing: the first asserts an absence, and the second
-  // is satisfied by a turn that never called the tool, so neither becomes
-  // unreachable when routing withholds a tool.
+  // The action tools this scenario's expectation makes reachable.
+  //
+  // `noTools` returns nothing because it asserts an ABSENCE — withholding a
+  // tool cannot make "no tools fired" unreachable.
+  //
+  // `noRetry` returns nothing for a narrower reason: this fixture grades on
+  // graph outcome, so its trajectory verdict is a diagnostic rather than the
+  // score. (Its `minCalls` variant IS unreachable without the tool — scenario
+  // 11 uses it — so if `noRetry` ever became load-bearing again, it would need
+  // to report `[tool]` when `minCalls` is set.)
   requiredTools(scenario) {
     const e = (scenario as MatrixScenario).expect;
     if (e.kind === "toolOnce") return [e.tool];

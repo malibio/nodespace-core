@@ -67,15 +67,6 @@ function newChat(env: EvalEnv): string {
 }
 
 /**
- * Run one turn and scrape its outcome.
- *
- * A failed send is recorded rather than thrown, so one flaky turn does not
- * abandon a run that costs minutes of inference. It is flagged `sendFailed` so
- * the caller can tell it apart from a turn that genuinely called no tools —
- * scoring the two alike is what lets a dead daemon pass a "no tools" assertion.
- * The run loop aborts once sends fail consecutively.
- */
-/**
  * Pause before a turn, to stay under a served endpoint's per-minute cap.
  *
  * Synchronous on purpose: `runTurn` is sync, the harness is serial, and making
@@ -92,6 +83,15 @@ function pauseBeforeTurn(): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/**
+ * Run one turn and scrape its outcome.
+ *
+ * A failed send is recorded rather than thrown, so one flaky turn does not
+ * abandon a run that costs minutes of inference. It is flagged `sendFailed` so
+ * the caller can tell it apart from a turn that genuinely called no tools —
+ * scoring the two alike is what lets a dead daemon pass a "no tools" assertion.
+ * The run loop aborts once sends fail consecutively.
+ */
 function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
   pauseBeforeTurn();
   const start = performance.now();
@@ -956,7 +956,7 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
           excludedAsToolNotOffered: true,
         });
         console.error(
-          `[${fixture.name}]   ⊘ excluded (tool not offered: ${missingTools.join(", ")}) ${scored.latencyMs}ms`,
+          `[${fixture.name}]   ⊗ excluded (tool not offered: ${missingTools.join(", ")}) ${scored.latencyMs}ms`,
         );
         continue;
       }
@@ -1306,6 +1306,19 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   if (setupExcluded > 0) {
     console.log(
       `   Setup:    ${setupExcluded} scenario-rep(s) (fixture setup — not scored)`,
+    );
+  }
+  // Reported separately from `excluded`: both leave the scored set, but an
+  // empty generation is an inference bug and this is a ROUTING miss. A reader
+  // seeing a shrunken denominator needs to know which one they are looking at,
+  // and #2240/#2254 are the reason the distinction is worth a line.
+  const toolNotOffered = reps.reduce(
+    (n, r) => n + (r.summary.excludedToolNotOffered ?? 0),
+    0,
+  );
+  if (toolNotOffered > 0) {
+    console.log(
+      `   Unrouted: ${toolNotOffered} scenario-rep(s) (asserted tool never offered — not scored)`,
     );
   }
   const disagreements = reps.reduce(
