@@ -307,11 +307,13 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
                 // ("add a record" and "change that record" are one user intent
                 // expressed two ways), so it is the natural second home.
                 //
-                // This does not widen the blast radius beyond what ADR-038
-                // already permits: `update_node` is mutating, not destructive,
-                // so this skill's Stage-2 bar rises from READ to MUTATING and
-                // the destructive rung is untouched. `stage2_permitted_names`
-                // still admits destructive tools only from the retrieval winner.
+                // Blast radius is UNCHANGED, not merely bounded: this skill
+                // already whitelisted `create_node`, so `skill_is_mutating` was
+                // already true for it and `score_bar_for` already returned
+                // MUTATING. Adding another mutating tool moves nothing. The
+                // destructive rung is untouched either way —
+                // `stage2_permitted_names` admits destructive tools only from
+                // the retrieval winner, and neither added tool is destructive.
                 "tool_whitelist": ["create_node", "update_node", "update_task_status", "search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 3,
             }),
