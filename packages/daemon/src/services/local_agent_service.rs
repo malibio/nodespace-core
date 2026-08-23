@@ -4022,29 +4022,32 @@ model = "model-b"
         );
     }
 
-    /// The counterpart to the test above, for the scenario that REPLACES the
-    /// indirect-reference coverage scenario 6 gave up (matrix scenario 12).
+    /// What matrix scenario 12's rendered history does and does NOT contain.
     ///
-    /// The constraint 12 has to satisfy is the one 6 failed: its referent must
-    /// not be recoverable from the rendered history by string match. Scenario 6
-    /// lost its indirection because a single `create_node` fact carries the
-    /// discriminating value AND the id inline, so "the five-day one" matched
-    /// text that was already sitting in the prompt.
+    /// SCOPE, because an earlier version of this test was read as proving more
+    /// than it does. It establishes that the history does not LEXICALLY STATE
+    /// the ordering — no "biggest", "largest", "highest". It does NOT establish
+    /// that the ordering is underivable, and those are different claims.
     ///
-    /// 12 keys off a COMPARATIVE — "whichever is the biggest job" — over an
-    /// estimate spread across three separate create_node facts. Each fact still
-    /// renders its own value and id inline, and that is fine: the ordering
-    /// ACROSS them is not stated by any of them. No substring of this history
-    /// says which estimate is the largest, so the model cannot shortcut to an
-    /// id the way it can in 6 — it has to read the instances back and compare
-    /// them. That comparison is the decomposition step being measured.
+    /// They are different because the three estimates and all three ids are
+    /// rendered inline, adjacent, in a uniform format. `max(9, 21, 4)` is an
+    /// in-context comparison, so a model can pick the right id without reading
+    /// anything back. Scenario 12 is therefore a test of comparative reference
+    /// RESOLUTION, not of decomposition; the group header in
+    /// scripts/eval/fixtures/agent-matrix.ts carries the full reasoning, and
+    /// #2248 tracks the decomposition gap that remains open.
     ///
-    /// Asserts both directions deliberately. The negative assertion alone would
-    /// pass vacuously if the history rendered empty (a broken helper, a changed
-    /// role filter), so the positive assertions pin that the setup facts really
-    /// are present and that it is only the ORDERING that is absent.
+    /// The negative assertion is kept anyway, because it still pins something
+    /// real: if a future change to `terse_write_fact` started emitting a
+    /// superlative (a "largest estimate" summary line, say), 12d would degrade
+    /// from "rank three values" to "match one word" — the exact decay that cost
+    /// scenario 6 its indirection — and this test is what would catch it.
+    ///
+    /// The positive assertions are load-bearing in the other direction: they
+    /// stop the negative one passing vacuously on an empty render, which a
+    /// broken helper or a changed role filter would otherwise produce.
     #[test]
-    fn scenario_12_history_does_not_resolve_its_comparative_reference() {
+    fn scenario_12_history_states_the_values_but_not_the_ordering() {
         let history = node_history_from_messages(vec![
             user_turn("Log the checkout rewrite, we think nine days"),
             assistant_turn(
@@ -4111,14 +4114,17 @@ model = "model-b"
             );
             assert!(
                 rendered.contains(id),
-                "'{id}' must be in history — the ids being present is what makes \
-                 this a test of the COMPARISON rather than of recall: {rendered}"
+                "'{id}' must be in history — with every id inline, choosing the \
+                 right one is a ranking problem rather than a lookup, which is \
+                 what scenario 12 measures: {rendered}"
             );
         }
 
-        // Negative: nothing in history states the ORDERING. The model cannot
-        // pick the target by matching the prompt's words against this text; it
-        // has to read the instances back and compare their estimates.
+        // Negative: nothing in history STATES the ordering, so the prompt's
+        // words ("the biggest") match no substring of it and 12d cannot be
+        // answered by lookup alone. Note the limit of this claim: the values
+        // themselves ARE inline, so the ranking is still derivable in-context.
+        // See this test's docstring.
         let lowered = rendered.to_lowercase();
         for phrase in [
             "biggest",

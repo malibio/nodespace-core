@@ -409,15 +409,15 @@ async fn scenario_11d_one_traversal_enumerates_every_inbound_link() {
 /// Scenario 12's ideal read-then-compare-then-write chain is accepted, and the
 /// read actually surfaces the values the comparison needs.
 ///
-/// 12 replaces the indirect-reference coverage scenario 6 gave up. Its prompt
-/// names its target by a COMPARATIVE ("whichever is the biggest job"), which
-/// `scenario_12_history_does_not_resolve_its_comparative_reference` in the
-/// daemon proves is absent from the rendered history — so the model must read
-/// the instances back and compare their estimates rather than string-match an
-/// id out of the prompt.
+/// 12 names its target by a COMPARATIVE ("whichever is the biggest job"), so
+/// the model must rank three estimates before it can choose an id. It does NOT
+/// replace the decomposition coverage scenario 6 gave up — the estimates are
+/// all inline in the rendered history, so the ranking can be done in-context
+/// and a read is not forced. See the group header in
+/// scripts/eval/fixtures/agent-matrix.ts, and #2248 for the gap that remains.
 ///
-/// That makes the read the load-bearing half here, and it is the half that
-/// could quietly make the scenario unwinnable. If `search_nodes` returned only
+/// A read is one legitimate route to that ranking, though, and it is the route
+/// that could quietly make the scenario unwinnable. If `search_nodes` returned only
 /// titles, or truncated to fewer than the three instances, no amount of model
 /// capability would let it pick the largest — the values would simply not be
 /// there to compare, and 12 would red-line correct behavior the way 6 did. So
