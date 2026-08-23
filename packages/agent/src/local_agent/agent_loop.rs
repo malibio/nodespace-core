@@ -1831,13 +1831,28 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 // If the model produced no text after tool calls, synthesize a
-                // brief confirmation so the UI always shows something meaningful.
+                // summary so the UI always shows something meaningful.
+                //
+                // Uses `summarize_executions` — the same error-aware summarizer
+                // the other two empty-text exits already use — rather than
+                // formatting the last execution's NAME into a success string.
+                // The three guards above (anti-fabrication, no-op success,
+                // tool-failure surfacing) are each gated on `!normalized
+                // .is_empty()`, so a turn where the model emits no text at all
+                // reaches here with none of them having run. Naming the last
+                // tool and asserting it "completed successfully" then reports a
+                // write that failed as a write that happened:
+                //
+                //     [tool] create_node [ERROR]   (Unknown node_type)
+                //     assistant> Done — node creation completed successfully.
+                //
+                // observed live on a seeded chain where `create_schema` had
+                // failed, so the type `create_node` named did not exist. A
+                // silently-failed write is the failure mode ADR-056 records as
+                // worth taking seriously, and an empty generation is precisely
+                // when the model is least able to report it itself.
                 let final_response = if normalized.is_empty() && !all_tool_executions.is_empty() {
-                    let tool_name = &all_tool_executions.last().unwrap().name;
-                    format!(
-                        "Done — {} completed successfully.",
-                        humanize_tool_name(tool_name)
-                    )
+                    summarize_executions(&all_tool_executions)
                 } else if normalized.is_empty() {
                     // Model returned nothing at all — no tools, no text. This is
                     // an inference bug, not a routing decision: the model should
@@ -2498,10 +2513,17 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     normalized_tail
                 }
             } else {
-                // Inference failed — synthesize from executions
+                // Inference failed — synthesize from executions.
+                //
+                // Same error-aware summarizer as the sibling branch above, for
+                // the same reason: formatting the last execution's NAME into
+                // "completed successfully" reports a failed write as a
+                // successful one. This branch is the worse of the two to get
+                // wrong — inference itself failed here, so the claim is not
+                // even the model's; it is the loop asserting success on its
+                // behalf about a call that may have errored.
                 if !all_tool_executions.is_empty() {
-                    let label = humanize_tool_name(&all_tool_executions.last().unwrap().name);
-                    format!("Done — {} completed successfully.", label)
+                    summarize_executions(&all_tool_executions)
                 } else {
                     String::new()
                 }
@@ -5870,6 +5892,46 @@ mod tests {
             exec_record("search_nodes", false),
         ]);
         assert_eq!(summary, "• node search completed (2×)");
+    }
+
+    /// A failed write reached the user as a success report because the
+    /// empty-generation fallback formatted the LAST execution's name into
+    /// "Done — {} completed successfully." without consulting `is_error`.
+    ///
+    /// Observed live against the locked model on a seeded chain: `create_schema`
+    /// failed, so the `node_type` the following `create_node` named did not
+    /// exist, and the turn rendered
+    ///
+    ///     [tool] create_node [ERROR]
+    ///     assistant> Done — node creation completed successfully.
+    ///
+    /// None of the three response guards can catch this shape: anti-fabrication,
+    /// no-op success, and tool-failure surfacing are each gated on
+    /// `!normalized.is_empty()`, and this is precisely the empty-text path.
+    ///
+    /// Asserted through `summarize_executions` rather than the loop because
+    /// that is the function the fallback now delegates to; the property that
+    /// matters is that a sole errored execution never renders as "completed".
+    #[test]
+    fn sole_failed_write_is_never_summarized_as_success() {
+        let summary = summarize_executions(&[exec_record("create_node", true)]);
+        assert_eq!(summary, "• node creation failed");
+        assert!(
+            !summary.contains("completed"),
+            "a write that only ever errored must not read as completed: {summary}"
+        );
+    }
+
+    /// The same failure mid-chain: an earlier tool succeeded, so the naive
+    /// "last execution" formatting would have reported the FAILED trailing call
+    /// as the turn's success. Each tool keeps its own verdict.
+    #[test]
+    fn failed_trailing_write_keeps_its_own_verdict_after_a_successful_read() {
+        let summary = summarize_executions(&[
+            exec_record("search_nodes", false),
+            exec_record("create_node", true),
+        ]);
+        assert_eq!(summary, "• node search completed\n• node creation failed");
     }
 
     // -- Anti-fabrication guard tests ----------------------------------------
