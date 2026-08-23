@@ -1955,12 +1955,15 @@ impl GraphToolExecutor {
     /// and/or typed properties.
     ///
     /// Routing is by capability, transparent to the model:
-    /// - **No property filters** (plain title keyword and/or type listing) →
-    ///   `node_ops::query_nodes`, which owns `title contains` matching (the
-    ///   title index is the only path that filters by title).
-    /// - **Property filters present** → `query_ops::execute_query`
+    /// - **No property filters and no sorting** (plain title keyword and/or
+    ///   type listing) → `node_ops::query_nodes`.
+    /// - **Property filters or sorting present** → `query_ops::execute_query`
     ///   (`QueryService`), which pushes typed property conditions to SQL
-    ///   `json_extract` — the correct path for operators and date comparisons.
+    ///   `json_extract` — the correct path for operators and date comparisons,
+    ///   and the only one that honours `sorting`.
+    ///
+    /// Both filter a keyword against `title`, so which one runs never changes
+    /// which nodes a keyword selects.
     ///
     /// Both paths return each node's `properties` in the summary.
     /// Shared search core behind `search_nodes` and `resolve_query`.
@@ -1991,7 +1994,22 @@ impl GraphToolExecutor {
         // matches, silently returning zero results.
         let query = search_ops::normalize_enumerate_query(&query);
 
-        let output = if filters.is_empty() {
+        // `sorting` is only honoured by the QueryService path, so a sorted
+        // request routes there even with no property filters. Sending it down
+        // the `query_nodes` branch instead would accept the argument, drop it,
+        // and hand back an arbitrary row reported as a success — the shape a
+        // model reads as "the largest one" when asking for a superlative via
+        // `sorting` + `limit: 1`.
+        //
+        // Both branches match the keyword against TITLE, so which one runs
+        // cannot change what a keyword means. That matters because title is not
+        // simply the content: a schema carrying a `title_template` builds it
+        // from properties instead, so matching content there would silently
+        // return a DIFFERENT set — trading the dropped-sort bug for a
+        // dropped-keyword one.
+        let sorted = sorting.as_ref().is_some_and(|s| !s.is_empty());
+
+        let output = if filters.is_empty() && !sorted {
             // Title/type listing: only `node_ops::query_nodes` filters by title.
             let filters = query.map(|q| {
                 vec![node_ops::QueryFilterItem {
@@ -2018,14 +2036,15 @@ impl GraphToolExecutor {
             .map_err(|e| ops_error_to_tool(e, tool_name))?
         } else {
             // Typed property query: route through QueryService (SQL json_extract).
-            // A non-empty title keyword is added as a content filter alongside the
-            // property predicates (QueryService has no title path).
+            // A non-empty keyword is added as a title filter alongside the
+            // property predicates, so it selects the same nodes the
+            // `query_nodes` branch above would have selected.
             let mut filters = filters;
             if let Some(q) = query {
                 filters.push(query_ops::AgentFilterItem {
-                    filter_type: Some("content".to_string()),
+                    filter_type: Some("metadata".to_string()),
                     operator: "contains".to_string(),
-                    property: None,
+                    property: Some("title".to_string()),
                     value: Some(Value::String(q)),
                     case_sensitive: Some(false),
                     relationship_type: None,
