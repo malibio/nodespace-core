@@ -287,7 +287,7 @@ export interface EvalFixture {
    * `"schema"`-type nodes are retrieved that way.
    *
    * That boundary is what a seeded scenario must be designed against: seeding
-   * hides the answer, not the vocabulary. Pinned in both directions by
+   * hides the answer, not the vocabulary. Recorded by
    * `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
    * (packages/core/src/ops/context_ops.rs).
    *

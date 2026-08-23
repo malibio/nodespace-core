@@ -511,11 +511,28 @@ mod tests {
     /// field tells the model how to ASK; it does not tell it which incident to
     /// update. The read is still forced, which is the property #2248 asked for.
     ///
-    /// Pinned in both directions because the distinction is load-bearing and
-    /// silent: if instance CONTENT ever started reaching workspace context,
-    /// 13's referent would become directly matchable and the scenario would
-    /// degrade into the string match that cost scenarios 6 and 12 their
-    /// indirection — while its history-side absence proof kept passing.
+    /// SCOPE OF EACH HALF, because overstating exactly this is what went wrong
+    /// three times in this area and a reader deserves to know which assertions
+    /// are load-bearing:
+    ///
+    ///   - The POSITIVE half is the real content. It is what refuted the
+    ///     original claim that seeded state leaves no trace in the prompt at
+    ///     all, and it fails the moment schema rendering stops including type
+    ///     or field names.
+    ///   - The NEGATIVE half is close to vacuous by construction, and is
+    ///     documented rather than dressed up: `relevant_schemas` is
+    ///     `Vec<SchemaNode>`, which has no field capable of holding an instance
+    ///     title or property value, so no input to this renderer could make
+    ///     those assertions fail. They record the INVARIANT 13 depends on —
+    ///     schema vocabulary in, instance data out — rather than actively
+    ///     policing it.
+    ///
+    /// So this is not a tripwire for the dangerous change. A future path that
+    /// routed instance data into the prompt would do so through a different
+    /// field or a different block, and would sail past this test. What actually
+    /// guards 13 is that only `"schema"`-type nodes are retrieved
+    /// (`semantic_search_nodes_of_type` above); if that ever widens, this test
+    /// will not notice and 13's referent becomes directly matchable.
     #[test]
     fn scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not() {
         let ctx = WorkspaceContext {

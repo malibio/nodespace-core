@@ -835,7 +835,7 @@ describe("end-state fixture invariants", () => {
   // Checks every prompt in the fixture, not just 13's: the leak that matters
   // most is an unrelated scenario mentioning the seeded title, because that is
   // the one nobody would think to look for.
-  test("no prompt names scenario 13's seeded target", () => {
+  test("no prompt names scenario 13's seeded incident titles", () => {
     // INSTANCE data: the seeded incident titles. These genuinely reach the
     // model through no channel at all — they are absent from chat history AND
     // from workspace context, which retrieves only `"schema"`-type nodes. A
@@ -859,29 +859,6 @@ describe("end-state fixture invariants", () => {
       }
     }
 
-    // SCHEMA vocabulary: the type and field names. Kept out of fixture prompts
-    // for tidiness, but NOT a guarantee the model cannot see them — workspace
-    // context renders the seeded schema into the system prompt, so it does. The
-    // distinction is stated because a future author designing against "the
-    // model has never heard of on_call" would be designing against something
-    // this fixture cannot deliver. See
-    // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
-    // in packages/core/src/ops/context_ops.rs.
-    const notInFixturePrompts = ["incident_report", "on_call"];
-    for (const s of all) {
-      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
-        for (const f of notInFixturePrompts) {
-          expect(
-            p.toLowerCase().includes(f),
-            `scenario ${s.id}'s prompt names "${f}". The model already sees ` +
-              `this via workspace context, so this is not a correctness bug — ` +
-              `but naming seeded vocabulary in a prompt muddies which scenario ` +
-              `owns that state`,
-          ).toBe(false);
-        }
-      }
-    }
-
     // The on-call VALUE is different in kind: scenario 13's own prompt must
     // name it — that is the reference. What matters is that it identifies the
     // target only via seeded state, so no OTHER scenario may mention it (which
@@ -900,6 +877,34 @@ describe("end-state fixture invariants", () => {
     const s13 = all.find((s) => s.id === "13");
     expect(s13).toBeDefined();
     expect(s13!.prompt.toLowerCase()).toContain(onCall);
+  });
+
+  // SEPARATE TEST, and separate deliberately: this one is HOUSEKEEPING, not a
+  // correctness guarantee, and folding it into the test above would let that
+  // test's name promise something the system does not deliver.
+  //
+  // The seeded schema's type and field names are NOT hidden from the model —
+  // workspace context renders the schema into the system prompt, so it sees
+  // both. Keeping them out of fixture prompts only keeps it clear which
+  // scenario owns that state. Stated explicitly because a future author
+  // designing against "the model has never heard of on_call" would be designing
+  // against something this fixture cannot provide. See
+  // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+  // in packages/core/src/ops/context_ops.rs.
+  test("seeded schema vocabulary is not restated in fixture prompts", () => {
+    for (const s of all) {
+      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
+        for (const f of ["incident_report", "on_call"]) {
+          expect(
+            p.toLowerCase().includes(f),
+            `scenario ${s.id}'s prompt names "${f}". The model already sees ` +
+              `this via workspace context, so this is not a correctness bug — ` +
+              `but naming seeded vocabulary in a prompt muddies which scenario ` +
+              `owns that state`,
+          ).toBe(false);
+        }
+      }
+    }
   });
 
   // 13 is the only scenario where A READ is forced: its referent is absent from

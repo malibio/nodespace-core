@@ -1572,12 +1572,19 @@ const GROUPS: MatrixScenario[][] = [
   //
   // That is the property 13 actually rests on. Knowing the type and field names
   // tells the model HOW TO ASK; it does not tell it WHICH incident to update.
-  // The read is still forced. Pinned in both directions by
+  // The read is still forced. Recorded by
   // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
-  // (packages/core/src/ops/context_ops.rs) — if instance content ever starts
-  // reaching workspace context, that test fails and 13 has silently degraded
-  // into the direct string match that cost scenarios 6 and 12 their
-  // indirection.
+  // (packages/core/src/ops/context_ops.rs), which proves the rendering half —
+  // that schema vocabulary reaches the prompt.
+  //
+  // WHAT NOTHING CURRENTLY GUARDS, so it is written down rather than assumed:
+  // 13 depends on only `"schema"`-type nodes being retrieved into workspace
+  // context (`semantic_search_nodes_of_type` in context_ops). If that ever
+  // widens to instance nodes, 13's referent becomes directly matchable from
+  // the system prompt and the scenario degrades into the string match that
+  // cost scenarios 6 and 12 their indirection — and no test in this repo would
+  // fail. That retrieval call is the thing to check before changing workspace
+  // context.
   //
   // Pinned by `scenario_13_seeded_referent_is_absent_from_history` in
   // daemon/src/services/local_agent_service.rs, which renders the real history
