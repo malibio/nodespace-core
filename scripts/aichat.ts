@@ -116,18 +116,7 @@ function cmdNew(): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Optional pause before each turn, in milliseconds.
- *
- * Served endpoints on a free tier cap requests per MINUTE, and a turn issues
- * several requests back to back (Stage-1 routing, then one per ReAct
- * iteration). The burst trips the cap even when the sustained rate is far
- * below it. Pacing the turn boundary spreads the burst without changing what
- * is measured.
- *
- * Unset for local arms — they have no such limit and should not pay the delay.
- */
-const TURN_DELAY_MS = Number(process.env.NS_TURN_DELAY_MS ?? 0);
+
 
 /** Strip ANSI colour codes that tracing writes to the log. */
 function stripAnsi(s: string): string {
@@ -321,7 +310,6 @@ async function cmdSend(id: string, message: string): Promise<void> {
     content: message,
     timestamp: new Date().toISOString(),
   });
-  if (TURN_DELAY_MS > 0) await sleep(TURN_DELAY_MS);
   aichat.status = "processing";
   batchUpdateProps(id, node.version, { "ai-chat": aichat });
 

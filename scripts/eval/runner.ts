@@ -75,7 +75,25 @@ function newChat(env: EvalEnv): string {
  * scoring the two alike is what lets a dead daemon pass a "no tools" assertion.
  * The run loop aborts once sends fail consecutively.
  */
+/**
+ * Pause before a turn, to stay under a served endpoint's per-minute cap.
+ *
+ * Synchronous on purpose: `runTurn` is sync, the harness is serial, and making
+ * the call chain async purely to await a sleep would be a large diff for no
+ * behavioural gain. `Atomics.wait` on a throwaway buffer is the standard way
+ * to block a worker-free main thread without a spin loop.
+ *
+ * Deliberately OUTSIDE the timed region below — folding it into `latencyMs`
+ * would make a paced arm's latency incomparable to an unpaced one.
+ */
+function pauseBeforeTurn(): void {
+  const ms = Number(process.env.NS_TURN_DELAY_MS ?? 0);
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
+  pauseBeforeTurn();
   const start = performance.now();
   const r = Bun.spawnSync(["bun", "run", env.aichat, "send", chatId, message], {
     stdout: "pipe",
