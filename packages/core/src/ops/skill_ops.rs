@@ -143,7 +143,7 @@ impl SkillProperties {
 /// id or display name like `release_plan` / `Pull Request`) are checked as
 /// a contiguous run of exact tokens, so `release` alone does not count as a
 /// match.
-fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
+pub(crate) fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
     fn tokenize(s: &str) -> Vec<&str> {
         s.split(|c: char| !c.is_alphanumeric())
             .filter(|t| !t.is_empty())
