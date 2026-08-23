@@ -556,7 +556,11 @@ describe("clarifyOk", () => {
     // clarifyOk must not mask a dead daemon: the capture error is the more
     // important signal and is checked first.
     const broken: GraphDiff = { ...empty, captureError: "daemon gone" };
-    const v = assertEndState(wantWrite, broken, false);
+    // askedForClarification TRUE is the case that matters: a dead daemon plus
+    // a reply containing a question mark must not score as a pass. Passing
+    // false here would make the test vacuous — it would pass even if the
+    // clarifyOk branch ran first.
+    const v = assertEndState(wantWrite, broken, true);
     expect(v.passed).toBe(false);
     expect(v.failure).toContain("could not be captured");
   });

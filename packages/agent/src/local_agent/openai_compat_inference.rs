@@ -86,16 +86,28 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Retries allowed after a 429 or 5xx before the turn is failed.
 ///
-/// Four attempts spans roughly two minutes with the backoff below — long
-/// enough to ride out the burst limits hosted free tiers enforce, short enough
-/// that a genuine outage surfaces as an error instead of a hung run.
+/// Retries FOLLOW the initial send, so this many retries means up to
+/// `RETRY_MAX_ATTEMPTS + 1` requests. Combined with `RETRY_MAX_DELAY` the
+/// worst case is 80s of waiting — long enough to ride out the burst limits
+/// hosted free tiers enforce, short enough that a genuine outage surfaces as
+/// an error instead of a hung run.
 const RETRY_MAX_ATTEMPTS: u32 = 4;
 
 /// First backoff wait; doubles per attempt (2s, 4s, 8s, 16s).
 const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
 
 /// Ceiling on any single wait, including a server-supplied `Retry-After`.
-const RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
+///
+/// Bounds the WORST case, which is driven by `Retry-After` rather than the
+/// backoff: the header replaces the computed delay, so `RETRY_MAX_ATTEMPTS`
+/// waits of this length is the true maximum (80s at these values). The
+/// exponential path alone would only reach 30s.
+///
+/// Deliberately below what a server might ask for. Honouring a full 60s
+/// `Retry-After` four times over would stall a single turn for four minutes,
+/// and the caller here is a measurement run — better to fail the turn and
+/// record it than to hide two minutes of waiting inside one scenario.
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(20);
 
 impl OpenAiCompatInferenceEngine {
     pub fn new(base_url: String, api_key: String, model_name: String) -> Self {
@@ -651,7 +663,18 @@ mod tests {
     /// their attention. These bounds keep the worst case near two minutes.
     #[test]
     fn retry_policy_is_bounded() {
-        let worst: u64 = (0..RETRY_MAX_ATTEMPTS)
+        // The WORST case is every attempt honouring a `Retry-After` at the
+        // ceiling — the header replaces the backoff, so this branch governs
+        // the bound. Asserting only over the exponential path (30s here) would
+        // pass while the real maximum drifted, which is how the previous
+        // version of this test missed a 240s bound it claimed was 120s.
+        let worst_with_retry_after: u64 = RETRY_MAX_ATTEMPTS as u64 * RETRY_MAX_DELAY.as_secs();
+        assert!(
+            worst_with_retry_after <= 120,
+            "worst-case retry wait {worst_with_retry_after}s exceeds the 2 minute bound"
+        );
+
+        let backoff_only: u64 = (0..RETRY_MAX_ATTEMPTS)
             .map(|a| {
                 (RETRY_BASE_DELAY * 2u32.pow(a))
                     .min(RETRY_MAX_DELAY)
@@ -659,17 +682,26 @@ mod tests {
             })
             .sum();
         assert!(
-            worst <= 180,
-            "worst-case retry wait {worst}s exceeds the ~2 minute bound"
+            backoff_only <= worst_with_retry_after,
+            "the exponential path ({backoff_only}s) should not exceed the \
+             Retry-After ceiling ({worst_with_retry_after}s)"
         );
-        assert!(
-            RETRY_MAX_ATTEMPTS >= 1,
-            "a zero-attempt policy is just the old terminal-failure behaviour"
-        );
-        assert!(
-            RETRY_BASE_DELAY <= RETRY_MAX_DELAY,
-            "base delay above the ceiling makes the ceiling meaningless"
-        );
+        // Const blocks, not runtime asserts: both compare compile-time
+        // constants, so the invariant is provable at build time and a
+        // violation should break the build rather than wait for someone to
+        // run the test.
+        const {
+            assert!(
+                RETRY_MAX_ATTEMPTS >= 1,
+                "a zero-attempt policy is just the old terminal-failure behaviour"
+            );
+        }
+        const {
+            assert!(
+                RETRY_BASE_DELAY.as_secs() <= RETRY_MAX_DELAY.as_secs(),
+                "base delay above the ceiling makes the ceiling meaningless"
+            );
+        }
     }
 
     #[test]

@@ -302,16 +302,13 @@ export function assertEndState(
    */
   askedForClarification = false,
 ): Verdict {
-  // Checked before the graph assertions: a scenario that opted in accepts
-  // "asked the user" as a correct outcome, and every clause below would
-  // otherwise fail it for having written nothing.
-  if (want.clarifyOk && askedForClarification) {
-    return { passed: true };
-  }
-
   // An uncapturable snapshot is an environment fault. Scoring it either way
   // files a dead daemon as a model verdict — the same confusion `sendFailed`
   // and `emptyGeneration` already exist to prevent, one layer down.
+  //
+  // FIRST, ahead of `clarifyOk`: a turn whose snapshot failed may still carry a
+  // reply containing a question mark, and crediting that would turn a dead
+  // daemon into a passing score. Environment faults outrank outcome grading.
   if (diff.captureError) {
     return {
       passed: false,
@@ -319,6 +316,13 @@ export function assertEndState(
         `graph end-state could not be captured, so the turn was not scored on ` +
         `outcome: ${diff.captureError}`,
     };
+  }
+
+  // Checked before the graph assertions: a scenario that opted in accepts
+  // "asked the user" as a correct outcome, and every clause below would
+  // otherwise fail it for having written nothing.
+  if (want.clarifyOk && askedForClarification) {
+    return { passed: true };
   }
 
   const accountedFor = new Set<string>();

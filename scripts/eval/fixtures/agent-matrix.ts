@@ -1721,6 +1721,16 @@ const fixture: EvalFixture = {
       return assertEndState((scenario as MatrixScenario).end, diff, asked);
     },
   },
+  // The action tools this scenario's expectation makes reachable. `noTools`
+  // and `noRetry` return nothing: the first asserts an absence, and the second
+  // is satisfied by a turn that never called the tool, so neither becomes
+  // unreachable when routing withholds a tool.
+  requiredTools(scenario) {
+    const e = (scenario as MatrixScenario).expect;
+    if (e.kind === "toolOnce") return [e.tool];
+    if (e.kind === "toolSequence") return e.tools;
+    return [];
+  },
   extra(scenario, turns: TurnRecord[]) {
     return {
       // The scored expectation, and the trajectory one kept beside it as a

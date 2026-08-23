@@ -245,6 +245,7 @@ export interface ScenarioResult {
    * files written before outcome grading landed.
    */
   trajectory?: { passed: boolean; failure?: string };
+  /**
    * The scenario asserted a tool that Stage-2 routing never offered this turn,
    * so the assertion was unreachable. Excluded from the denominator for the
    * same reason as `excludedAsEmptyGeneration`.
@@ -352,6 +353,7 @@ export interface EvalFixture {
       turns?: TurnRecord[],
     ): Verdict;
   };
+  /**
    * Optional: the action tools this scenario's expectation asserts on.
    *
    * Stage-2 routing scopes the tool surface per turn, so a scenario can assert

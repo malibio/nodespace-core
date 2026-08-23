@@ -373,9 +373,14 @@ async function compareToBaseline(
 export function markerFor(r: {
   excludedAsEmptyGeneration?: boolean;
   excludedAsSetup?: boolean;
+  excludedAsToolNotOffered?: boolean;
   passed: boolean;
 }): string {
   if (r.excludedAsEmptyGeneration) return "⊘";
+  // Distinct glyph from ⊘: both are exclusions, but one is an inference bug
+  // and this one is a ROUTING miss. Collapsing them would hide which of the
+  // two a run is actually suffering from.
+  if (r.excludedAsToolNotOffered) return "⊗";
   if (r.excludedAsSetup) return "⊙";
   return r.passed ? "✓" : "✗";
 }
@@ -403,6 +408,15 @@ export function partitionExcluded(results: ScenarioResult[]): {
   scored: ScenarioResult[];
   excludedCount: number;
   setupCount: number;
+  /**
+   * Turns excluded because Stage-2 never offered the asserted tool.
+   *
+   * Counted separately from `excludedCount`: both leave the scored set, but an
+   * empty generation is an inference bug and this is a routing miss. Reporting
+   * them as one number would hide which failure a run is actually suffering,
+   * and leaving it uncounted made the totals stop reconciling.
+   */
+  toolNotOfferedCount: number;
 } {
   const scored = results.filter(
     (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup && !r.excludedAsToolNotOffered,
@@ -413,6 +427,7 @@ export function partitionExcluded(results: ScenarioResult[]): {
     setupCount: results.filter(
       (r) => r.excludedAsSetup && !r.excludedAsEmptyGeneration,
     ).length,
+    toolNotOfferedCount: results.filter((r) => r.excludedAsToolNotOffered).length,
   };
 }
 
@@ -956,6 +971,7 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         excludedAsSetup: scenario.setup === true,
         passed: verdict.passed,
       });
+
       console.error(
         `[${fixture.name}]   ${marker} ` +
           `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms` +
@@ -1125,6 +1141,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         scored,
         excludedCount,
         setupCount,
+        toolNotOfferedCount,
       } = partitionExcluded(results);
       const passed = scored.filter((r) => r.passed).length;
 
@@ -1156,6 +1173,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           failed: scored.length - passed,
           excludedEmptyGenerations: excludedCount,
           excludedSetup: setupCount,
+          excludedToolNotOffered: toolNotOfferedCount,
           trajectoryDisagreements,
         },
         results,
