@@ -508,12 +508,22 @@ function runNs(env: EvalEnv, args: string[]): unknown {
  * `completed_writes` records none of it and the rendered prompt contains no
  * trace of these nodes at all.
  *
- * Idempotent by type: `schema create` is skipped when the type already exists,
- * so a repeated run against a database that was not purged does not fail on a
- * duplicate type. The instances are NOT deduplicated — a re-run against a dirty
- * database is already outside the harness's contract (preflight asserts an
- * isolated DB), and silently reusing stale instances would hide exactly the
- * kind of drift that contract exists to prevent.
+ * IDEMPOTENT AND RESETTING, both because of `--runs`. Repetition shares one
+ * database across reps and calls `seedGroup` on every rep, so this has to be
+ * safe to run repeatedly — and "safe" here means two different things:
+ *
+ *   - Do not DUPLICATE. A create-unconditionally seed would give rep 2 two
+ *     `rowan` incidents and rep 3 three, at which point the on-call filter no
+ *     longer identifies a single node.
+ *   - Do RESET. 13's scored turn sets `resolved: true`, and `updatedNode`
+ *     scores off the diff between the pre- and post-turn snapshots — so an
+ *     already-resolved node makes rep 2's correct write a no-op that produces
+ *     no diff at all.
+ *
+ * Both failure modes surface as a scenario that passes on rep 1 and fails
+ * afterwards, which reads as model non-determinism and corrupts precisely the
+ * pass^k measurement `--runs` exists to produce. Hence: query by type, create
+ * what is missing, and reset what is already there.
  */
 function seedIncidents(env: EvalEnv): void {
   const existing = runNs(env, ["schema", "list"]) as
@@ -540,7 +550,55 @@ function seedIncidents(env: EvalEnv): void {
     ]);
   }
 
+  // Idempotent per title, and this is load-bearing rather than defensive.
+  // `--runs` (repetition for pass^k) shares ONE database across reps and calls
+  // `seedGroup` on every rep, so a create-unconditionally seed would leave rep
+  // 2 with two `rowan` incidents and rep 3 with three. The on-call filter would
+  // stop identifying a single node, 13 would start failing, and the failure
+  // would read as model non-determinism — corrupting exactly the measurement
+  // `--runs` exists to produce.
+  //
+  // Querying by type rather than tracking ids in module state keeps this
+  // correct across separate runner invocations too, which module state would
+  // not survive.
+  const existingIncidents = runNs(env, [
+    "node",
+    "query",
+    "--type",
+    SEEDED_TYPE,
+    "--limit",
+    "50",
+  ]) as
+    | { nodes?: Array<{ content?: string; id?: string }> }
+    | Array<{ content?: string; id?: string }>
+    | null;
+  const present = new Map(
+    (Array.isArray(existingIncidents)
+      ? existingIncidents
+      : (existingIncidents?.nodes ?? [])
+    ).map((n) => [(n?.content ?? "").toLowerCase(), n?.id ?? ""]),
+  );
+
   for (const { title, onCall } of SEEDED_INCIDENTS) {
+    const existing = present.get(title.toLowerCase());
+    if (existing) {
+      // Already seeded by an earlier rep. RESET it rather than skipping: 13's
+      // scored turn sets `resolved: true`, and `updatedNode` scores off the
+      // DIFF between the pre- and post-turn snapshots. Left as rep 1 finished
+      // it, rep 2's correct write would be a no-op, produce no `changedNodes`
+      // entry, and score red — turning a passing scenario into a run of
+      // failures that read as model non-determinism.
+      runNs(env, [
+        "node",
+        "update",
+        existing.replace(/^nodespace:\/\//, ""),
+        "--property",
+        `${SEEDED_ONCALL_FIELD}=${onCall}`,
+        "--property",
+        "resolved=false",
+      ]);
+      continue;
+    }
     const created = runNs(env, [
       "node",
       "create",
@@ -1500,9 +1558,26 @@ const GROUPS: MatrixScenario[][] = [
   //
   // Hence `seedGroup`: these incident records are created through the CLI
   // before the group's first turn. `completed_writes` is built only from a
-  // turn's own tool executions, so seeded nodes leave NO trace in the rendered
-  // history — not a title, not a property, not an id. The model cannot know
-  // "rowan" is on-call for the search-index incident without looking it up.
+  // turn's own tool executions, so seeded nodes are absent from the rendered
+  // chat history entirely — no title, no property value, no id.
+  //
+  // "ABSENT FROM HISTORY" IS NOT "ABSENT FROM THE PROMPT", and the difference
+  // is exactly where the two prior attempts went wrong, so state the boundary
+  // rather than restate the claim. Seeding creates a SCHEMA as well as the
+  // instances, and workspace context retrieves schemas semantically and
+  // interpolates them into the system prompt — so the model DOES see that an
+  // `incident_report` type exists with an `on_call` field. What it does not see
+  // is any instance: only `"schema"`-type nodes are retrieved that way, so the
+  // three titles and the `rowan` -> `search index corruption` mapping stay out.
+  //
+  // That is the property 13 actually rests on. Knowing the type and field names
+  // tells the model HOW TO ASK; it does not tell it WHICH incident to update.
+  // The read is still forced. Pinned in both directions by
+  // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+  // (packages/core/src/ops/context_ops.rs) — if instance content ever starts
+  // reaching workspace context, that test fails and 13 has silently degraded
+  // into the direct string match that cost scenarios 6 and 12 their
+  // indirection.
   //
   // Pinned by `scenario_13_seeded_referent_is_absent_from_history` in
   // daemon/src/services/local_agent_service.rs, which renders the real history
@@ -1510,10 +1585,17 @@ const GROUPS: MatrixScenario[][] = [
   // all absent — the inverse of scenario 6's test, which pins that ITS referent
   // is present.
   //
-  // This is also the only scenario whose route is genuinely FORCED, which is
-  // why `toolSequence` lives here: with nothing in history, the model must read
-  // before it can write. That is the assertion kind #2242 left dead and neither
-  // prior attempt could honestly revive.
+  // This is also the only scenario where A READ is genuinely forced, which is
+  // why `toolSequence` lives here: with the referent absent from history, no
+  // direct write can reach the right id. That is the assertion kind #2242 left
+  // dead and neither prior attempt could honestly revive.
+  //
+  // WHICH read is not forced, and saying otherwise would repeat the overclaim
+  // that sank both prior attempts: `resolve_query` reaches the same node. The
+  // subsequence names `search_nodes` because that is the route the winnability
+  // test proves; a model resolving otherwise shows as a trajectory mismatch
+  // against a passing outcome. That is acceptable only because `expect` is a
+  // diagnostic rather than the score (#2243).
   [
     {
       id: "13",

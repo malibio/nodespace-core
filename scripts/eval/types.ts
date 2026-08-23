@@ -273,10 +273,23 @@ export interface EvalFixture {
    * creates can be one: every write a turn makes is replayed into later turns
    * as a terse fact carrying its property values and its id inline (see
    * `terse_write_fact` in the daemon), so the referent is always sitting in the
-   * prompt as literal text. Seeding outside the scored turns is what makes the
-   * referent genuinely absent from history — `completed_writes` is built only
-   * from a turn's own tool executions, so a node written this way leaves no
-   * trace in the rendered prompt at all.
+   * prompt as literal text. Seeding outside the scored turns is what keeps the
+   * referent out of that channel — `completed_writes` is built only from a
+   * turn's own tool executions, so a node written this way is absent from the
+   * rendered chat history entirely.
+   *
+   * SCOPE, because "absent from history" is not "absent from the prompt" and
+   * conflating the two is how two prior attempts at this shipped a false claim.
+   * A seed that also creates a SCHEMA puts that schema's type name and field
+   * names in front of the model: workspace context retrieves schemas
+   * semantically and interpolates them into the system prompt. What stays out
+   * is INSTANCE data — titles, property VALUES, ids — because only
+   * `"schema"`-type nodes are retrieved that way.
+   *
+   * That boundary is what a seeded scenario must be designed against: seeding
+   * hides the answer, not the vocabulary. Pinned in both directions by
+   * `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+   * (packages/core/src/ops/context_ops.rs).
    *
    * NOT a contradiction of the harness's "assert, do not own" stance, which is
    * about DAEMON AND DATABASE LIFECYCLE — the caller starts the daemon and owns

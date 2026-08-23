@@ -4210,10 +4210,18 @@ model = "model-b"
             // guess.
             "checkout latency spike",
             "auth token expiry storm",
-            // The seeded type. If this leaked, the model could enumerate by
-            // type without ever resolving the on-call property.
+            // The type and the property name. Absent from HISTORY, which is
+            // what this test covers — but NOT absent from the prompt overall:
+            // workspace context retrieves the seeded schema semantically and
+            // renders both into the system prompt. Asserted here anyway,
+            // because history is a channel they have no business appearing in
+            // and a change that put them there would be a real regression;
+            // just do not read these two lines as proof the model cannot see
+            // them. See
+            // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+            // in packages/core/src/ops/context_ops.rs for the channel that
+            // does carry them, and why 13 is still sound.
             "incident_report",
-            // The property name the reference keys off.
             "on_call",
         ] {
             assert!(
@@ -4225,6 +4233,27 @@ model = "model-b"
                  indirection: {rendered}"
             );
         }
+    }
+
+    /// Scenario 13's ACTUAL history shape: empty.
+    ///
+    /// The test above deliberately uses a non-empty unrelated history, which is
+    /// the stricter case for the negative assertions — it proves the referent is
+    /// absent even when there is text to find it in. This pins the shape 13
+    /// really runs with, since 13 is the first and only scenario in its group.
+    ///
+    /// Trivial by construction, and that is the point worth recording: with no
+    /// prior turns there is no history channel at all, so the referent's absence
+    /// from it is structural rather than contingent on what got rendered.
+    #[test]
+    fn scenario_13_runs_with_no_prior_history() {
+        let history = node_history_from_messages(Vec::new());
+        assert!(
+            history.is_empty(),
+            "13 is the first turn of its group, so it has no prior history — the \
+             referent cannot leak through a channel that carries nothing: \
+             {history:?}"
+        );
     }
 
     /// A turn's OWN write leaks the target's title into the next turn — which

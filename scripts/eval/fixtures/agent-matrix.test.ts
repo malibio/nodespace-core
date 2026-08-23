@@ -836,24 +836,47 @@ describe("end-state fixture invariants", () => {
   // most is an unrelated scenario mentioning the seeded title, because that is
   // the one nobody would think to look for.
   test("no prompt names scenario 13's seeded target", () => {
-    // The TITLES and the type. None of these may appear in any prompt: naming
-    // the target's title hands the model the answer, and naming a sibling's or
-    // the type lets it enumerate instead of resolving.
-    const neverInAnyPrompt = [
+    // INSTANCE data: the seeded incident titles. These genuinely reach the
+    // model through no channel at all — they are absent from chat history AND
+    // from workspace context, which retrieves only `"schema"`-type nodes. A
+    // prompt naming one would be the single thing that hands the model the
+    // answer, so this list is the real guarantee.
+    const neverReachesTheModel = [
       "search index corruption",
       "checkout latency spike",
       "auth token expiry storm",
-      "incident_report",
-      "on_call",
     ];
     for (const s of all) {
       for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
-        for (const f of neverInAnyPrompt) {
+        for (const f of neverReachesTheModel) {
           expect(
             p.toLowerCase().includes(f),
             `scenario ${s.id}'s prompt names "${f}", which must exist only in ` +
               `seeded state — naming it in a prompt makes scenario 13's ` +
               `target recoverable without a lookup`,
+          ).toBe(false);
+        }
+      }
+    }
+
+    // SCHEMA vocabulary: the type and field names. Kept out of fixture prompts
+    // for tidiness, but NOT a guarantee the model cannot see them — workspace
+    // context renders the seeded schema into the system prompt, so it does. The
+    // distinction is stated because a future author designing against "the
+    // model has never heard of on_call" would be designing against something
+    // this fixture cannot deliver. See
+    // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+    // in packages/core/src/ops/context_ops.rs.
+    const notInFixturePrompts = ["incident_report", "on_call"];
+    for (const s of all) {
+      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
+        for (const f of notInFixturePrompts) {
+          expect(
+            p.toLowerCase().includes(f),
+            `scenario ${s.id}'s prompt names "${f}". The model already sees ` +
+              `this via workspace context, so this is not a correctness bug — ` +
+              `but naming seeded vocabulary in a prompt muddies which scenario ` +
+              `owns that state`,
           ).toBe(false);
         }
       }
@@ -879,12 +902,19 @@ describe("end-state fixture invariants", () => {
     expect(s13!.prompt.toLowerCase()).toContain(onCall);
   });
 
-  // 13 is the only scenario whose route is genuinely forced (its referent is
-  // absent from history, so it cannot be resolved without a read), and that is
-  // the only condition under which asserting a SUBSEQUENCE is honest. Pinning
-  // this stops a future scenario from reviving `toolSequence` on a turn where a
-  // direct write is also correct — the mistake #2242 removed from scenario 6
-  // and #2250 removed from 12d.
+  // 13 is the only scenario where A READ is forced: its referent is absent from
+  // history, so no direct write can reach the right id. That is the condition
+  // under which asserting a read-then-write subsequence is defensible, and
+  // pinning it stops a future scenario from reviving `toolSequence` on a turn
+  // where a direct write is also correct — the mistake #2242 removed from
+  // scenario 6 and #2250 removed from 12d.
+  //
+  // Note the limit of the claim, since overstating it is how the previous two
+  // attempts went wrong: WHICH read is not forced. `resolve_query` reaches the
+  // same node, and a model using it will show as a trajectory mismatch against
+  // a passing outcome. That is tolerable only because `expect` is a diagnostic
+  // and not the score (#2243) — under trajectory scoring this assertion would
+  // be wrong for the same reason the earlier two were.
   test("toolSequence is asserted only where the route is forced", () => {
     const seqIds = all
       .filter((s) => s.expect.kind === "toolSequence")
