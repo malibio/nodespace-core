@@ -265,6 +265,57 @@ parameters_schema:
   "type": "object"
 }
 
+### update_node
+description: Update an existing node's fields immediately — call this directly with the node id you already have (e.g. from search_nodes, get_node, or resolve_query), don't ask the user to confirm or supply it first. The node service recomputes the title automatically after any update. An id on its own changes nothing: every call must also carry the change itself, in "content", "field_values", or both. When the user describes a new state in words ("it's ready for review", "put it on dana", "mark it done"), express that state in "field_values" — see that parameter for which key to use. Example call: {"id": "a1b2c3d4-...", "content": "Buy milk and eggs"}. Example state change: {"id": "a1b2c3d4-...", "field_values": {"status": "in_dev"}}.
+parameters_schema:
+{
+  "properties": {
+    "content": {
+      "description": "New title text (optional). Only when the user is renaming the node.",
+      "type": "string"
+    },
+    "field_values": {
+      "description": "The change itself: field keys to new values, e.g. {\"status\": \"done\"}, required whenever the request changes the node's state rather than its title. Do not invent a key from the user's wording — if no defined key covers the request, call get_node to see the full list before concluding one does not exist. When a field lists allowed values, use one of those values exactly — never a paraphrase of the user's wording, never a capitalised or spaced form of the value. Send only the keys that change, with their new values, not the unchanged ones.",
+      "properties": {
+        "assignee": {
+          "type": "string"
+        },
+        "sprint": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ready_for_dev",
+            "in_dev",
+            "ready_for_review",
+            "in_review",
+            "done",
+            "proposed",
+            "accepted",
+            "superseded"
+          ],
+          "type": "string"
+        },
+        "supersedes": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "id": {
+      "description": "Node id to update — the \"id\" value exactly as it appeared in a tool result. Never the node's title.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+
 ### create_schema
 description: Define a new entity type with its fields. Use when the user describes a kind of record the workspace does not track yet, not a single instance of an existing kind. The top-level 'name' parameter is REQUIRED — it is the display name of the entity type, in the user's own words. The schema ID is auto-generated as lowercase snake_case from name (e.g. 'Release Plan' → 'release_plan'). After creation, use this ID as node_type when creating instances. The example shows one field per detail the user mentioned, including a pointer at another record (e.g. "blocks another ticket") as a field rather than a second type. Example call: {"name": "Ticket", "fields": [{"name": "status", "type": "enum", "required": true, "coreValues": [{"value": "ready_for_dev", "label": "Ready for Dev"}, {"value": "in_dev", "label": "In Dev"}, {"value": "done", "label": "Done"}]}, {"name": "assignee", "type": "text"}, {"name": "blocks", "type": "text"}]}. FIELDS: Every node already has a built-in content/title — do NOT add a 'name' or 'title' entry to the fields array. EXCEPTION: if title_template references '{name}' (e.g. title_template='{name} ({status})'), you MUST define 'name' as a text field so the template can reference it. Only define type-specific fields. If a field maps to an existing node type, define it as a relationship instead.
 parameters_schema:
@@ -540,6 +591,33 @@ parameters_schema:
   },
   "required": [
     "schema_id"
+  ],
+  "type": "object"
+}
+
+### update_task_status
+description: Update a task's status. Valid statuses: open, in_progress, done, cancelled.
+parameters_schema:
+{
+  "properties": {
+    "id": {
+      "description": "Task node ID to update",
+      "type": "string"
+    },
+    "status": {
+      "description": "New status value",
+      "enum": [
+        "open",
+        "in_progress",
+        "done",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "status"
   ],
   "type": "object"
 }
