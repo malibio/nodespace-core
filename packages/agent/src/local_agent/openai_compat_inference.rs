@@ -84,6 +84,19 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// failure, and a connected-but-stalled server is not one.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Retries allowed after a 429 or 5xx before the turn is failed.
+///
+/// Four attempts spans roughly two minutes with the backoff below — long
+/// enough to ride out the burst limits hosted free tiers enforce, short enough
+/// that a genuine outage surfaces as an error instead of a hung run.
+const RETRY_MAX_ATTEMPTS: u32 = 4;
+
+/// First backoff wait; doubles per attempt (2s, 4s, 8s, 16s).
+const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
+
+/// Ceiling on any single wait, including a server-supplied `Retry-After`.
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
+
 impl OpenAiCompatInferenceEngine {
     pub fn new(base_url: String, api_key: String, model_name: String) -> Self {
         Self {
@@ -328,22 +341,61 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
             req_builder = req_builder.bearer_auth(&self.api_key);
         }
 
-        let response = req_builder
-            .send()
-            .await
-            .map_err(|e| InferenceError::Engine(e.to_string()))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response
-                .text()
+        // Rate limits are transient, so a 429 is retried rather than failing
+        // the turn. Without this a throttled endpoint yields a turn that called
+        // no tools, which every negative assertion scores GREEN and every
+        // positive one scores red -- an eval run that silently measures the
+        // provider's capacity instead of the model.
+        //
+        // `Retry-After` is honoured when present; otherwise the wait doubles
+        // from RETRY_BASE_DELAY. Both are capped by RETRY_MAX_DELAY so a
+        // pathological header cannot stall a run indefinitely.
+        let mut attempt: u32 = 0;
+        let response = loop {
+            let builder = req_builder
+                .try_clone()
+                .ok_or_else(|| InferenceError::Engine("request is not retryable".to_string()))?;
+            let response = builder
+                .send()
                 .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(InferenceError::Engine(format!(
-                "OpenAI-compat API error {}: {}",
-                status, body
-            )));
-        }
+                .map_err(|e| InferenceError::Engine(e.to_string()))?;
+
+            let status = response.status();
+            if status.is_success() {
+                break response;
+            }
+
+            let retryable =
+                status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+            if !retryable || attempt >= RETRY_MAX_ATTEMPTS {
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "unknown error".to_string());
+                return Err(InferenceError::Engine(format!(
+                    "OpenAI-compat API error {}: {}",
+                    status, body
+                )));
+            }
+
+            let after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs);
+            let backoff = RETRY_BASE_DELAY * 2u32.pow(attempt);
+            let wait = after.unwrap_or(backoff).min(RETRY_MAX_DELAY);
+
+            tracing::warn!(
+                status = %status,
+                attempt = attempt + 1,
+                wait_secs = wait.as_secs_f32(),
+                "OpenAI-compat endpoint throttled; backing off"
+            );
+            tokio::time::sleep(wait).await;
+            attempt += 1;
+        };
 
         let mut final_usage = InferenceUsage {
             prompt_tokens: 0,
@@ -589,6 +641,35 @@ mod tests {
         let delta = resp.choices[0].delta.as_ref().expect("delta present");
         assert_eq!(delta.content.as_deref(), Some("hello"));
         assert!(delta.tool_calls.is_empty());
+    }
+
+    /// The retry policy stays bounded.
+    ///
+    /// A hosted endpoint under load can 429 indefinitely. Retrying is right,
+    /// retrying forever is not: an eval that hangs is worse than one that
+    /// reports an error, because it consumes the operator's time instead of
+    /// their attention. These bounds keep the worst case near two minutes.
+    #[test]
+    fn retry_policy_is_bounded() {
+        let worst: u64 = (0..RETRY_MAX_ATTEMPTS)
+            .map(|a| {
+                (RETRY_BASE_DELAY * 2u32.pow(a))
+                    .min(RETRY_MAX_DELAY)
+                    .as_secs()
+            })
+            .sum();
+        assert!(
+            worst <= 180,
+            "worst-case retry wait {worst}s exceeds the ~2 minute bound"
+        );
+        assert!(
+            RETRY_MAX_ATTEMPTS >= 1,
+            "a zero-attempt policy is just the old terminal-failure behaviour"
+        );
+        assert!(
+            RETRY_BASE_DELAY <= RETRY_MAX_DELAY,
+            "base delay above the ceiling makes the ceiling meaningless"
+        );
     }
 
     #[test]
