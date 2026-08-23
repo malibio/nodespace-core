@@ -90,6 +90,19 @@ export interface EdgeExpectation {
  * rather than silently passing everything.
  */
 export interface EndState {
+  /**
+   * A turn that asked the user instead of acting counts as a pass.
+   *
+   * Set ONLY where the prompt genuinely underdetermines the write — a required
+   * field it never supplies, a referent with more than one plausible target.
+   * On a fully determined prompt leave it off: there a question is evasion,
+   * and should still fail.
+   *
+   * Opt-in for the reason `noRetry`'s `minCalls` is: changing shared scoring
+   * semantics silently re-scores every existing scenario, and these numbers
+   * are not decision-grade enough to absorb that quietly.
+   */
+  clarifyOk?: boolean;
   /** A node matching this must have been created by this turn. */
   createdNode?: NodeExpectation;
   /**
@@ -257,10 +270,45 @@ function renderNodes(nodes: SnapshotNode[]): string {
  * property the trajectory assertions have, and the reason both can run in
  * `bun run test:all`.
  */
-export function assertEndState(want: EndState, diff: GraphDiff): Verdict {
+/**
+ * Did this turn stop and ask the user rather than acting?
+ *
+ * Recognised two ways, because a model may clarify through either channel:
+ *   - it called `route_clarify` (the sanctioned path), or
+ *   - it called no action tool and its reply asks a question.
+ *
+ * The text check is deliberately narrow: it requires a question mark AND no
+ * action tool, so a turn that acted and merely ended on a question cannot be
+ * credited. It stays a heuristic over prose — `route_clarify` is the robust
+ * signal, and a model routed through it does not depend on this fallback.
+ */
+export function turnAskedForClarification(
+  toolsCalled: string[],
+  reply: string | undefined,
+  isRoutingTool: (name: string) => boolean,
+): boolean {
+  if (toolsCalled.includes("route_clarify")) return true;
+  if (toolsCalled.some((t) => !isRoutingTool(t))) return false;
+  return (reply ?? "").includes("?");
+}
+
+export function assertEndState(
+  want: EndState,
+  diff: GraphDiff,
+  /**
+   * True when the turn asked the user instead of acting. Computed by the
+   * caller, which can see the turn; `assertEndState` stays pure over its
+   * inputs.
+   */
+  askedForClarification = false,
+): Verdict {
   // An uncapturable snapshot is an environment fault. Scoring it either way
   // files a dead daemon as a model verdict — the same confusion `sendFailed`
   // and `emptyGeneration` already exist to prevent, one layer down.
+  //
+  // FIRST, ahead of `clarifyOk`: a turn whose snapshot failed may still carry a
+  // reply containing a question mark, and crediting that would turn a dead
+  // daemon into a passing score. Environment faults outrank outcome grading.
   if (diff.captureError) {
     return {
       passed: false,
@@ -268,6 +316,13 @@ export function assertEndState(want: EndState, diff: GraphDiff): Verdict {
         `graph end-state could not be captured, so the turn was not scored on ` +
         `outcome: ${diff.captureError}`,
     };
+  }
+
+  // Checked before the graph assertions: a scenario that opted in accepts
+  // "asked the user" as a correct outcome, and every clause below would
+  // otherwise fail it for having written nothing.
+  if (want.clarifyOk && askedForClarification) {
+    return { passed: true };
   }
 
   const accountedFor = new Set<string>();

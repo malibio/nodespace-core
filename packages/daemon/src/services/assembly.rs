@@ -208,10 +208,11 @@ pub async fn build_database_services(
         node_service.clone(),
         embedding_svc_state.clone(),
     ));
-    let capture_config_path = {
-        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        home.join(".nodespace").join("daemon.toml")
-    };
+    // Resolved through `nodespace_dir` so it follows NODESPACE_HOME, exactly as
+    // the database and the ADR-053 registry do. Reading it from the real home
+    // instead left an isolated daemon serving a temp database while taking its
+    // OpenAI-compat provider configs from the user's own `~/.nodespace`.
+    let capture_config_path = crate::nodespace_dir()?.join("daemon.toml");
     let agent_session = AgentSessionHandler::new(
         shared.pty_manager.clone(),
         assembler,
@@ -285,6 +286,19 @@ async fn seed_agent_nodes(node_service: &mut CoreNodeService) {
 }
 
 /// Resolve the NLP model path without loading it. Returns `None` when absent.
+///
+/// Always `~/.nodespace/models` by default, reading the REAL home rather than
+/// [`crate::nodespace_dir`] — deliberately unlike the config path above.
+///
+/// That directory is the shared model store: read-only, and large enough that
+/// sharing is the whole point (a dev machine mid-evaluation held 9 GGUFs
+/// totalling 39 GB). An isolated daemon should reuse them, not start from an
+/// empty directory and re-download. `NODESPACED_MODEL_PATH` overrides it for a
+/// run that genuinely needs a different file.
+///
+/// The config path is not analogous: `daemon.toml` is WRITTEN to (the routing
+/// probe caches verdicts there), so resolving it against the real home let an
+/// isolated run mutate the user's own configuration.
 fn resolve_model_path() -> Option<std::path::PathBuf> {
     let p = if let Ok(custom) = std::env::var("NODESPACED_MODEL_PATH") {
         std::path::PathBuf::from(custom)

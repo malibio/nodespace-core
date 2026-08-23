@@ -116,6 +116,8 @@ function cmdNew(): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+
+
 /** Strip ANSI colour codes that tracing writes to the log. */
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex

@@ -245,6 +245,12 @@ export interface ScenarioResult {
    * files written before outcome grading landed.
    */
   trajectory?: { passed: boolean; failure?: string };
+  /**
+   * The scenario asserted a tool that Stage-2 routing never offered this turn,
+   * so the assertion was unreachable. Excluded from the denominator for the
+   * same reason as `excludedAsEmptyGeneration`.
+   */
+  excludedAsToolNotOffered?: boolean;
 }
 
 /**
@@ -332,8 +338,34 @@ export interface EvalFixture {
      * Score one scenario from what the graph actually did. Must be pure over
      * the diff, so it is unit-testable without a daemon.
      */
-    scoreOutcome(scenario: Scenario, diff: GraphDiff): Verdict;
+    scoreOutcome(
+      scenario: Scenario,
+      diff: GraphDiff,
+      /**
+       * The scored turn, for the one property a diff cannot express: whether
+       * the model ASKED instead of acting.
+       *
+       * A clarification writes nothing, so it is indistinguishable from doing
+       * nothing by end-state alone — yet on an underdetermined prompt it is
+       * the correct outcome, and scoring it as failure rewards a model that
+       * guesses over one that checks.
+       */
+      turns?: TurnRecord[],
+    ): Verdict;
   };
+  /**
+   * Optional: the action tools this scenario's expectation asserts on.
+   *
+   * Stage-2 routing scopes the tool surface per turn, so a scenario can assert
+   * a tool the model was never offered — it then reds out for "not calling" a
+   * tool it could not call. That is an environment fault of the same class as
+   * a degenerate empty generation, and the runner excludes it on the same
+   * grounds rather than scoring it (see the `toolsOffered` guard in run()).
+   *
+   * Return an empty array for scenarios that assert an absence (`noTools`),
+   * where no tool needs to be offered for the assertion to be reachable.
+   */
+  requiredTools?(scenario: Scenario): string[];
   /**
    * Optional per-scenario fields to record in the results file beyond
    * pass/fail — routing signals, matched skill, and similar.

@@ -67,6 +67,23 @@ function newChat(env: EvalEnv): string {
 }
 
 /**
+ * Pause before a turn, to stay under a served endpoint's per-minute cap.
+ *
+ * Synchronous on purpose: `runTurn` is sync, the harness is serial, and making
+ * the call chain async purely to await a sleep would be a large diff for no
+ * behavioural gain. `Atomics.wait` on a throwaway buffer is the standard way
+ * to block a worker-free main thread without a spin loop.
+ *
+ * Deliberately OUTSIDE the timed region below — folding it into `latencyMs`
+ * would make a paced arm's latency incomparable to an unpaced one.
+ */
+function pauseBeforeTurn(): void {
+  const ms = Number(process.env.NS_TURN_DELAY_MS ?? 0);
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
  * Run one turn and scrape its outcome.
  *
  * A failed send is recorded rather than thrown, so one flaky turn does not
@@ -76,6 +93,7 @@ function newChat(env: EvalEnv): string {
  * The run loop aborts once sends fail consecutively.
  */
 function runTurn(env: EvalEnv, chatId: string, message: string): TurnRecord {
+  pauseBeforeTurn();
   const start = performance.now();
   const r = Bun.spawnSync(["bun", "run", env.aichat, "send", chatId, message], {
     stdout: "pipe",
@@ -373,9 +391,14 @@ async function compareToBaseline(
 export function markerFor(r: {
   excludedAsEmptyGeneration?: boolean;
   excludedAsSetup?: boolean;
+  excludedAsToolNotOffered?: boolean;
   passed: boolean;
 }): string {
   if (r.excludedAsEmptyGeneration) return "⊘";
+  // Distinct glyph from ⊘: both are exclusions, but one is an inference bug
+  // and this one is a ROUTING miss. Collapsing them would hide which of the
+  // two a run is actually suffering from.
+  if (r.excludedAsToolNotOffered) return "⊗";
   if (r.excludedAsSetup) return "⊙";
   return r.passed ? "✓" : "✗";
 }
@@ -403,9 +426,18 @@ export function partitionExcluded(results: ScenarioResult[]): {
   scored: ScenarioResult[];
   excludedCount: number;
   setupCount: number;
+  /**
+   * Turns excluded because Stage-2 never offered the asserted tool.
+   *
+   * Counted separately from `excludedCount`: both leave the scored set, but an
+   * empty generation is an inference bug and this is a routing miss. Reporting
+   * them as one number would hide which failure a run is actually suffering,
+   * and leaving it uncounted made the totals stop reconciling.
+   */
+  toolNotOfferedCount: number;
 } {
   const scored = results.filter(
-    (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup,
+    (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup && !r.excludedAsToolNotOffered,
   );
   return {
     scored,
@@ -413,6 +445,7 @@ export function partitionExcluded(results: ScenarioResult[]): {
     setupCount: results.filter(
       (r) => r.excludedAsSetup && !r.excludedAsEmptyGeneration,
     ).length,
+    toolNotOfferedCount: results.filter((r) => r.excludedAsToolNotOffered).length,
   };
 }
 
@@ -465,7 +498,7 @@ export function aggregateReps(reps: ScenarioResult[][]): RunAggregate {
     ).length;
     const scored = setup
       ? []
-      : results.filter((r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup);
+      : results.filter((r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup && !r.excludedAsToolNotOffered);
     const passedReps = scored.filter((r) => r.passed).length;
     return {
       id,
@@ -892,6 +925,42 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         continue;
       }
 
+      // Stage-2 scopes each turn's tool surface to the retrieved skills'
+      // whitelists, so a retrieval miss can remove the tool a scenario needs.
+      // The turn then cannot make the graph change either, so BOTH the
+      // trajectory and outcome verdicts red out — for a turn the model had no
+      // way to complete. Observed live: "Put down that we went with
+      // event-based cache clearing, Priya's call" retrieved Node Deletion, so
+      // the surface carried delete/search tools and no create_node (#2240).
+      //
+      // Excluded on the same grounds as a degenerate empty generation: the
+      // assertion was unreachable, so neither verdict is a statement about the
+      // model. Still recorded, so the rate stays visible.
+      const required = fixture.requiredTools?.(scenario) ?? [];
+      const offeredTools = scored.toolsOffered
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const missingTools = required.filter((t) => !offeredTools.includes(t));
+      if (missingTools.length > 0 && offeredTools.length > 0) {
+        results.push({
+          id: scenario.id,
+          scenario: scenario.scenario,
+          prompt: scenario.prompt,
+          passed: false,
+          failure:
+            `excluded: asserted tool(s) ${missingTools.join(", ")} were never ` +
+            `offered this turn (Stage-2 routing scoped to: ${offeredTools.join(", ")})`,
+          turns: [...priorTurns, scored],
+          extra: fixture.extra?.(scenario, [scored]),
+          excludedAsToolNotOffered: true,
+        });
+        console.error(
+          `[${fixture.name}]   ⊗ excluded (tool not offered: ${missingTools.join(", ")}) ${scored.latencyMs}ms`,
+        );
+        continue;
+      }
+
       // The trajectory assertions still run, but they no longer decide the
       // score when the fixture grades on outcome — they are recorded as a
       // diagnostic. Trajectory answers "how did the model get there", which
@@ -900,7 +969,7 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
       const trajectory = fixture.score(scenario, [scored]);
       const verdict =
         fixture.graph && diff
-          ? fixture.graph.scoreOutcome(scenario, diff)
+          ? fixture.graph.scoreOutcome(scenario, diff, [scored])
           : trajectory;
 
       results.push({
@@ -920,6 +989,7 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         excludedAsSetup: scenario.setup === true,
         passed: verdict.passed,
       });
+
       console.error(
         `[${fixture.name}]   ${marker} ` +
           `tools=[${scored.toolsCalled.join(",")}] ${scored.latencyMs}ms` +
@@ -1089,6 +1159,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         scored,
         excludedCount,
         setupCount,
+        toolNotOfferedCount,
       } = partitionExcluded(results);
       const passed = scored.filter((r) => r.passed).length;
 
@@ -1120,6 +1191,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           failed: scored.length - passed,
           excludedEmptyGenerations: excludedCount,
           excludedSetup: setupCount,
+          excludedToolNotOffered: toolNotOfferedCount,
           trajectoryDisagreements,
         },
         results,
@@ -1234,6 +1306,19 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   if (setupExcluded > 0) {
     console.log(
       `   Setup:    ${setupExcluded} scenario-rep(s) (fixture setup — not scored)`,
+    );
+  }
+  // Reported separately from `excluded`: both leave the scored set, but an
+  // empty generation is an inference bug and this is a ROUTING miss. A reader
+  // seeing a shrunken denominator needs to know which one they are looking at,
+  // and #2240/#2254 are the reason the distinction is worth a line.
+  const toolNotOffered = reps.reduce(
+    (n, r) => n + (r.summary.excludedToolNotOffered ?? 0),
+    0,
+  );
+  if (toolNotOffered > 0) {
+    console.log(
+      `   Unrouted: ${toolNotOffered} scenario-rep(s) (asserted tool never offered — not scored)`,
     );
   }
   const disagreements = reps.reduce(
