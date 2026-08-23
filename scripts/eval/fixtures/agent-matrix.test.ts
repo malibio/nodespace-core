@@ -826,6 +826,109 @@ describe("end-state fixture invariants", () => {
     expect(setupIds).toEqual(["11a", "11b", "12a", "12b", "12b2", "12c"]);
   });
 
+  // Scenario 13's whole design is that its referent lives ONLY in seeded state.
+  // A prompt that named the target incident, its type, or the on-call property
+  // would hand the model the answer and silently turn 13 back into the direct
+  // string match that cost scenarios 6 and 12 their indirection — the failure
+  // would look like a pass.
+  //
+  // Checks every prompt in the fixture, not just 13's: the leak that matters
+  // most is an unrelated scenario mentioning the seeded title, because that is
+  // the one nobody would think to look for.
+  test("no prompt names scenario 13's seeded incident titles", () => {
+    // INSTANCE data: the seeded incident titles. These genuinely reach the
+    // model through no channel at all — they are absent from chat history AND
+    // from workspace context, which retrieves only `"schema"`-type nodes. A
+    // prompt naming one would be the single thing that hands the model the
+    // answer, so this list is the real guarantee.
+    const neverReachesTheModel = [
+      "search index corruption",
+      "checkout latency spike",
+      "auth token expiry storm",
+    ];
+    for (const s of all) {
+      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
+        for (const f of neverReachesTheModel) {
+          expect(
+            p.toLowerCase().includes(f),
+            `scenario ${s.id}'s prompt names "${f}", which must exist only in ` +
+              `seeded state — naming it in a prompt makes scenario 13's ` +
+              `target recoverable without a lookup`,
+          ).toBe(false);
+        }
+      }
+    }
+
+    // The on-call VALUE is different in kind: scenario 13's own prompt must
+    // name it — that is the reference. What matters is that it identifies the
+    // target only via seeded state, so no OTHER scenario may mention it (which
+    // would put it in a shared chat's history) and 13 must actually use it.
+    const onCall = "rowan";
+    for (const s of all) {
+      if (s.id === "13") continue;
+      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
+        expect(
+          p.toLowerCase().includes(onCall),
+          `scenario ${s.id} names the on-call value "${onCall}", which only ` +
+            `scenario 13 may reference`,
+        ).toBe(false);
+      }
+    }
+    const s13 = all.find((s) => s.id === "13");
+    expect(s13).toBeDefined();
+    expect(s13!.prompt.toLowerCase()).toContain(onCall);
+  });
+
+  // SEPARATE TEST, and separate deliberately: this one is HOUSEKEEPING, not a
+  // correctness guarantee, and folding it into the test above would let that
+  // test's name promise something the system does not deliver.
+  //
+  // The seeded schema's type and field names are NOT hidden from the model —
+  // workspace context renders the schema into the system prompt, so it sees
+  // both. Keeping them out of fixture prompts only keeps it clear which
+  // scenario owns that state. Stated explicitly because a future author
+  // designing against "the model has never heard of on_call" would be designing
+  // against something this fixture cannot provide. See
+  // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+  // in packages/core/src/ops/context_ops.rs.
+  test("seeded schema vocabulary is not restated in fixture prompts", () => {
+    for (const s of all) {
+      for (const p of [s.prompt, ...(s.priorTurns ?? [])]) {
+        for (const f of ["incident_report", "on_call"]) {
+          expect(
+            p.toLowerCase().includes(f),
+            `scenario ${s.id}'s prompt names "${f}". The model already sees ` +
+              `this via workspace context, so this is not a correctness bug — ` +
+              `but naming seeded vocabulary in a prompt muddies which scenario ` +
+              `owns that state`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  // 13 is the only scenario where A READ is forced: its referent is absent from
+  // history, so no direct write can reach the right id. That is the condition
+  // under which asserting a read-then-write subsequence is defensible, and
+  // pinning it stops a future scenario from reviving `toolSequence` on a turn
+  // where a direct write is also correct — the mistake #2242 removed from
+  // scenario 6 and #2250 removed from 12d.
+  //
+  // Note the limit of the claim, since overstating it is how the previous two
+  // attempts went wrong: WHICH read is not forced. `resolve_query` reaches the
+  // same node, and a model using it will show as a trajectory mismatch against
+  // a passing outcome. That is tolerable only because `expect` is a diagnostic
+  // and not the score (#2243) — under trajectory scoring this assertion would
+  // be wrong for the same reason the earlier two were.
+  test("toolSequence is asserted only where the route is forced", () => {
+    const seqIds = all
+      .filter((s) => s.expect.kind === "toolSequence")
+      .map((s) => s.id)
+      .sort();
+    expect(seqIds).toEqual(["13"]);
+  });
+
+
   // The scenarios whose whole purpose is that a VALUE reached storage. If one
   // of these stops asserting a property, it reverts to passing on a bare shell
   // — the `property_count: 0` shape that reached production.

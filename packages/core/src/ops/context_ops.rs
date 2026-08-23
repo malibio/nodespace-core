@@ -488,6 +488,98 @@ mod tests {
         sample_schema_with_relationships(id, display_name, fields, vec![])
     }
 
+    /// Matrix scenario 13's seeded SCHEMA reaches the system prompt; its seeded
+    /// INSTANCES do not. This is the boundary that scenario is built on.
+    ///
+    /// 13 asks the model to resolve "the incident Rowan was on call for"
+    /// against records seeded outside any scored turn. The absence proof in the
+    /// daemon (`scenario_13_seeded_referent_is_absent_from_history`) covers the
+    /// CHAT HISTORY channel and is correct about it. It is not the only channel,
+    /// which is what this test exists to say out loud.
+    ///
+    /// Seeding creates a schema as well as three instances, and workspace
+    /// context retrieves schemas semantically (`SCHEMA_SIMILARITY_THRESHOLD`,
+    /// a permissive 0.2) and interpolates them into the system prompt. So the
+    /// seeded TYPE NAME and its FIELD NAMES — including `on_call`, the very
+    /// property 13's reference keys off — are visible to the model on the turn
+    /// being scored.
+    ///
+    /// WHY 13 IS STILL SOUND. What leaks is the VOCABULARY, not the ANSWER.
+    /// Only `"schema"`-type nodes are retrieved here, so the incident titles
+    /// and — critically — the `rowan` -> `search index corruption` mapping stay
+    /// out. Knowing that an `incident_report` type exists with an `on_call`
+    /// field tells the model how to ASK; it does not tell it which incident to
+    /// update. The read is still forced, which is the property #2248 asked for.
+    ///
+    /// SCOPE OF EACH HALF, because overstating exactly this is what went wrong
+    /// three times in this area and a reader deserves to know which assertions
+    /// are load-bearing:
+    ///
+    ///   - The POSITIVE half is the real content. It is what refuted the
+    ///     original claim that seeded state leaves no trace in the prompt at
+    ///     all, and it fails the moment schema rendering stops including type
+    ///     or field names.
+    ///   - The NEGATIVE half is close to vacuous by construction, and is
+    ///     documented rather than dressed up: `relevant_schemas` is
+    ///     `Vec<SchemaNode>`, which has no field capable of holding an instance
+    ///     title or property value, so no input to this renderer could make
+    ///     those assertions fail. They record the INVARIANT 13 depends on —
+    ///     schema vocabulary in, instance data out — rather than actively
+    ///     policing it.
+    ///
+    /// So this is not a tripwire for the dangerous change. A future path that
+    /// routed instance data into the prompt would do so through a different
+    /// field or a different block, and would sail past this test. What actually
+    /// guards 13 is that only `"schema"`-type nodes are retrieved
+    /// (`semantic_search_nodes_of_type` above); if that ever widens, this test
+    /// will not notice and 13's referent becomes directly matchable.
+    #[test]
+    fn scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not() {
+        let ctx = WorkspaceContext {
+            collections: vec![],
+            active_playbooks: vec![],
+            relevant_schemas: vec![sample_schema(
+                "incident_report",
+                "incident_report",
+                &["on_call", "resolved"],
+            )],
+            related_schemas: vec![],
+        };
+
+        let rendered = ctx.format_for_prompt(4000);
+
+        // The leak, asserted rather than assumed away.
+        assert!(
+            rendered.contains("incident_report"),
+            "the seeded type name is expected to reach the prompt via workspace \
+             context — if it no longer does, scenario 13's comments overstate \
+             the leak and should be relaxed: {rendered}"
+        );
+        assert!(
+            rendered.contains("on_call"),
+            "the seeded field name is expected to reach the prompt — this is the \
+             property scenario 13's reference keys off, and knowing it exists is \
+             what lets the model form the lookup at all: {rendered}"
+        );
+
+        // The boundary that keeps scenario 13 winnable-only-by-lookup. None of
+        // these is instance data the schema block has any business carrying.
+        for absent in [
+            "search index corruption",
+            "checkout latency spike",
+            "auth token expiry storm",
+            "rowan",
+        ] {
+            assert!(
+                !rendered.to_lowercase().contains(absent),
+                "'{absent}' is INSTANCE data and must never reach workspace \
+                 context — if it does, scenario 13's referent is directly \
+                 matchable from the system prompt and the scenario has \
+                 degraded into the defect #2242 and #2250 each found: {rendered}"
+            );
+        }
+    }
+
     fn schema_search_result(id: &str, is_core: bool) -> (Node, f64) {
         let node = Node::new_with_id(
             id.to_string(),

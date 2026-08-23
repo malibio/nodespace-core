@@ -692,3 +692,119 @@ async fn filterless_search_silently_ignores_sorting() {
          scenario_12_sorted_single_result_route_is_also_accepted: {found:?}"
     );
 }
+
+/// Scenario 13's ideal lookup-then-write is accepted, and the lookup actually
+/// discriminates on the seeded property.
+///
+/// 13 is the scenario #2248 asked for: its referent ("the incident Rowan was on
+/// call for") is seeded out of band, so nothing about it reaches the rendered
+/// prompt and the model MUST read before it can write. The daemon test
+/// `scenario_13_seeded_referent_is_absent_from_history` proves the absence
+/// side; this proves the other half, that a model which does the right thing is
+/// not refused.
+///
+/// The lookup is the fragile half and the reason this test exists. Scenario 13
+/// filters on a property value rather than a title, and a filtered
+/// `search_nodes` routes through `QueryService` (`run_node_query`'s non-empty
+/// `filters` branch) rather than the title-listing path — a genuinely different
+/// code path from the one every other scenario exercises. If that filter did
+/// not discriminate, 13 would be unwinnable by construction and would red-line
+/// correct behavior exactly as scenarios 6 and 12 did.
+///
+/// Asserts the filter returns the ONE matching incident and NOT the other two:
+/// a filter that silently matched everything would still "find" the target and
+/// still look like a working call.
+#[tokio::test(flavor = "multi_thread")]
+async fn scenario_13_ideal_lookup_then_write_is_accepted() {
+    let (executor, _tmp) = make_executor().await;
+
+    // The type and instances `seedIncidents` establishes in the fixture. Seeded
+    // here through the tool path rather than the CLI: this test is about
+    // whether the AGENT's calls are accepted against that state, and the tool
+    // path produces the same rows.
+    let schema = call(
+        &executor,
+        "create_schema",
+        json!({
+            "name": "incident_report",
+            "fields": [
+                {"name": "on_call", "type": "text"},
+                {"name": "resolved", "type": "boolean"},
+            ],
+        }),
+    )
+    .await;
+    let incident_type = schema["schemaId"].as_str().unwrap().to_string();
+
+    let mut target_id = String::new();
+    for (title, on_call) in [
+        ("checkout latency spike", "dana"),
+        ("search index corruption", "rowan"),
+        ("auth token expiry storm", "sam"),
+    ] {
+        let created = call(
+            &executor,
+            "create_node",
+            json!({
+                "content": title,
+                "node_type": incident_type,
+                "field_values": {"on_call": on_call, "resolved": false},
+            }),
+        )
+        .await;
+        if on_call == "rowan" {
+            target_id = bare(created["id"].as_str().unwrap()).to_string();
+        }
+    }
+
+    // The lookup: filter on the seeded property the prompt names.
+    let found = call(
+        &executor,
+        "search_nodes",
+        json!({
+            "query": "*",
+            "node_type": incident_type,
+            "filters": [{"property": "on_call", "operator": "equals", "value": "rowan"}],
+        }),
+    )
+    .await;
+
+    let text = serde_json::to_string(&found).unwrap();
+    assert!(
+        text.contains("search index corruption"),
+        "the on_call filter did not return the incident it identifies, so \
+         scenario 13's only route to the id does not work and the scenario is \
+         unwinnable by construction: {found:?}"
+    );
+    for other in ["checkout latency spike", "auth token expiry storm"] {
+        assert!(
+            !text.contains(other),
+            "the on_call filter also returned '{other}', so it does not \
+             discriminate — 13 would score a model green for a lookup that \
+             cannot actually identify the target: {found:?}"
+        );
+    }
+
+    // The write on the resolved target.
+    let updated = call(
+        &executor,
+        "update_node",
+        json!({
+            "id": target_id,
+            "field_values": {"resolved": true},
+        }),
+    )
+    .await;
+
+    // Same reasoning as scenarios 6 and 12d: the end clause scores off a
+    // persisted property, so assert the count rather than the `updated` flag.
+    let persisted = updated
+        .get("property_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert!(
+        persisted >= 1,
+        "the ideal update reported {persisted} persisted properties — scenario \
+         13's minProperties clause could not be satisfied by any model: {updated:?}"
+    );
+}
