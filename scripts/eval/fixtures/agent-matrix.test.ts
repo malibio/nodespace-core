@@ -821,9 +821,9 @@ describe("end-state fixture invariants", () => {
 
   // Setup scenarios are excluded from the denominator, so marking a scored
   // scenario as setup silently removes a measurement. Pin the exact set.
-  test("only the link-setup scenarios are marked as setup", () => {
+  test("only the state-establishing scenarios are marked as setup", () => {
     const setupIds = all.filter((s) => s.setup).map((s) => s.id).sort();
-    expect(setupIds).toEqual(["11a", "11b"]);
+    expect(setupIds).toEqual(["11a", "11b", "12a", "12b", "12b2", "12c"]);
   });
 
   // The scenarios whose whole purpose is that a VALUE reached storage. If one

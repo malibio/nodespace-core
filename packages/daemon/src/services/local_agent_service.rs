@@ -4022,6 +4022,127 @@ model = "model-b"
         );
     }
 
+    /// What matrix scenario 12's rendered history does and does NOT contain.
+    ///
+    /// SCOPE, because an earlier version of this test was read as proving more
+    /// than it does. It establishes that the history does not LEXICALLY STATE
+    /// the ordering — no "biggest", "largest", "highest". It does NOT establish
+    /// that the ordering is underivable, and those are different claims.
+    ///
+    /// They are different because the three estimates and all three ids are
+    /// rendered inline, adjacent, in a uniform format. `max(9, 21, 4)` is an
+    /// in-context comparison, so a model can pick the right id without reading
+    /// anything back. Scenario 12 is therefore a test of comparative reference
+    /// RESOLUTION, not of decomposition; the group header in
+    /// scripts/eval/fixtures/agent-matrix.ts carries the full reasoning, and
+    /// #2248 tracks the decomposition gap that remains open.
+    ///
+    /// The negative assertion is kept anyway, because it still pins something
+    /// real: if a future change to `terse_write_fact` started emitting a
+    /// superlative (a "largest estimate" summary line, say), 12d would degrade
+    /// from "rank three values" to "match one word" — the exact decay that cost
+    /// scenario 6 its indirection — and this test is what would catch it.
+    ///
+    /// The positive assertions are load-bearing in the other direction: they
+    /// stop the negative one passing vacuously on an empty render, which a
+    /// broken helper or a changed role filter would otherwise produce.
+    #[test]
+    fn scenario_12_history_states_the_values_but_not_the_ordering() {
+        let history = node_history_from_messages(vec![
+            user_turn("Log the checkout rewrite, we think nine days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw10".to_string()),
+                    summary: Some("checkout rewrite".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":9},"content":"checkout rewrite"}"#
+                            .to_string(),
+                },
+            ),
+            user_turn("Also the search indexer, that one's twenty-one days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw11".to_string()),
+                    summary: Some("search indexer".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":21},"content":"search indexer"}"#
+                            .to_string(),
+                },
+            ),
+            user_turn("And the audit log export, call it four days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw12".to_string()),
+                    summary: Some("audit log export".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":4},"content":"audit log export"}"#
+                            .to_string(),
+                },
+            ),
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Positive: the three instances and their estimates ARE in history.
+        // Without these, the negative assertion below could pass on an empty
+        // string — which would make the scenario look winnable while measuring
+        // nothing at all.
+        for (title, days, id) in [
+            ("checkout rewrite", "estimated_days 9", "nodespace://fw10"),
+            ("search indexer", "estimated_days 21", "nodespace://fw11"),
+            ("audit log export", "estimated_days 4", "nodespace://fw12"),
+        ] {
+            assert!(
+                rendered.contains(title),
+                "setup instance '{title}' must be in history, or scenario 12 has \
+                 nothing to compare: {rendered}"
+            );
+            assert!(
+                rendered.contains(days),
+                "'{days}' must be in history, or the comparison has no values to \
+                 range over: {rendered}"
+            );
+            assert!(
+                rendered.contains(id),
+                "'{id}' must be in history — with every id inline, choosing the \
+                 right one is a ranking problem rather than a lookup, which is \
+                 what scenario 12 measures: {rendered}"
+            );
+        }
+
+        // Negative: nothing in history STATES the ordering, so the prompt's
+        // words ("the biggest") match no substring of it and 12d cannot be
+        // answered by lookup alone. Note the limit of this claim: the values
+        // themselves ARE inline, so the ranking is still derivable in-context.
+        // See this test's docstring.
+        let lowered = rendered.to_lowercase();
+        for phrase in [
+            "biggest",
+            "largest",
+            "longest",
+            "highest",
+            "most days",
+            "the max",
+        ] {
+            assert!(
+                !lowered.contains(phrase),
+                "history must not name the ordering ('{phrase}'), or scenario 12's \
+                 comparative reference degenerates into the direct string match \
+                 that cost scenario 6 its indirection: {rendered}"
+            );
+        }
+    }
+
     /// The blended retrieval query is assembled from the same history the turn
     /// renders, so this drives real `AiChatMessage`s through
     /// `node_history_from_messages` rather than hand-building `ChatMessage`s.
