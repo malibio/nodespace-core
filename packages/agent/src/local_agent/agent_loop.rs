@@ -1159,8 +1159,8 @@ fn summarize_executions(executions: &[ToolExecutionRecord]) -> String {
 /// yet the pseudo-code is persisted verbatim as the assistant's answer, so the
 /// user sees a raw code snippet with no indication anything went wrong.
 ///
-/// This is deliberately narrow: it only matches a registered tool name
-/// immediately followed by `(` (allowing whitespace between). Matching a general
+/// This is deliberately narrow: it matches a registered tool name in one of
+/// three call-shaped positions, never a bare mention. Matching a general
 /// `snake_case(` shape would false-positive on legitimate prose that references
 /// functions. Tool names are taken from the registry ([`crate::local_agent::tools::Tool::ALL`])
 /// so the detector stays in sync as tools are added or removed.
@@ -1174,14 +1174,36 @@ fn looks_like_narrated_tool_call(text: &str) -> bool {
             if after.starts_with('(') {
                 return true;
             }
+            let before = &lower[..idx];
+            // `call:create_schema{fields:[...], name:"Ticket"}` — the tool named
+            // with a brace-delimited argument object rather than parens, behind
+            // a call-ish prefix. Observed live on the locked model, reaching the
+            // user verbatim as the assistant's answer:
+            //
+            //     call:create_schema{fields:[{"friendlyName":"Status", …}]}
+            //
+            // A brace alone is NOT enough — "create_node {" appears in ordinary
+            // prose about JSON — so this additionally requires the prefix a
+            // narrated call carries (`call:`, `tool:`, `>>>`, or a bare
+            // line/text start immediately followed by the name). Without that,
+            // sentences merely quoting an argument shape would trip it.
+            let prefix = before.trim_end();
+            let call_prefixed = prefix.ends_with("call:")
+                || prefix.ends_with("tool:")
+                || prefix.ends_with("call")
+                || prefix.ends_with(">>>")
+                || prefix.is_empty()
+                || prefix.ends_with('\n');
+            if after.starts_with('{') && call_prefixed {
+                return true;
+            }
             // `{"name": "create_node", "arguments": {...}}` — the tool named as
             // the value of a JSON `name` key. Observed in practice: a model
             // emits a well-formed tool call as *text*, so the loop sees no tool
             // call at all and the turn silently does nothing. The quote before
             // the name distinguishes this from prose that merely mentions the
             // tool.
-            let before = &lower[..idx];
-            let quoted = before.trim_end().ends_with('"') || before.trim_end().ends_with('\'');
+            let quoted = prefix.ends_with('"') || prefix.ends_with('\'');
             quoted && after.starts_with(['"', '\''])
         })
     })
@@ -5640,6 +5662,37 @@ mod tests {
         ));
         assert!(looks_like_narrated_tool_call(
             r#"{"name": "search_nodes", "arguments": {"query": "billing"}}"#
+        ));
+    }
+
+    /// A brace-delimited argument object behind a `call:` prefix — the shape
+    /// that reached the user verbatim on the locked model. Parens were the only
+    /// bracket the detector knew, so this was persisted as the assistant's
+    /// answer while nothing executed.
+    #[test]
+    fn narrated_tool_call_detects_a_brace_delimited_call() {
+        assert!(looks_like_narrated_tool_call(
+            r#"call:create_schema{fields:[{"friendlyName":"Status","name":"status"}], name:"Feature Writeups"}"#
+        ));
+        assert!(looks_like_narrated_tool_call(
+            "tool:update_node{\"id\":\"x\",\"field_values\":{}}"
+        ));
+        // At the very start of the response, with no prefix at all.
+        assert!(looks_like_narrated_tool_call(
+            r#"create_node{"content":"Review billing docs"}"#
+        ));
+    }
+
+    /// The brace shape must not fire on prose that merely quotes an argument
+    /// object. Without the call-prefix requirement, ordinary explanations of a
+    /// tool's JSON would be suppressed and replaced with a summary.
+    #[test]
+    fn narrated_tool_call_ignores_a_brace_in_explanatory_prose() {
+        assert!(!looks_like_narrated_tool_call(
+            "Pass create_node {\"content\": \"...\"} style arguments when you want a node."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "The create_schema {fields} parameter is required."
         ));
     }
 
