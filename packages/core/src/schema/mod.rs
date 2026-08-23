@@ -91,6 +91,92 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
     )))
 }
 
+/// Report a missing REQUIRED TOP-LEVEL key on `create_schema` with an
+/// instruction the caller can act on, before serde reports it as a bare name.
+///
+/// Sibling of [`describe_malformed_fields`], which does the same job one level
+/// down (a malformed entry *inside* the `fields` array). This covers the case
+/// that array-level check cannot see: a payload whose `fields` are all
+/// well-formed but which omits the schema's own `name`.
+///
+/// **Why this is needed rather than left to the grammar.** Tool-call arguments
+/// are NOT constrained to the tool's JSON schema on this stack. llama.cpp emits
+/// `tool-create-schema ::= ("create_schema") gemma4-dict`, where `gemma4-dict`
+/// is any well-formed JSON object — so `required: ["name", "fields"]` is never
+/// enforced during sampling. That is a documented upstream limitation, not a
+/// local defect: a llama.cpp collaborator states "Gemma 4 only forces the
+/// structure, not the arguments", because `json-schema-to-grammar.cpp` "only
+/// produces rules for JSON and not Gemma's fc notation"
+/// (ggml-org/llama.cpp discussion 21839). The PR that would add
+/// schema-constrained decoding for this format has been open and unreviewed for
+/// months, and its own reported blocker is enum constraints on required
+/// properties — exactly the shape `create_schema` has. So the constraint has to
+/// be applied here, at our boundary.
+///
+/// **Why this reports rather than repairs.** The four `repair_*` functions in
+/// `agent_loop` fix malformations that are mechanical and unambiguous — a key
+/// carrying its own quote marks means the same key without them. A missing
+/// schema name is not that: the correct value would have to be inferred from
+/// the user's prose, which is interpretation, and the repair doctrine
+/// deliberately stops short of it. Naming the type wrongly is worse than asking
+/// again, because the id derives from it and every later call must match.
+///
+/// Measured on the locked model: 17 of 17 failing `create_schema` calls in one
+/// run began `{"fields":[…]}` with a correct, complete fields array and no
+/// top-level `name`. Serde's own message for that is `missing field \`name\``,
+/// which carries no repair instruction — and the model re-sent the identical
+/// payload until the duplicate-call guard broke the loop.
+fn describe_missing_top_level_keys(params: &Value) -> Result<(), MarkdownError> {
+    // Only meaningful for an object payload; anything else fails later with a
+    // clearer type error than this function could add.
+    let Some(obj) = params.as_object() else {
+        return Ok(());
+    };
+
+    let name_missing = match obj.get("name") {
+        None => true,
+        Some(Value::String(s)) => s.trim().is_empty(),
+        Some(_) => false,
+    };
+    if !name_missing {
+        return Ok(());
+    }
+
+    // Reflect back what the call DID carry, so the model can see its fields
+    // survived and that only the one key needs adding. Without this the model
+    // has no signal distinguishing "add a key" from "the whole call was wrong",
+    // and it re-sends the payload rewritten rather than extended.
+    let field_names: Vec<String> = obj
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|f| f.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let kept = if field_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Your \"fields\" are correct and must be re-sent unchanged ({}).",
+            field_names.join(", ")
+        )
+    };
+
+    Err(MarkdownError::invalid_params(format!(
+        // No "Invalid parameters:" prefix — Display for InvalidParams already
+        // writes "invalid params: ".
+        "\"name\" is required and was not sent. It is the DISPLAY NAME of the type \
+         being created, in the user's own words, singular — e.g. {{\"name\": \"Ticket\", \
+         \"fields\": [...]}}. It is a top-level parameter, NOT an entry in \"fields\".{kept} \
+         Re-send the same call with \"name\" added."
+    )))
+}
+
 /// Whether a field name carries a `<namespace>:` prefix (`custom:capacity`).
 ///
 /// Requires exactly one `:` with a non-empty segment on each side, so neither a
@@ -355,6 +441,10 @@ pub async fn handle_create_schema(
     // leaves an LLM caller unable to repair the call: it re-sends with a
     // different part mutated and degrades the arguments further on each retry.
     describe_malformed_fields(&params, "fields")?;
+    // Runs after the per-entry check so a payload wrong in both places reports
+    // the field problems first: those are what the caller must rebuild, whereas
+    // a missing `name` is a one-key addition to an otherwise-correct call.
+    describe_missing_top_level_keys(&params)?;
 
     let params: CreateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;

@@ -1501,6 +1501,139 @@ async fn test_update_schema_locates_malformed_add_fields_entry() {
 }
 
 // ============================================================================
+// Missing top-level `name` — the grammar cannot enforce it, so the error must
+// ============================================================================
+//
+// Tool-call arguments are NOT constrained to the tool's JSON schema on this
+// stack. llama.cpp emits `tool-create-schema ::= ("create_schema") gemma4-dict`
+// where `gemma4-dict` is any well-formed JSON object, so `required: ["name",
+// "fields"]` is never enforced during sampling. Upstream states this outright:
+// "Gemma 4 only forces the structure, not the arguments", because
+// `json-schema-to-grammar.cpp` "only produces rules for JSON and not Gemma's fc
+// notation" (ggml-org/llama.cpp discussion 21839).
+//
+// Measured on the locked model: 17 of 17 failing create_schema calls in one run
+// began `{"fields":[…]}` — complete, correct fields array, no top-level `name`.
+// Serde's message for that is a bare "missing field `name`", and the model
+// re-sent the identical payload until the duplicate-call guard broke the loop.
+
+#[tokio::test]
+async fn test_create_schema_missing_name_says_what_to_add_and_where() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The exact payload shape observed live, fields and all.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "fields": [
+                {
+                    "coreValues": [
+                        { "label": "Drafting", "value": "drafting" },
+                        { "label": "Signed Off", "value": "signed_off" }
+                    ],
+                    "friendlyName": "Status",
+                    "name": "status",
+                    "type": "enum"
+                },
+                { "name": "estimated_days", "type": "number", "unique": false }
+            ]
+        }),
+    )
+    .await;
+
+    let err = result.expect_err("a payload with no top-level name must be rejected");
+    let msg = err.to_string();
+
+    assert!(
+        msg.contains("\"name\""),
+        "error must name the missing key: {msg}"
+    );
+    assert!(
+        msg.to_lowercase().contains("top-level"),
+        "error must say WHERE the key goes — the model's failure mode is putting it \
+         in the fields array instead: {msg}"
+    );
+    assert!(
+        msg.contains("Ticket"),
+        "error should carry a worked example of the value's shape: {msg}"
+    );
+    // The whole point: the model must learn its fields survived, so it extends
+    // the call rather than rewriting it.
+    assert!(
+        msg.contains("status") && msg.contains("estimated_days"),
+        "error must reflect back the fields that were accepted, so the caller adds \
+         one key instead of rebuilding the payload: {msg}"
+    );
+    assert!(
+        !msg.contains("missing field `name`"),
+        "the bare serde message is what the model demonstrably cannot act on; it \
+         must be replaced, not appended to: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_empty_name_is_rejected_like_a_missing_one() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({ "name": "   ", "fields": [{ "name": "amount", "type": "number" }] }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a blank name must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("\"name\""),
+        "a whitespace-only name must get the same actionable message as an absent \
+         one, not a different downstream error: {msg}"
+    );
+}
+
+/// Malformed entries are reported BEFORE the missing top-level key: those are
+/// what the caller must rebuild, whereas a missing `name` is a one-key addition
+/// to an otherwise-correct call. Reporting them together would ask for both at
+/// once, which is what drives a full rewrite.
+#[tokio::test]
+async fn test_create_schema_reports_field_problems_before_missing_name() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({ "fields": [{ "name": "status" }] }),
+    )
+    .await;
+
+    let msg = result.expect_err("both problems present").to_string();
+    assert!(
+        msg.contains("fields[0]"),
+        "the field-level problem must be reported first: {msg}"
+    );
+}
+
+/// A well-formed call is untouched — this check only ever converts one error
+/// into a better one, never rejects something that would have succeeded.
+#[tokio::test]
+async fn test_create_schema_with_name_still_succeeds() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Feature Write-up",
+            "fields": [{ "name": "estimated_days", "type": "number" }]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a complete call must be unaffected: {result:?}"
+    );
+}
+
+// ============================================================================
 // title_template resolution is owned by validate_template_tokens
 // ============================================================================
 //
