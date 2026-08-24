@@ -84,6 +84,13 @@ fn regions() -> Vec<GeneratedRegion> {
                 "packages/cli/src/lib.rs (clap derive), packages/cli/examples/gen_skill_md.rs",
             render: render_cli_surface_block,
         },
+        GeneratedRegion {
+            id: "builtin-relationships",
+            file: "references/cli.md",
+            source_note: "packages/core/src/models/schema.rs (BUILTIN_RELATIONSHIP_NAMES), \
+                          packages/cli/examples/gen_skill_md.rs",
+            render: render_builtin_relationships_block,
+        },
     ]
 }
 
@@ -295,6 +302,43 @@ fn render_arg_list(cmd: &ClapCommand, globals_only: bool) -> String {
 /// they collapse to single spaces.
 fn collapse_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// ---------------------------------------------------------------------------
+// Region: builtin-relationships
+// ---------------------------------------------------------------------------
+
+/// Renders the built-in structural relationship names from their canonical
+/// definition in `nodespace-core`.
+///
+/// The seeded guidance the local agent reads states that these four names are
+/// legal between any two records, while the skill said a relationship name
+/// "must be defined on the source node's schema" — full stop. That is stricter
+/// than the system actually is, so an external agent following the skill would
+/// refuse a `mentions` or `member_of` edge that would have been accepted, or
+/// try to declare one on a schema, where creation rejects it.
+///
+/// Rendering from `BUILTIN_RELATIONSHIP_NAMES` rather than restating the list
+/// means the two surfaces cannot disagree again: the constant is what the
+/// validator itself checks against.
+fn render_builtin_relationships_block() -> String {
+    let names = nodespace_core::models::schema::BUILTIN_RELATIONSHIP_NAMES
+        .iter()
+        .map(|n| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "**Built-in relationship names.** Four names are structural and legal between any \
+         two nodes without being declared on a schema: {names}. They have hardcoded \
+         semantics — hierarchy, mentions, collection membership, and roles — and their own \
+         UI affordances.\n\n\
+         Because they share the one `relationship_type` column with schema-declared \
+         relationships, a schema may **not** declare a relationship under one of these \
+         names; `schema create`/`schema update` rejects it. Conversely, any *other* name \
+         must be declared on the source node's schema before `relationship create` will \
+         accept it. When no declared relationship fits, use `mentions`."
+    )
 }
 
 // ---------------------------------------------------------------------------

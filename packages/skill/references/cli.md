@@ -224,7 +224,13 @@ nodespace relationship get <node-id> --type billed_to --direction in
 - `--type <name>` — relationship name to filter by
 - `--direction <out|in>` — traversal direction (default: `out`)
 
-Both node IDs must already exist, and the relationship name must be defined on the source node's schema — search for missing IDs first (`nodespace search` / `nodespace node query`), and define the relationship on the schema first (`nodespace schema create`/`update`) if it isn't there yet. `relationship create` on a node whose schema doesn't define that relationship name fails with an error naming the undefined relationship.
+Both node IDs must already exist — search for missing IDs first (`nodespace search` / `nodespace node query`). Apart from the built-in names below, the relationship name must be defined on the source node's schema; define it there (`nodespace schema create`/`update`) if it isn't yet. `relationship create` on a node whose schema doesn't define that relationship name fails with an error naming the undefined relationship.
+
+<!-- BEGIN GENERATED: builtin-relationships (see packages/core/src/models/schema.rs (BUILTIN_RELATIONSHIP_NAMES), packages/cli/examples/gen_skill_md.rs) -->
+**Built-in relationship names.** Four names are structural and legal between any two nodes without being declared on a schema: `member_of`, `has_child`, `mentions`, `has_role`. They have hardcoded semantics — hierarchy, mentions, collection membership, and roles — and their own UI affordances.
+
+Because they share the one `relationship_type` column with schema-declared relationships, a schema may **not** declare a relationship under one of these names; `schema create`/`schema update` rejects it. Conversely, any *other* name must be declared on the source node's schema before `relationship create` will accept it. When no declared relationship fits, use `mentions`.
+<!-- END GENERATED: builtin-relationships -->
 
 **Success semantics:** after `relationship create` returns, confirm the link to the user — don't call `relationship get` afterward just to verify it landed.
 

@@ -242,6 +242,29 @@ fn every_seeded_skill_is_represented() {
     );
 }
 
+/// Every built-in structural relationship name is documented.
+///
+/// The skill used to say a relationship name must be defined on the source
+/// node's schema, full stop — stricter than the system is. Four names are legal
+/// between any two nodes without a declaration, and the local agent's own
+/// guidance says so, so the two surfaces disagreed. Enumerating the constant
+/// the validator checks against means a name added to it cannot be omitted.
+#[test]
+fn every_builtin_relationship_name_is_documented() {
+    let skill = skill_md();
+    let missing: Vec<&str> = nodespace_core::models::schema::BUILTIN_RELATIONSHIP_NAMES
+        .iter()
+        .copied()
+        .filter(|name| !skill.contains(name))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "the shipped skill does not mention these built-in relationship names: \
+         {missing:#?}\nRun `bun run skill:gen` and commit the result."
+    );
+}
+
 /// The SKILL.md body stays within the Agent Skills size recommendations.
 ///
 /// The body is loaded in full the moment the skill activates, so its size is a
