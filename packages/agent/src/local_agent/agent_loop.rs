@@ -1253,32 +1253,30 @@ fn looks_like_narrated_tool_call(text: &str) -> bool {
             // verb straight back one character narrower — "Recall: create_node
             // {content} is the one you want." is prose, not a call.
             //
-            // `\n` stays because a narrated call on its own line is a real
-            // observed shape, but ONLY with the brace ADJACENT to the name.
-            // Without that, the own-line branch contradicts the `is_empty()`
-            // removal directly above it: "update_node {id, field_values} takes
-            // two arguments." is declined at index 0 and would be caught by the
-            // identical sentence one line further down, which is the shape a
-            // model listing tools one per line actually produces. A narrated
-            // call writes its arguments flush against the name
-            // (`create_node{"content":…}`); documentation puts a space there.
-            // The same adjacency requirement is what keeps a fenced report of a
-            // completed write declined too — "…the payload was:\n```json\n
-            // create_node {…}\n```\n" has a space before the brace, exactly like
-            // the documentation case.
+            // No "own line" admission. An earlier version accepted a tool name
+            // immediately followed by `{` at the start of a line, reasoning that
+            // a narrated call writes its arguments flush against the name
+            // (`create_node{"content":…}`) while documentation puts a space
+            // there (`create_node {…}`). That distinction holds for
+            // documentation, but not for a model's own honest report of a
+            // completed write inside a fenced JSON block — ordinary, idiomatic
+            // formatting omits the space too:
             //
-            // The newline test reads `before` UNTRIMMED: `trim_end()` strips the
-            // very character it looks for, so trimming first would make the
-            // own-line case unreachable.
-            let starts_its_own_line =
-                before.ends_with('\n') || before.trim_end_matches([' ', '\t']).ends_with('\n');
+            //     …the payload was:\n```json\ncreate_node{"content":"Buy milk"}\n```
+            //
+            // Found in a post-merge audit: every regression test for the
+            // own-line case used the spaced form, so the unspaced one — a real
+            // shape a model can produce at any time — went undetected as a false
+            // positive. Missing a narrated call is the cheaper error (the user
+            // sees pseudo-code, which is visible and recoverable); a false
+            // positive here discards the model's correct answer outright. Only
+            // an explicit marker (`call:`, `tool:`, `>>>`) is unambiguous enough
+            // to accept.
             let prefix = before.trim_end();
             let marker_prefixed = ["call:", "tool:", ">>>"]
                 .iter()
                 .any(|marker| ends_with_marker(prefix, marker));
-            if after.starts_with('{')
-                && (marker_prefixed || (starts_its_own_line && rest.starts_with('{')))
-            {
+            if after.starts_with('{') && marker_prefixed {
                 return true;
             }
             // `{"name": "create_node", "arguments": {...}}` — the tool named as
@@ -5823,17 +5821,15 @@ mod tests {
         ));
     }
 
-    /// The own-line branch must not undo the decision the test above records.
     /// A response documenting the tools one per line puts a tool name straight
-    /// after a newline, so an unqualified "preceded by \n" test caught the
-    /// identical sentence the index-0 case deliberately lets through — and a
-    /// positive verdict discards the whole reply, not just the matched line.
-    ///
-    /// Covers the same defect the fenced-code-block case below does — a tool
-    /// name starting a later line with a SPACE before the brace — with the
-    /// added "tools listed one per line" shape, which is the form the
-    /// adjacency requirement (`rest.starts_with('{')`) exists to distinguish
-    /// from a genuine own-line call (`create_node{"content":…}`, no space).
+    /// after a newline, which once had a dedicated "own line" admission — an
+    /// unqualified "preceded by \n" test caught the identical sentence the
+    /// index-0 case deliberately lets through, and a positive verdict discards
+    /// the whole reply, not just the matched line. That admission is gone now
+    /// (see `narrated_tool_call_ignores_a_tool_name_starting_a_later_line`,
+    /// which found it could not be made safe even with an adjacency
+    /// requirement), so this pins the same property against the marker-only
+    /// detector: no marker precedes any of these, so none should fire.
     #[test]
     fn narrated_tool_call_ignores_a_tool_documented_at_the_start_of_a_line() {
         assert!(!looks_like_narrated_tool_call(
@@ -5857,6 +5853,21 @@ mod tests {
         ));
         assert!(!looks_like_narrated_tool_call(
             "The signature is:\n    create_node {content, node_type}\nand it returns the new id."
+        ));
+        // The UNSPACED form — the shape that actually matters. The adjacency
+        // requirement (name immediately followed by `{`) was meant to
+        // distinguish a narrated call from documentation, on the reasoning
+        // that documentation puts a space there. It does not distinguish a
+        // narrated call from a model's own honest report of a completed
+        // write inside a fenced JSON block, which is ordinary, idiomatic
+        // formatting with no space before the brace. This is real output a
+        // model can produce at any time, and the two prior assertions above
+        // (both spaced) never exercised it — found in a post-merge audit.
+        assert!(!looks_like_narrated_tool_call(
+            "I created the task. For reference, the payload was:\n```json\ncreate_node{\"content\":\"Buy milk\"}\n```\nAnything else?"
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "Tools:\ncreate_node{content}\nupdate_node{id}"
         ));
     }
 
