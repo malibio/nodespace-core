@@ -98,6 +98,8 @@ fn graph_editing_guidance() -> String {
     format!(
         r#"# Graph Editing Guidance
 
+EXISTING RECORD OR A NEW ONE? This skill also carries create_node, and the two are not interchangeable. If the thing the user describes already exists — it was returned by an earlier tool call, or they are marking, correcting, or setting a value on it — call update_node with its id. If it does not exist yet — they are recording, logging, or adding something for the first time — call create_node instead: update_node needs an id, and inventing one writes to a record that is not theirs or fails outright.
+
 When updating an existing node:
 
 CALL update_node NOW: your next action is the tool call, not planning text.
@@ -323,6 +325,8 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
             markdown_content: r#"# Node Creation Guidance
 
 NEW RECORD OR EXISTING ONE? If the user is changing something that already exists — marking it done or signed off, correcting a value, setting a field on a record already in this conversation — call update_node with that record's id, NOT create_node. Creating a second copy leaves the original unchanged and silently duplicates the user's data. If they are adding something that does not exist yet, create_node is right and the rest of this guidance applies.
+
+CHANGING A TASK'S STATUS: use update_task_status with the task id and the new status string (open, in_progress, done, cancelled), not update_node — status is not a field_values key on a task.
 
 CALL create_node NOW: your next action is the tool call, not planning text.
 
@@ -1042,24 +1046,94 @@ mod tests {
             "create_nodes_from_markdown",
         ];
 
-        let mut offenders: Vec<String> = owners
+        // Enumerated from the REGISTRY, not from `owners`. Iterating the map
+        // only sees tools some whitelist already mentions, so a write tool
+        // removed from every whitelist has zero entries, never appears, and the
+        // check meant to catch exactly that passes green — the unreachable case
+        // being strictly worse than the single-owner case this test is named
+        // for.
+        let mut offenders: Vec<String> = crate::local_agent::tools::Tool::ALL
             .iter()
-            .filter(|(tool, _)| crate::local_agent::tools::is_write_tool(tool))
-            .filter(|(tool, _)| !SINGLE_OWNER_BY_DESIGN.contains(&tool.as_str()))
-            .filter(|(_, skills)| skills.len() < 2)
-            .map(|(tool, skills)| format!("{tool} (only {skills:?})"))
+            .filter(|tool| tool.is_write())
+            .map(|tool| tool.name())
+            .filter(|name| !SINGLE_OWNER_BY_DESIGN.contains(name))
+            .filter_map(|name| {
+                let skills = owners.get(name).map(Vec::as_slice).unwrap_or_default();
+                (skills.len() < 2).then(|| {
+                    if skills.is_empty() {
+                        format!("{name} (reachable from NO skill)")
+                    } else {
+                        format!("{name} (only {skills:?})")
+                    }
+                })
+            })
             .collect();
         offenders.sort();
 
         assert!(
             offenders.is_empty(),
-            "these write tools are reachable from only one skill: {}\n\
+            "these write tools are reachable from fewer than two skills: {}\n\
              With RETRIEVAL_TOP_K = 3 that makes availability a lottery — if the sole owner \
              misses the window the tool does not exist for that turn, whatever the model does. \
+             A tool reachable from NO skill is unavailable on every turn. \
              Give each a second plausible owner, or add it to SINGLE_OWNER_BY_DESIGN with the \
              reason.",
             offenders.join(", ")
         );
+    }
+
+    /// Pairing a write tool onto a second skill only removes the single point
+    /// of failure if the skill's GUIDANCE also says when to reach for it.
+    /// Whitelisting alone hands the model two write verbs with no rule for
+    /// choosing, and the wrong choice is not a no-op: `create_node` where
+    /// `update_node` was meant silently duplicates the user's data, and
+    /// `update_node` where `create_node` was meant needs an id that does not
+    /// exist.
+    ///
+    /// Pinned as a property rather than fixed once, because the fix was applied
+    /// asymmetrically the first time — Node Creation got a disambiguation
+    /// clause, Graph Editing got the tool and no clause at all.
+    #[test]
+    fn a_skill_carrying_both_write_verbs_disambiguates_them_in_its_guidance() {
+        for tmpl in seed_skill_nodes() {
+            let tools = tmpl_tool_whitelist(&tmpl);
+            let carries = |name: &str| tools.iter().any(|t| t == name);
+            if !(carries("create_node") && carries("update_node")) {
+                continue;
+            }
+            for tool in ["create_node", "update_node"] {
+                assert!(
+                    tmpl.markdown_content.contains(tool),
+                    "skill {:?} whitelists both create_node and update_node but its guidance \
+                     never names {tool}. A model handed two write verbs with no rule for \
+                     choosing picks one by phrasing, and the wrong pick either duplicates the \
+                     user's record or writes to an id that does not exist.",
+                    tmpl.title,
+                );
+            }
+        }
+    }
+
+    /// `update_task_status` is the dedicated verb for a task's status, and a
+    /// skill offering it alongside `update_node` has to say so — otherwise the
+    /// model reaches for `field_values` and the status silently does not move.
+    #[test]
+    fn a_skill_carrying_update_task_status_names_it_in_its_guidance() {
+        for tmpl in seed_skill_nodes() {
+            if !tmpl_tool_whitelist(&tmpl)
+                .iter()
+                .any(|t| t == "update_task_status")
+            {
+                continue;
+            }
+            assert!(
+                tmpl.markdown_content.contains("update_task_status"),
+                "skill {:?} whitelists update_task_status but never names it in its guidance; \
+                 the model will set status through update_node's field_values instead, which \
+                 does not move a task's status.",
+                tmpl.title,
+            );
+        }
     }
 
     /// No seeded skill declares `node_types`, so every candidate takes
