@@ -305,15 +305,21 @@ function retrievableSkillCount(env: EvalEnv, limit: number): number {
 export function awaitSkillIndex(
   env: EvalEnv,
   timeoutMs: number = SKILL_INDEX_TIMEOUT_MS,
+  // Derived from the database by default (see `seededSkillCount`); injectable
+  // so the wait/timeout behaviour stays testable without a daemon. Declared
+  // BEFORE `probe` deliberately: `probe`'s own default reads this parameter,
+  // and TypeScript default-value closures may reference any earlier parameter
+  // in the list — putting `expected` after would make that a forward
+  // reference, correct today only because JS resolves default expressions at
+  // call time rather than at declaration time. Ordering it first makes the
+  // dependency visible instead of relying on that.
+  expected: number = seededSkillCount(env),
   // Injected so the wait/timeout logic is testable without a daemon: the
   // interesting behaviour is "waits for a late index, gives up on one that
   // never arrives", and neither is expressible against a live process.
   probe: (env: EvalEnv) => number = (e) => retrievableSkillCount(e, expected),
   sleep: (ms: number) => void = (ms) => Bun.sleepSync(ms),
   now: () => number = Date.now,
-  // Derived from the database by default (see `seededSkillCount`); injectable
-  // so the wait/timeout behaviour stays testable without a daemon.
-  expected: number = seededSkillCount(env),
 ): void {
   const started = now();
   let count = probe(env);

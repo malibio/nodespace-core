@@ -83,13 +83,12 @@ describe("awaitSkillIndex", () => {
     awaitSkillIndex(
       env,
       60_000,
+      8,
       () => {
         probes++;
         return 8;
       },
       noSleep,
-      undefined,
-      8,
     );
     expect(probes).toBe(1);
   });
@@ -102,12 +101,11 @@ describe("awaitSkillIndex", () => {
       awaitSkillIndex(
         env,
         60_000,
+        8,
         () => counts[Math.min(i++, counts.length - 1)]!,
         () => {
           slept++;
         },
-        undefined,
-        8,
       ),
     ).not.toThrow();
     expect(slept).toBe(2);
@@ -121,12 +119,12 @@ describe("awaitSkillIndex", () => {
       awaitSkillIndex(
         env,
         10_000,
+        8,
         () => 0,
         () => {
           t += 4_000;
         },
         () => t,
-        8,
       ),
     ).toThrow(/seeded skills are semantically retrievable/);
   });
@@ -140,12 +138,12 @@ describe("awaitSkillIndex", () => {
       awaitSkillIndex(
         env,
         10_000,
+        9,
         () => 8,
         () => {
           t += 4_000;
         },
         () => t,
-        9,
       ),
     ).toThrow(/Only 8 of 9/);
   });
@@ -159,12 +157,12 @@ describe("awaitSkillIndex", () => {
       awaitSkillIndex(
         env,
         10_000,
+        8,
         () => 7,
         () => {
           t += 4_000;
         },
         () => t,
-        8,
       ),
     ).toThrow(/Only 7 of 8/);
   });

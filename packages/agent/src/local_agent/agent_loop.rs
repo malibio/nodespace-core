@@ -1262,6 +1262,10 @@ fn looks_like_narrated_tool_call(text: &str) -> bool {
             // model listing tools one per line actually produces. A narrated
             // call writes its arguments flush against the name
             // (`create_node{"content":…}`); documentation puts a space there.
+            // The same adjacency requirement is what keeps a fenced report of a
+            // completed write declined too — "…the payload was:\n```json\n
+            // create_node {…}\n```\n" has a space before the brace, exactly like
+            // the documentation case.
             //
             // The newline test reads `before` UNTRIMMED: `trim_end()` strips the
             // very character it looks for, so trimming first would make the
@@ -5757,9 +5761,8 @@ mod tests {
         assert!(looks_like_narrated_tool_call(
             "tool:update_node{\"id\":\"x\",\"field_values\":{}}"
         ));
-        // On its own line — a real observed shape, and one prose does not take.
         assert!(looks_like_narrated_tool_call(
-            "Here is what I'll run:\ncreate_node{\"content\":\"Review billing docs\"}"
+            ">>>update_node{\"id\":\"x\"}"
         ));
     }
 
@@ -5825,6 +5828,12 @@ mod tests {
     /// after a newline, so an unqualified "preceded by \n" test caught the
     /// identical sentence the index-0 case deliberately lets through — and a
     /// positive verdict discards the whole reply, not just the matched line.
+    ///
+    /// Covers the same defect the fenced-code-block case below does — a tool
+    /// name starting a later line with a SPACE before the brace — with the
+    /// added "tools listed one per line" shape, which is the form the
+    /// adjacency requirement (`rest.starts_with('{')`) exists to distinguish
+    /// from a genuine own-line call (`create_node{"content":…}`, no space).
     #[test]
     fn narrated_tool_call_ignores_a_tool_documented_at_the_start_of_a_line() {
         assert!(!looks_like_narrated_tool_call(
@@ -5833,6 +5842,21 @@ mod tests {
         ));
         assert!(!looks_like_narrated_tool_call(
             "Two options:\n\ncreate_node {content}\n"
+        ));
+    }
+
+    /// Found in re-review: the reasoning that rejects a tool name at the START
+    /// of the text ("documentation, not a call") does not stop applying at
+    /// line two. Worst real case: a model correctly reporting a completed
+    /// write inside a fenced code block — exactly the honest-report turn this
+    /// PR's sibling no-op-success fix exists to protect.
+    #[test]
+    fn narrated_tool_call_ignores_a_tool_name_starting_a_later_line() {
+        assert!(!looks_like_narrated_tool_call(
+            "I created the task. For reference, the payload was:\n```json\ncreate_node {\"content\":\"Buy milk\"}\n```\nAnything else?"
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "The signature is:\n    create_node {content, node_type}\nand it returns the new id."
         ));
     }
 
