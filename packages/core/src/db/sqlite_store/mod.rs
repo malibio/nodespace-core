@@ -2,6 +2,7 @@ use crate::db::fractional_ordering::FractionalOrderCalculator;
 use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
+use connections::{Connections, ReadConn, WriteGuard};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -122,122 +123,12 @@ pub async fn ensure_sqlite_vec_registered() {
         .await;
 }
 
-/// Exclusive access to the store's single writer connection.
-///
-/// Held for the whole span of a mutating operation — including any reads that
-/// operation's writes are computed from — so the operation is atomic with
-/// respect to every other writer. Deref gives the underlying connection, so a
-/// guard is used exactly like a connection.
-pub(crate) type WriteGuard<'a> = tokio::sync::MutexGuard<'a, libsql::Connection>;
-
-/// Idle reader connections beyond this count are closed instead of pooled.
-/// The pool grows to the peak number of *simultaneously in-flight* reads and
-/// then settles back to this many idle handles.
-const MAX_IDLE_READERS: usize = 8;
-
-/// A reader connection checked out of the store's pool, returned by
-/// [`SqliteStore::read`]. Goes back to the pool when dropped.
-///
-/// It deliberately exposes `query` and nothing else. That is the whole point:
-/// a mutating statement can only be reached through [`SqliteStore::write`], so
-/// "this write forgot to take the writer lock" is a compile error rather than a
-/// race nobody notices until data goes missing.
-pub(crate) struct ReadConn {
-    /// `Some` until `Drop` hands the connection back.
-    conn: Option<libsql::Connection>,
-    pool: Arc<std::sync::Mutex<Vec<libsql::Connection>>>,
-}
-
-impl ReadConn {
-    /// Run a query, consuming the checkout: the resulting [`ReadRows`] owns this
-    /// connection and only releases it once the cursor is dropped.
-    ///
-    /// That ownership is not ceremony. A SQLite connection with a partially
-    /// consumed statement is inside an implicit read transaction, and every
-    /// other statement on that same connection is pinned to its snapshot until
-    /// it finishes. Since these cursors are drained across `await` points,
-    /// sharing one reader connection would let one task's in-flight cursor make
-    /// another task's read arbitrarily stale — including a read of a row that
-    /// task had itself just committed.
-    pub(crate) async fn query(
-        self,
-        sql: &str,
-        params: impl libsql::params::IntoParams,
-    ) -> libsql::Result<ReadRows> {
-        let rows = self
-            .conn
-            .as_ref()
-            .expect("connection is taken only in Drop")
-            .query(sql, params)
-            .await?;
-        Ok(ReadRows { rows, _conn: self })
-    }
-}
-
-impl Drop for ReadConn {
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            if let Ok(mut pool) = self.pool.lock() {
-                if pool.len() < MAX_IDLE_READERS {
-                    pool.push(conn);
-                }
-            }
-        }
-    }
-}
-
-/// A result cursor that holds its reader connection for as long as it lives.
-///
-/// Field order matters: `rows` is declared first so it drops first, finalizing
-/// the statement and ending the implicit read transaction *before* the
-/// connection is returned to the pool. A connection therefore never re-enters
-/// the pool pinned to a stale snapshot.
-pub(crate) struct ReadRows {
-    rows: libsql::Rows,
-    _conn: ReadConn,
-}
-
-impl ReadRows {
-    pub(crate) async fn next(&mut self) -> libsql::Result<Option<libsql::Row>> {
-        self.rows.next().await
-    }
-}
-
 pub struct SqliteStore {
-    /// Mints reader connections for the pool.
-    database: libsql::Database,
-    /// Idle reader connections. Each is `PRAGMA query_only`, and no transaction
-    /// is ever opened on one, so a read sees a consistent COMMITTED snapshot —
-    /// never another task's half-written transaction, and never swept into one.
-    /// Under WAL, readers neither block nor are blocked by the writer.
-    ///
-    /// A checkout is exclusive for the life of its cursor, which is what keeps
-    /// reads *fresh* as well as clean (see [`ReadConn::query`]).
-    ///
-    /// `query_only` is load-bearing, not decorative: it turns "a mutating
-    /// statement was sent down the read path" from a silent correctness hole
-    /// (an unserialized write outside the writer lock) into an immediate, loud
-    /// `SQLITE_READONLY` error.
-    readers: Arc<std::sync::Mutex<Vec<libsql::Connection>>>,
-    /// The store's only writable connection, reachable exclusively through
-    /// [`SqliteStore::write`]. Every mutating statement in the store — whether
-    /// it opens a transaction or is a lone `execute` — goes through this mutex.
-    ///
-    /// This is required for correctness, not merely for tidiness. libsql's
-    /// local `transaction()` is a bare `BEGIN DEFERRED` on the connection with
-    /// `Drop = ROLLBACK`; it carries no per-task context. So on a shared
-    /// connection, an unsynchronized `execute` from another task lands *inside*
-    /// whatever transaction happens to be open — to be committed or rolled back
-    /// with it — and a second `transaction()` fails outright with "cannot start
-    /// a transaction within a transaction" instead of waiting. Serializing here
-    /// makes both impossible.
-    ///
-    /// Serializing writers costs no real concurrency: SQLite permits exactly
-    /// one writer at a time regardless, so the alternative is not parallel
-    /// writes but `SQLITE_BUSY` after `busy_timeout`. This mutex converts that
-    /// failure into a queue. Reads are unaffected — they run on their own
-    /// connections.
-    writer: tokio::sync::Mutex<libsql::Connection>,
+    /// The store's SQLite connections. Reachable only through
+    /// [`SqliteStore::write`] / [`SqliteStore::read`] — the raw handles live in
+    /// the `connections` submodule precisely so that the sibling modules of
+    /// this one cannot reach around them. See that module's doc comment.
+    conns: Connections,
     event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
     valid_node_types: HashSet<String>,
     notifier: Option<StoreNotifier>,
@@ -245,128 +136,50 @@ pub struct SqliteStore {
 
 impl SqliteStore {
     pub async fn new(db_path: PathBuf) -> Result<Self> {
-        // Register sqlite-vec (once per process) BEFORE opening our connection, so the
-        // connection picks up the `vec0` module. See `ensure_sqlite_vec_registered`.
+        // Register sqlite-vec (once per process) BEFORE opening any connection,
+        // so every connection — the writer here and every reader minted later —
+        // picks up the `vec0` module. See `ensure_sqlite_vec_registered`.
         ensure_sqlite_vec_registered().await;
 
-        let database = libsql::Builder::new_local(&db_path)
-            .build()
-            .await
-            .context("Failed to build libsql database")?;
-        let conn = database
-            .connect()
-            .context("Failed to connect to libsql database")?;
+        let conns = Connections::open(&db_path).await?;
 
-        Self::apply_connection_pragmas(&conn).await?;
-        // Data-safety for app updates: snapshot the existing database before any
-        // pending migration runs, so a new release's migration can never lose the
-        // user's prior data irrecoverably. Best-effort — a backup failure is logged
-        // and must not block startup.
-        if let Err(e) =
-            crate::db::migrations::backup_before_pending_migrations(&conn, &db_path).await
-        {
-            tracing::warn!(error = %e, "pre-migration database backup failed; proceeding");
-        }
-        Self::initialize_schema(&conn).await?;
-
-        let valid_node_types = Self::build_schema_caches(&conn).await?;
-
-        // Seed the read pool with one connection. Opened after migrations so it
-        // never races schema creation; the pool grows on demand from here.
-        let reader = Self::open_reader(&database).await?;
+        // Bootstrap runs through the writer guard like any other write. The
+        // read pool is still empty at this point and only fills on first use,
+        // so no reader connection can exist before migrations have run.
+        let valid_node_types = {
+            let conn = conns.write().await;
+            // Data-safety for app updates: snapshot the existing database before any
+            // pending migration runs, so a new release's migration can never lose the
+            // user's prior data irrecoverably. Best-effort — a backup failure is logged
+            // and must not block startup.
+            if let Err(e) =
+                crate::db::migrations::backup_before_pending_migrations(&conn, &db_path).await
+            {
+                tracing::warn!(error = %e, "pre-migration database backup failed; proceeding");
+            }
+            Self::initialize_schema(&conn).await?;
+            Self::build_schema_caches(&conn).await?
+        };
 
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
         Ok(Self {
-            database,
-            readers: Arc::new(std::sync::Mutex::new(vec![reader])),
-            writer: tokio::sync::Mutex::new(conn),
+            conns,
             event_tx,
             valid_node_types,
             notifier: None,
         })
     }
 
-    /// Open and configure one read-only connection.
-    ///
-    /// Deliberately narrower than `apply_connection_pragmas`: `journal_mode` is
-    /// a durable property of the database file (already WAL, set by the writer)
-    /// and re-asserting it costs a lock on every pool miss, while `synchronous`
-    /// and `foreign_keys` only govern writes this connection cannot perform.
-    /// `busy_timeout` still matters — a reader can contend on WAL recovery.
-    async fn open_reader(database: &libsql::Database) -> Result<libsql::Connection> {
-        let conn = database
-            .connect()
-            .context("Failed to open read connection to libsql database")?;
-        conn.query("PRAGMA busy_timeout = 5000", ())
-            .await
-            .context("Failed to set busy_timeout on read connection")?;
-        conn.query("PRAGMA query_only = ON", ())
-            .await
-            .context("Failed to mark read connection query-only")?;
-        Ok(conn)
-    }
-
-    /// Acquire exclusive use of the writer connection.
-    ///
-    /// Every mutating statement in the store must go through a guard from this
-    /// method, and the guard must stay alive for the whole span the operation
-    /// needs to be atomic — a multi-statement transaction, and any read whose
-    /// result the subsequent write depends on (sibling-order reads, `SELECT
-    /// changes()` OCC probes, …).
-    ///
-    /// The guard is **not** re-entrant. A method holding one must not call
-    /// another store method that also takes one; pass the guard down to a
-    /// helper (`&libsql::Connection`) or drop it first. Read-path methods take
-    /// no guard, so calling one while holding a write guard is safe — but it
-    /// reads through a pooled reader connection, so it will NOT see the guard
-    /// holder's uncommitted writes.
+    /// Acquire exclusive use of the writer connection. See
+    /// [`Connections::write`] — in particular, the guard is NOT re-entrant.
     pub(crate) async fn write(&self) -> WriteGuard<'_> {
-        self.writer.lock().await
+        self.conns.write().await
     }
 
-    /// Check out a reader connection. Takes no write lock, so reads never queue
-    /// behind a long write (a bulk import, a subtree delete) and never block
-    /// one — WAL gives each read a committed snapshot of its own.
-    ///
-    /// Reuses a pooled connection when one is idle and opens a new one
-    /// otherwise, so two reads that overlap in time never share a connection.
+    /// Check out a reader connection. See [`Connections::read`].
     pub(crate) async fn read(&self) -> Result<ReadConn> {
-        let pooled = self
-            .readers
-            .lock()
-            .map_err(|_| anyhow::anyhow!("reader pool mutex poisoned"))?
-            .pop();
-        let conn = match pooled {
-            Some(conn) => conn,
-            None => Self::open_reader(&self.database).await?,
-        };
-        Ok(ReadConn {
-            conn: Some(conn),
-            pool: self.readers.clone(),
-        })
-    }
-
-    /// Per-connection session settings. Unlike the tables/indexes in
-    /// `db::migrations`, these are NOT persisted schema state — `journal_mode` is
-    /// durable in the DB file but re-asserting it is harmless, while
-    /// `foreign_keys`, `synchronous`, and `busy_timeout` reset to SQLite defaults
-    /// on every new connection and must be set every time. Must run outside any
-    /// transaction: SQLite forbids changing `synchronous` inside one.
-    async fn apply_connection_pragmas(conn: &libsql::Connection) -> Result<()> {
-        conn.query("PRAGMA journal_mode = WAL", ())
-            .await
-            .context("Failed to set journal_mode")?;
-        conn.query("PRAGMA foreign_keys = ON", ())
-            .await
-            .context("Failed to set foreign_keys")?;
-        conn.query("PRAGMA synchronous = NORMAL", ())
-            .await
-            .context("Failed to set synchronous")?;
-        conn.query("PRAGMA busy_timeout = 5000", ())
-            .await
-            .context("Failed to set busy_timeout")?;
-        Ok(())
+        self.conns.read().await
     }
 
     async fn initialize_schema(conn: &libsql::Connection) -> Result<()> {
@@ -563,6 +376,7 @@ impl SqliteStore {
 // The remaining `impl SqliteStore` methods are split by concern into these
 // child modules; each is an additional `impl SqliteStore` block over the same
 // struct. See ADR-053 groundwork (node CRUD / relationships / embeddings / search).
+mod connections;
 mod embeddings;
 mod nodes;
 mod relationships;
@@ -1153,7 +967,14 @@ mod tests {
             "node should be missing from the index"
         );
 
-        SqliteStore::backfill_fts_if_stale(&store.write().await.clone()).await?;
+        // Bind the guard rather than writing `&store.write().await.clone()`:
+        // in that form the temporary guard lives to the end of the statement,
+        // i.e. across the whole `backfill_fts_if_stale` await, so the idiom
+        // would self-deadlock if it were ever copied somewhere that re-enters
+        // `write()`. Binding makes the hold explicit and its scope obvious.
+        let db = store.write().await;
+        SqliteStore::backfill_fts_if_stale(&db).await?;
+        drop(db);
 
         assert_eq!(
             matches(store.clone()).await?,
@@ -2118,6 +1939,93 @@ mod tests {
             .expect("query_only returns a row")
             .get(0)?;
         assert_eq!(flag, 0, "writer connection must stay writable");
+
+        Ok(())
+    }
+
+    /// `bulk_add_to_collections` derives every target collection's base order
+    /// from one batched `MAX()` read rather than a round trip per collection.
+    /// This locks in that the batched form reproduces the per-collection
+    /// semantics it replaced: append AFTER a collection's existing members,
+    /// independently per collection, and start a fresh sequence for an empty
+    /// one — with no order key reused inside a collection.
+    #[tokio::test]
+    async fn bulk_add_appends_after_existing_members_per_collection() -> Result<()> {
+        async fn member_orders(store: &SqliteStore, collection_id: &str) -> Result<Vec<f64>> {
+            let mut rows = store
+                .read()
+                .await?
+                .query(
+                    "SELECT json_extract(properties, '$.order') FROM relationship \
+                     WHERE out_node = ?1 AND relationship_type = 'member_of'",
+                    libsql::params![collection_id.to_string()],
+                )
+                .await?;
+            let mut orders = Vec::new();
+            while let Some(row) = rows.next().await? {
+                orders.push(row.get::<Option<f64>>(0)?.unwrap_or(0.0));
+            }
+            orders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            Ok(orders)
+        }
+
+        let (store, _t) = create_test_store().await?;
+
+        let new_node = |content: &str, node_type: &str| {
+            let n = Node::new(node_type.to_string(), content.to_string(), json!({}));
+            (n.id.clone(), n)
+        };
+
+        let (seeded_id, seeded) = new_node("seeded", "collection");
+        store.create_node(seeded, None, None).await?;
+        let (empty_id, empty) = new_node("empty", "collection");
+        store.create_node(empty, None, None).await?;
+
+        // One pre-existing member in `seeded`; `empty` has none.
+        let (first_id, first) = new_node("first", "text");
+        store.create_node(first, None, None).await?;
+        store.add_to_collection(&first_id, &seeded_id).await?;
+        let seeded_before = member_orders(&store, &seeded_id).await?;
+        assert_eq!(seeded_before.len(), 1);
+
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let (id, n) = new_node(&format!("m{i}"), "text");
+            store.create_node(n, None, None).await?;
+            ids.push(id);
+        }
+
+        // Both collections filled in a single call, which is what makes the
+        // batched read have to keep them apart.
+        store
+            .bulk_add_to_collections(&[
+                (ids[0].clone(), seeded_id.clone()),
+                (ids[1].clone(), seeded_id.clone()),
+                (ids[2].clone(), empty_id.clone()),
+                (ids[3].clone(), empty_id.clone()),
+            ])
+            .await?;
+
+        let seeded_after = member_orders(&store, &seeded_id).await?;
+        assert_eq!(seeded_after.len(), 3, "seeded collection kept every member");
+        for pair in seeded_after.windows(2) {
+            assert!(
+                pair[1] - pair[0] > f64::EPSILON,
+                "colliding member order keys in the seeded collection: {seeded_after:?}"
+            );
+        }
+        assert!(
+            seeded_after[1] > seeded_before[0] && seeded_after[2] > seeded_before[0],
+            "bulk-added members must land AFTER the pre-existing member: \
+             before {seeded_before:?}, after {seeded_after:?}"
+        );
+
+        let empty_after = member_orders(&store, &empty_id).await?;
+        assert_eq!(empty_after.len(), 2, "empty collection took both members");
+        assert!(
+            empty_after[1] - empty_after[0] > f64::EPSILON,
+            "colliding member order keys in the empty collection: {empty_after:?}"
+        );
 
         Ok(())
     }

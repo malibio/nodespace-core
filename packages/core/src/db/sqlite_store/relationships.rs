@@ -895,13 +895,55 @@ impl SqliteStore {
                 .push(node_id.as_str());
         }
 
-        // Guard taken before the base-order reads, not just before the
-        // transaction: the orders written below are computed from them.
+        // Current max `member_of` order per target collection, read in ONE
+        // round trip rather than one per collection. This runs under the write
+        // guard (the orders written below are computed from it), so every extra
+        // round trip here is time no other writer in the daemon can use.
+        //
+        // Matches `get_next_order_for_relationship`'s semantics exactly:
+        // `MAX()` skips NULL orders, so a collection whose edges all carry a
+        // NULL order yields a group with a NULL max — the same "present but
+        // unordered" case its `unwrap_or(0.0)` handles — while a collection
+        // with no edges at all produces no group, the `None` case.
+        let collection_ids: Vec<&str> = by_collection.keys().copied().collect();
+        let mut max_order: HashMap<&str, Option<f64>> = HashMap::new();
+        // Chunk under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766).
+        const ID_CHUNK: usize = 900;
+
         let db = self.write().await;
+
+        for chunk in collection_ids.chunks(ID_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "SELECT out_node, MAX(json_extract(properties, '$.order')) FROM relationship \
+                 WHERE out_node IN ({}) AND relationship_type = 'member_of' \
+                 GROUP BY out_node",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.to_string()))
+                .collect();
+            let mut rows = db
+                .query(&sql, params)
+                .await
+                .context("Failed to read existing member orders")?;
+            while let Some(row) = rows.next().await? {
+                let collection_id: String = row.get(0)?;
+                let ord: Option<f64> = row.get(1)?;
+                // Re-borrow the caller's `&str` key so the map stays borrow-free.
+                if let Some(key) = chunk.iter().find(|id| **id == collection_id) {
+                    max_order.insert(key, ord);
+                }
+            }
+        }
 
         let mut ordered: Vec<(String, String, f64)> = Vec::with_capacity(memberships.len());
         for (collection_id, node_ids) in &by_collection {
-            let base_order = self.get_next_member_order(collection_id).await?;
+            // Present-with-NULL-order counts as 0.0; absent stays None, so an
+            // empty collection starts a fresh sequence.
+            let last_order = max_order.get(collection_id).map(|ord| ord.unwrap_or(0.0));
+            let base_order = FractionalOrderCalculator::calculate_order(last_order, None);
             for (i, node_id) in node_ids.iter().enumerate() {
                 ordered.push((
                     node_id.to_string(),

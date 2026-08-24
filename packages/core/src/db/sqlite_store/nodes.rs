@@ -1919,9 +1919,26 @@ impl SqliteStore {
             ));
         }
 
-        // Guard held across the read-modify-write: the rewritten properties are
-        // computed from the rows read here, so a concurrent property write
+        // Guard held across the whole read-modify-write, and every UPDATE runs
+        // in ONE transaction.
+        //
+        // The guard has to span the read: the rewritten properties are computed
+        // from the rows read here, so a concurrent property write landing
         // between the read and the UPDATE would be silently clobbered.
+        //
+        // It also has to span the whole loop, which does block other writers
+        // for the duration on a type with many instances. Releasing and
+        // re-taking it between batches would trade that for a correctness hole,
+        // not just a weaker guarantee: a concurrent `create_node`/`update_node`
+        // could write an instance carrying the OLD field name after the rename
+        // has already swept past it, leaving the type permanently half-renamed.
+        // A schema field rename is a rare, user-initiated migration, so paying
+        // for it with a bounded write pause is the right side of that trade.
+        //
+        // The transaction earns its place twice over: it makes a partial
+        // failure roll back to a coherent state instead of leaving half the
+        // instances renamed, and it collapses N autocommits into one fsync,
+        // which is what actually keeps the pause bounded.
         let db = self.write().await;
         let mut rows = db
             .query(
@@ -1942,6 +1959,11 @@ impl SqliteStore {
         let mut affected = 0u64;
         let now = Utc::now().to_rfc3339();
 
+        let tx = db
+            .transaction()
+            .await
+            .context("Failed to begin schema field rename transaction")?;
+
         for (node_id, mut properties) in nodes {
             let had_field = if let Some(ns_obj) = properties
                 .as_object_mut()
@@ -1961,7 +1983,7 @@ impl SqliteStore {
             if had_field {
                 let props_json =
                     serde_json::to_string(&properties).context("Failed to serialize properties")?;
-                db.execute(
+                tx.execute(
                     "UPDATE node SET properties = ?1, modified_at = ?2 WHERE id = ?3",
                     libsql::params![props_json, now.clone(), node_id],
                 )
@@ -1970,6 +1992,11 @@ impl SqliteStore {
                 affected += 1;
             }
         }
+
+        tx.commit()
+            .await
+            .context("Failed to commit schema field rename")?;
+        drop(db);
 
         tracing::info!(
             type_id = %type_id,
