@@ -32,7 +32,7 @@
 //! the gate serializes away.
 
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -89,7 +89,15 @@ impl SpawnedDaemon {
             // and seeds `~/.nodespace/databases.toml` with this temp db path.
             .env("NODESPACE_HOME", tmp_dir.path())
             .env("NODESPACED_HEADLESS", "1")
-            .env("RUST_LOG", "warn")
+            // Default to `warn`, but let the caller raise it: diagnosing a
+            // daemon-side stall from the test side is impossible when the
+            // daemon's own `info!` breadcrumbs are filtered out before they
+            // reach the drain threads below. Pair with `E2E_VERBOSE=1`, which
+            // is what actually echoes the drained lines.
+            .env(
+                "RUST_LOG",
+                std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".to_string()),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -296,41 +304,169 @@ pub fn model_file_available(filename: &str) -> bool {
         .exists()
 }
 
+/// The workspace root, derived from this crate's manifest directory
+/// (`packages/desktop-app/src-tauri/test-support`). Canonicalised so paths
+/// quoted in failure messages read as real locations rather than a chain of
+/// `..` segments.
+fn workspace_root() -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..");
+    std::fs::canonicalize(&root).unwrap_or(root)
+}
+
+/// Crate sources compiled into `nodespaced`. A daemon binary older than the
+/// newest file here is not the daemon this checkout describes, so these tests
+/// would be asserting on some other build's behaviour.
+const DAEMON_SOURCE_DIRS: [&str; 5] = [
+    "packages/daemon/src",
+    "packages/agent/src",
+    "packages/core/src",
+    "packages/nlp-engine/src",
+    "packages/nodespace-types/src",
+];
+
+/// Newest modification time among the `.rs` files under [`DAEMON_SOURCE_DIRS`],
+/// with the file that carries it. `None` when none of the directories exist (a
+/// partial checkout), which disables the staleness check rather than failing on
+/// it.
+fn newest_source_mtime(root: &Path) -> Option<(std::time::SystemTime, PathBuf)> {
+    fn walk(dir: &Path, newest: &mut Option<(std::time::SystemTime, PathBuf)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                walk(&path, newest);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+                    continue;
+                };
+                if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
+                    *newest = Some((modified, path));
+                }
+            }
+        }
+    }
+
+    let mut newest = None;
+    for dir in DAEMON_SOURCE_DIRS {
+        walk(&root.join(dir), &mut newest);
+    }
+    newest
+}
+
+/// `Err(explanation)` when `binary` is older than the daemon sources under
+/// `root` — i.e. it is not a build of this checkout.
+///
+/// Every binary [`resolve_daemon_binary`] can pick is a git-ignored artifact
+/// that nothing in the repo keeps in sync with the checkout: the sidecar under
+/// `src-tauri/binaries/` is staged by hand and can be arbitrarily old, and
+/// build outputs get copied between checkouts routinely (a fresh worktree has
+/// no Rust build cache, so copying them in is the standard shortcut). Cargo's
+/// own freshness check is mtime-based, so copied-in artifacts can date *newer*
+/// than the sources they supposedly came from and register as up to date — a
+/// preceding `cargo build --bin nodespaced` is therefore not on its own a
+/// guarantee that the binary matches the checkout.
+///
+/// Left unchecked, the resulting failure is silent and deeply misleading: an old
+/// daemon still speaks the current gRPC surface, so every RPC succeeds and only
+/// its *behaviour* is wrong. It surfaces as an inference turn that never
+/// produces a reply — a several-minute timeout in a test that then reads as a
+/// regression in whatever change is being pushed, rather than as the wrong
+/// binary being under test.
+///
+/// Unknowable inputs (missing binary, no daemon sources at `root`) return `Ok`:
+/// this check exists to catch a specific, silent mismatch, not to add a second
+/// way for the fixture to refuse to start.
+///
+/// `pub` so `tests/daemon_binary_freshness_test.rs` can exercise it against a
+/// synthetic tree; the ADR-048 suite is where this crate's own logic gets run.
+pub fn daemon_binary_freshness(binary: &Path, root: &Path) -> Result<(), String> {
+    let Ok(binary_mtime) = std::fs::metadata(binary).and_then(|m| m.modified()) else {
+        return Ok(());
+    };
+    let Some((source_mtime, source_path)) = newest_source_mtime(root) else {
+        return Ok(());
+    };
+    if binary_mtime >= source_mtime {
+        return Ok(());
+    }
+    Err(format!(
+        "nodespaced at {} is OLDER than {} — it is not a build of this checkout, so these \
+         tests would assert on a different daemon's behaviour. Rebuild it with \
+         `cargo build --bin nodespaced` — and if this checkout's build artifacts were \
+         copied in from elsewhere, delete the stale binary first, since cargo's \
+         mtime-based freshness check treats a newly copied artifact as up to date. \
+         Or point NODESPACED_TEST_BIN at a current build.",
+        binary.display(),
+        source_path.display(),
+    ))
+}
+
 /// Resolve the `nodespaced` binary to spawn.
 ///
 /// Checked in order:
-///   1. `NODESPACED_TEST_BIN` env override
-///   2. The triple-suffixed sidecar under `src-tauri/binaries/`, the same
+///   1. `NODESPACED_TEST_BIN` env override — what `scripts/test-gate.ts` sets
+///      to the daemon it builds immediately beforehand.
+///   2. `target/debug/nodespaced`, this workspace's own `cargo build --bin
+///      nodespaced` output. Preferred over the sidecar because it is the one
+///      artifact a developer's own build actually refreshes.
+///   3. The triple-suffixed sidecar under `src-tauri/binaries/`, the same
 ///      path (and naming convention) the TypeScript `DaemonTestHarness`
 ///      resolves — keeping one binary-provisioning story across both
 ///      harnesses rather than inventing a second convention.
 ///
-/// Neither is built automatically; this intentionally mirrors the existing
+/// None is built automatically; this intentionally mirrors the existing
 /// e2e harness rather than adding `nodespace-daemon` as a dev-dependency of
 /// this crate; the daemon crate pulls in `nodespace-nlp-engine` (llama.cpp
 /// bindgen), which would tax every `cargo test` of this crate to save an
-/// occasional manual build step.
+/// occasional manual build step. Whichever is resolved is checked against the
+/// daemon's own sources — see [`daemon_binary_freshness`].
 fn resolve_daemon_binary() -> PathBuf {
-    if let Ok(p) = std::env::var("NODESPACED_TEST_BIN") {
-        return PathBuf::from(p);
+    let root = workspace_root();
+    let binary_name = if cfg!(windows) {
+        "nodespaced.exe"
+    } else {
+        "nodespaced"
+    };
+
+    let (binary, chosen_via) =
+        if let Ok(p) = std::env::var("NODESPACED_TEST_BIN") {
+            (PathBuf::from(p), "NODESPACED_TEST_BIN")
+        } else {
+            let built = root.join("target").join("debug").join(binary_name);
+            if built.exists() {
+                (built, "target/debug")
+            } else {
+                let triple = tauri::utils::platform::target_triple()
+                    .expect("could not determine host target triple");
+                let sidecar = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("binaries")
+                    .join(format!("nodespaced-{triple}"));
+
+                assert!(
+                sidecar.exists(),
+                "no nodespaced binary found: neither {} nor the sidecar at {} exists. Build one \
+                 with `cargo build --bin nodespaced`, or set NODESPACED_TEST_BIN to an existing \
+                 binary.",
+                root.join("target").join("debug").join(binary_name).display(),
+                sidecar.display()
+            );
+
+                (sidecar, "src-tauri/binaries sidecar")
+            }
+        };
+
+    if let Err(explanation) = daemon_binary_freshness(&binary, &root) {
+        panic!("{explanation} (resolved via {chosen_via})");
     }
-
-    let triple =
-        tauri::utils::platform::target_triple().expect("could not determine host target triple");
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let sidecar = manifest_dir
-        .join("..")
-        .join("binaries")
-        .join(format!("nodespaced-{triple}"));
-
-    assert!(
-        sidecar.exists(),
-        "nodespaced sidecar not found at {}. Build it with \
-         `bun run --cwd packages/desktop-app dev:tauri:sidecars` (or \
-         `cargo build -p nodespace-daemon --bin nodespaced` and copy it to \
-         that path), or set NODESPACED_TEST_BIN to an existing binary.",
-        sidecar.display()
-    );
-
-    sidecar
+    binary
 }

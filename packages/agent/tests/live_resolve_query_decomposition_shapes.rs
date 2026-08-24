@@ -322,13 +322,12 @@ fn decomposition_responses(dump: &PathBuf) -> Vec<String> {
         };
         let seq = v.get("seq").and_then(Value::as_u64).unwrap_or(u64::MAX);
         match v.get("kind").and_then(Value::as_str) {
-            Some("prompt") => {
+            Some("prompt")
                 if v.get("prompt")
                     .and_then(Value::as_str)
-                    .is_some_and(|p| p.contains(DECOMP_MARKER))
-                {
-                    decomp_seqs.push(seq);
-                }
+                    .is_some_and(|p| p.contains(DECOMP_MARKER)) =>
+            {
+                decomp_seqs.push(seq);
             }
             Some("response") => {
                 if let Some(raw) = v.get("raw_response").and_then(Value::as_str) {
