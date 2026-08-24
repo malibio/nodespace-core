@@ -2323,7 +2323,7 @@ mod tests {
     /// the next child order and wrote the edge as two separate un-serialized
     /// steps, so concurrent appends computed the same key against a stale max and
     /// collided. `append_child_edge` does the read → compute → write atomically
-    /// under `reorder_lock`, matching `move_node`'s discipline.
+    /// under the store's write guard, matching `move_node`'s discipline.
     ///
     /// Requires a multi-thread runtime so the appends' read/compute/write can
     /// actually interleave (mirrors the store-level reorder-race test).

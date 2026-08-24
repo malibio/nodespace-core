@@ -35,7 +35,8 @@ impl SqliteStore {
             serde_json::to_string(&properties).context("Failed to serialize properties")?;
         let now = Utc::now().to_rfc3339();
 
-        self.db
+        self.write()
+            .await
             .execute(
                 "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 libsql::params![
@@ -140,15 +141,14 @@ impl SqliteStore {
 
         self.validate_no_cycle(parent_id, &node_id).await?;
 
-        // Serialize the sibling-order read → compute → write against move_node and
-        // other order mutations on the shared connection (held until return).
-        // Without it a concurrent create/move under the same parent reads the same
-        // max order and assigns a colliding key. No re-entrancy: this method calls
-        // no other reorder_lock-taking path. See `reorder_lock`.
-        let _reorder_guard = self.reorder_lock.lock().await;
+        // Held across the sibling-order read → compute → insert. Without it a
+        // concurrent create/move under the same parent reads the same max order
+        // and assigns a colliding key. No re-entrancy: nothing below takes the
+        // guard again.
+        let db = self.write().await;
 
         // Get last child order
-        let mut rows = self.db.query(
+        let mut rows = db.query(
             "SELECT json_extract(r.properties, '$.order') as ord FROM relationship r WHERE r.in_node = ?1 AND r.relationship_type = 'has_child' ORDER BY json_extract(r.properties, '$.order') DESC LIMIT 1",
             libsql::params![parent_id.to_string()],
         ).await.context("Failed to get last child order")?;
@@ -176,8 +176,7 @@ impl SqliteStore {
             serde_json::to_string(&properties).context("Failed to serialize properties")?;
         let now = Utc::now().to_rfc3339();
 
-        let tx = self
-            .db
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin transaction")?;
@@ -195,6 +194,7 @@ impl SqliteStore {
         ).await.context("Failed to insert parent-child relationship")?;
 
         tx.commit().await.context("Failed to commit transaction")?;
+        drop(db);
 
         let node = self
             .get_node(&node_id)
@@ -214,7 +214,8 @@ impl SqliteStore {
 
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT * FROM node WHERE id = ?1 LIMIT 1",
                 libsql::params![id.to_string()],
@@ -231,7 +232,8 @@ impl SqliteStore {
 
     pub async fn node_exists(&self, id: &str) -> Result<bool> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT 1 FROM node WHERE id = ?1 LIMIT 1",
                 libsql::params![id.to_string()],
@@ -263,7 +265,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
             let mut rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to batch query nodes")?;
@@ -338,39 +341,46 @@ impl SqliteStore {
 
         let now = Utc::now().to_rfc3339();
 
+        // One guard across all three statements: an update spread over several
+        // `execute`s must not interleave with another writer's, and must not be
+        // absorbed into another task's open transaction.
+        let db = self.write().await;
+
         if let Some(ref props) = properties_update {
             let props_json =
                 serde_json::to_string(props).context("Failed to serialize properties")?;
-            self.db.execute(
+            db.execute(
                 "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, version = version + 1, modified_at = ?4 WHERE id = ?5",
                 libsql::params![updated_content.clone(), updated_node_type.clone(), props_json, now.clone(), id.to_string()],
             ).await.context("Failed to update node")?;
         } else {
-            self.db.execute(
+            db.execute(
                 "UPDATE node SET content = ?1, node_type = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
                 libsql::params![updated_content.clone(), updated_node_type.clone(), now.clone(), id.to_string()],
             ).await.context("Failed to update node")?;
         }
 
         if let Some(title) = update.title {
-            self.db
-                .execute(
-                    "UPDATE node SET title = ?1 WHERE id = ?2",
-                    libsql::params![title, id.to_string()],
-                )
-                .await
-                .context("Failed to update title")?;
+            db.execute(
+                "UPDATE node SET title = ?1 WHERE id = ?2",
+                libsql::params![title, id.to_string()],
+            )
+            .await
+            .context("Failed to update title")?;
         }
 
         if let Some(status) = update.lifecycle_status {
-            self.db
-                .execute(
-                    "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
-                    libsql::params![status, id.to_string()],
-                )
-                .await
-                .context("Failed to update lifecycle_status")?;
+            db.execute(
+                "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
+                libsql::params![status, id.to_string()],
+            )
+            .await
+            .context("Failed to update lifecycle_status")?;
         }
+
+        // Released before the read-back and before `mark_collection_name_
+        // collision`, which takes the guard itself (it is not re-entrant).
+        drop(db);
 
         let updated_node = self
             .get_node(id)
@@ -412,7 +422,8 @@ impl SqliteStore {
             serde_json::to_string(&new_properties).context("Failed to serialize properties")?;
         let now = Utc::now().to_rfc3339();
 
-        self.db
+        self.write()
+            .await
             .execute(
                 "UPDATE node SET node_type = ?1, properties = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
                 libsql::params![new_type.to_string(), props_json, now, node_id.to_string()],
@@ -442,7 +453,8 @@ impl SqliteStore {
     /// Used to disambiguate a no-op version-checked update.
     pub async fn persisted_version(&self, id: &str) -> Result<Option<i64>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT version FROM node WHERE id = ?1",
                 libsql::params![id.to_string()],
@@ -505,7 +517,7 @@ impl SqliteStore {
             .unwrap_or(current.lifecycle_status.clone());
         let now = Utc::now().to_rfc3339();
 
-        let rows_affected = self.db.execute(
+        let rows_affected = self.write().await.execute(
             "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, title = ?4, lifecycle_status = ?5, version = ?6, modified_at = ?7 WHERE id = ?8 AND version = ?9",
             libsql::params![updated_content, updated_node_type, updated_props, updated_title, updated_status, new_version, now, id.to_string(), expected_version],
         ).await.context("Failed to update node with version check")?;
@@ -539,7 +551,8 @@ impl SqliteStore {
 
     pub async fn update_lifecycle_status(&self, id: &str, status: &str) -> Result<()> {
         Self::validate_lifecycle_status(status)?;
-        self.db
+        self.write()
+            .await
             .execute(
                 "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
                 libsql::params![status.to_string(), id.to_string()],
@@ -563,7 +576,8 @@ impl SqliteStore {
         self.assert_schema_deletable(&node).await?;
 
         // FK CASCADE handles relationship and embedding deletion
-        self.db
+        self.write()
+            .await
             .execute(
                 "DELETE FROM node WHERE id = ?1",
                 libsql::params![id.to_string()],
@@ -610,8 +624,8 @@ impl SqliteStore {
             self.assert_schema_deletable(node).await?;
         }
 
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin bulk delete transaction")?;
@@ -634,6 +648,7 @@ impl SqliteStore {
         tx.commit()
             .await
             .context("Failed to commit bulk delete transaction")?;
+        drop(db);
 
         for node in &to_delete {
             self.notify(StoreChange {
@@ -652,7 +667,7 @@ impl SqliteStore {
     /// pre-delete access gate (to know what to check access for) — computed once and shared so
     /// the two never see different sets.
     pub async fn collect_subtree_ids(&self, node_id: &str) -> Result<Vec<String>> {
-        let mut id_rows = self.db.query(
+        let mut id_rows = self.read().await?.query(
             r#"WITH RECURSIVE subtree(node_id) AS (
                 SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
                 UNION ALL
@@ -724,6 +739,10 @@ impl SqliteStore {
         // the other bulk store queries.
         const ID_CHUNK: usize = 900;
         let mut nodes_to_delete: Vec<Node> = Vec::new();
+        // Taken before the fetch, not just before the transaction: the fetched
+        // rows are what this call reports as deleted, so they must be read from
+        // the same serialized point the delete runs at.
+        let db = self.write().await;
         for chunk in all_ids.chunks(ID_CHUNK) {
             let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
             let fetch_sql = format!(
@@ -734,8 +753,7 @@ impl SqliteStore {
                 .iter()
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
-            let mut node_rows = self
-                .db
+            let mut node_rows = db
                 .query(&fetch_sql, fetch_params)
                 .await
                 .context("Failed to fetch subtree nodes for deletion")?;
@@ -745,8 +763,7 @@ impl SqliteStore {
         }
 
         // Single-transaction delete — FK CASCADE cleans relationship and embedding rows.
-        let tx = self
-            .db
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin subtree delete transaction")?;
@@ -796,6 +813,7 @@ impl SqliteStore {
         tx.commit()
             .await
             .context("Failed to commit subtree delete transaction")?;
+        drop(db);
 
         // Emit one NodeDeleted notification per deleted node after commit.
         for node in &nodes_to_delete {
@@ -821,7 +839,8 @@ impl SqliteStore {
     /// descendants (ordinary content, e.g. a schema's description subtree) —
     /// never schema nodes themselves. Do not route schema-node ids through this.
     pub async fn delete_children_subtree_unchecked(&self, parent_id: &str) -> Result<()> {
-        self.db
+        self.write()
+            .await
             .execute(
                 r#"WITH RECURSIVE subtree(node_id) AS (
                     SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
@@ -853,6 +872,9 @@ impl SqliteStore {
         }
         // Chunk under SQLite's compiled SQLITE_MAX_VARIABLE_NUMBER (32766).
         const ID_CHUNK: usize = 900;
+        // One guard across all chunks so a multi-chunk delete is not interleaved
+        // with another writer halfway through.
+        let db = self.write().await;
         for chunk in ids.chunks(ID_CHUNK) {
             let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{}", i)).collect();
             let sql = format!("DELETE FROM node WHERE id IN ({})", placeholders.join(", "));
@@ -860,8 +882,7 @@ impl SqliteStore {
                 .iter()
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
-            self.db
-                .execute(&sql, params)
+            db.execute(&sql, params)
                 .await
                 .context("Failed to delete nodes by id")?;
         }
@@ -874,7 +895,8 @@ impl SqliteStore {
     /// moved to the child-subtree representation, making the migration idempotent.
     pub async fn remove_property_key(&self, node_id: &str, key: &str) -> Result<()> {
         let json_path = format!("$.{}", key);
-        self.db
+        self.write()
+            .await
             .execute(
                 "UPDATE node SET properties = json_remove(properties, ?1), modified_at = ?2 WHERE id = ?3",
                 libsql::params![json_path, chrono::Utc::now().to_rfc3339(), node_id.to_string()],
@@ -904,7 +926,8 @@ impl SqliteStore {
         // json_set's value argument must be JSON, not SQLite's 0/1 integer
         // affinity, or the stored value round-trips as an int instead of a bool.
         let json_value = if value { "true" } else { "false" };
-        self.db
+        self.write()
+            .await
             .execute(
                 "UPDATE node SET properties = json_set(properties, ?1, json(?2)) WHERE id = ?3",
                 libsql::params![json_path.to_string(), json_value, node_id.to_string()],
@@ -935,7 +958,7 @@ impl SqliteStore {
 
     pub async fn query_nodes(&self, query: NodeQuery) -> Result<Vec<Node>> {
         if let Some(ref mentioned_node_id) = query.mentioned_by {
-            let mut rows = self.db.query(
+            let mut rows = self.read().await?.query(
                 "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = 'mentions'",
                 libsql::params![mentioned_node_id.clone()],
             ).await.context("Failed to query mentioned_by nodes")?;
@@ -1014,7 +1037,8 @@ impl SqliteStore {
                 }
                 let sql = format!("SELECT * FROM node WHERE {}", conds.join(" AND "));
                 let mut rows = self
-                    .db
+                    .read()
+                    .await?
                     .query(&sql, binds)
                     .await
                     .context("Failed to query nodes by id set")?;
@@ -1040,7 +1064,8 @@ impl SqliteStore {
 
         let sql = format!("SELECT * FROM node {} {}", where_clause, limit_offset);
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(&sql, bind_values)
             .await
             .context("Failed to query nodes")?;
@@ -1188,7 +1213,7 @@ impl SqliteStore {
     }
 
     pub async fn get_children(&self, parent_id: &str) -> Result<Vec<Node>> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT n.* FROM node n JOIN relationship r ON r.out_node = n.id WHERE r.in_node = ?1 AND r.relationship_type = 'has_child' ORDER BY json_extract(r.properties, '$.order') ASC",
             libsql::params![parent_id.to_string()],
         ).await.context("Failed to get children")?;
@@ -1221,7 +1246,7 @@ impl SqliteStore {
     }
 
     pub async fn get_parent(&self, child_id: &str) -> Result<Option<Node>> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = 'has_child' LIMIT 1",
             libsql::params![child_id.to_string()],
         ).await.context("Failed to get parent")?;
@@ -1234,7 +1259,7 @@ impl SqliteStore {
     }
 
     pub async fn get_parent_id(&self, child_id: &str) -> Result<Option<String>> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child' LIMIT 1",
             libsql::params![child_id.to_string()],
         ).await.context("Failed to get parent id")?;
@@ -1248,7 +1273,8 @@ impl SqliteStore {
 
     pub async fn get_node_type(&self, node_id: &str) -> Result<Option<String>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT node_type FROM node WHERE id = ?1 LIMIT 1",
                 libsql::params![node_id.to_string()],
@@ -1348,7 +1374,7 @@ impl SqliteStore {
         let start = std::time::Instant::now();
 
         // WITH RECURSIVE to collect all descendants
-        let mut id_rows = self.db.query(
+        let mut id_rows = self.read().await?.query(
             r#"WITH RECURSIVE subtree(node_id, depth) AS (
                 SELECT out_node, 1 FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
                 UNION ALL
@@ -1390,7 +1416,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
             let mut node_rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to fetch subtree nodes")?;
@@ -1417,7 +1444,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
             let mut rel_rows = self
-                .db
+                .read()
+                .await?
                 .query(&rel_sql, rel_params)
                 .await
                 .context("Failed to fetch subtree relationships")?;
@@ -1446,7 +1474,7 @@ impl SqliteStore {
 
     async fn validate_no_cycle(&self, parent_id: &str, child_id: &str) -> Result<()> {
         // Check if parent_id is a descendant of child_id (would create cycle)
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             r#"WITH RECURSIVE desc(node_id, depth) AS (
                 SELECT out_node, 1 FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
                 UNION ALL
@@ -1492,7 +1520,8 @@ impl SqliteStore {
             ));
         }
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 r#"WITH RECURSIVE descendants(node_id, depth) AS (
                 SELECT in_node, 1 FROM relationship
@@ -1517,8 +1546,19 @@ impl SqliteStore {
         Ok(())
     }
 
-    async fn rebalance_children_for_parent(&self, parent_id: &str) -> Result<()> {
-        let mut rows = self.db.query(
+    /// Re-spread a parent's `has_child` order keys evenly.
+    ///
+    /// Takes the caller's writer connection rather than acquiring one: its only
+    /// caller (`move_node`) is already holding the guard around its own
+    /// read → compute → write, and the guard is not re-entrant. Passing it down
+    /// also keeps the rebalance inside that same serialized span, so the
+    /// re-read `move_node` does afterwards is guaranteed to see these new keys.
+    async fn rebalance_children_for_parent(
+        &self,
+        db: &libsql::Connection,
+        parent_id: &str,
+    ) -> Result<()> {
+        let mut rows = db.query(
             "SELECT id, out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' ORDER BY json_extract(properties, '$.order') ASC",
             libsql::params![parent_id.to_string()],
         ).await.context("Failed to get children for rebalancing")?;
@@ -1533,8 +1573,7 @@ impl SqliteStore {
         }
 
         let new_orders = FractionalOrderCalculator::rebalance(rels.len());
-        let tx = self
-            .db
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin rebalance transaction")?;
@@ -1593,7 +1632,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.to_string()))
                 .collect();
             let mut rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to validate root-only membership on reparent")?;
@@ -1640,16 +1680,15 @@ impl SqliteStore {
             self.assert_may_gain_parent(&[node_id.as_str()]).await?;
         }
 
-        // Serialize the sibling-order read → fractional-key compute → write-back
-        // (including any rebalance). Held until the function returns. Without this,
-        // two concurrent same-parent reorders interleave their reads/writes on the
-        // shared connection and compute overlapping order keys against the same
-        // stale snapshot, corrupting the final sibling order. See `reorder_lock`.
-        let _reorder_guard = self.reorder_lock.lock().await;
+        // Held across the sibling-order read → fractional-key compute → write-back
+        // (including any rebalance) until the function returns. Without it, two
+        // concurrent same-parent reorders interleave and compute overlapping order
+        // keys from the same stale snapshot, corrupting the final sibling order.
+        let db = self.write().await;
 
         let new_order = if let Some(ref parent_id) = new_parent_id {
             // Get ordered siblings excluding the moving node
-            let mut rows = self.db.query(
+            let mut rows = db.query(
                 "SELECT out_node, json_extract(properties, '$.order') as ord FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' AND out_node != ?2 ORDER BY json_extract(properties, '$.order') ASC",
                 libsql::params![parent_id.clone(), node_id.clone()],
             ).await.context("Failed to get sibling relationships")?;
@@ -1668,9 +1707,9 @@ impl SqliteStore {
 
                     if let Some(next) = next_order {
                         if (next - prev_order) < 0.0001 {
-                            self.rebalance_children_for_parent(parent_id).await?;
+                            self.rebalance_children_for_parent(&db, parent_id).await?;
                             // Re-query after rebalancing
-                            let mut rows2 = self.db.query(
+                            let mut rows2 = db.query(
                                 "SELECT out_node, json_extract(properties, '$.order') as ord FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' AND out_node != ?2 ORDER BY json_extract(properties, '$.order') ASC",
                                 libsql::params![parent_id.clone(), node_id.clone()],
                             ).await.context("Failed to get siblings after rebalancing")?;
@@ -1713,7 +1752,7 @@ impl SqliteStore {
         if let Some(ref parent_id) = new_parent_id {
             if is_same_parent_reorder {
                 let props = serde_json::json!({"order": new_order}).to_string();
-                self.db.execute(
+                db.execute(
                     "UPDATE relationship SET properties = ?1, version = version + 1, modified_at = ?2 WHERE in_node = ?3 AND out_node = ?4 AND relationship_type = 'has_child'",
                     libsql::params![props, now, parent_id.clone(), node_id.clone()],
                 ).await.context("Failed to update relationship order")?;
@@ -1726,8 +1765,7 @@ impl SqliteStore {
                 // of `move_children_to_parent` / `delete_subtree_atomic`.
                 let rel_id = uuid::Uuid::new_v4().to_string();
                 let props = serde_json::json!({"order": new_order}).to_string();
-                let tx = self
-                    .db
+                let tx = db
                     .transaction()
                     .await
                     .context("Failed to begin move_node reparent transaction")?;
@@ -1745,10 +1783,12 @@ impl SqliteStore {
             }
         } else {
             // Make root: delete parent relationship
-            self.db.execute(
+            db.execute(
                 "DELETE FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
                 libsql::params![node_id.clone()],
-            ).await.context("Failed to delete parent relationship")?;
+            )
+            .await
+            .context("Failed to delete parent relationship")?;
         }
 
         Ok(new_order)
@@ -1772,11 +1812,11 @@ impl SqliteStore {
 
         let now = Utc::now().to_rfc3339();
 
-        // Serialize the sibling-order read → compute → write against move_node and
-        // other order mutations on the shared connection (held until return). No
-        // re-entrancy: the transaction below issues raw DELETE/INSERT and calls no
-        // other reorder_lock-taking path. See `reorder_lock`.
-        let _reorder_guard = self.reorder_lock.lock().await;
+        // Held across the existing-max-order read → compute → write below, so a
+        // concurrent move/create under the same parent cannot assign a colliding
+        // key. No re-entrancy: the transaction below issues raw DELETE/INSERT and
+        // calls no other guard-taking path.
+        let db = self.write().await;
 
         // Append the moved children AFTER new_parent_id's existing children: read
         // the current max has_child order under the new parent and seed the
@@ -1784,7 +1824,7 @@ impl SqliteStore {
         // existing siblings, so moving into a NON-EMPTY parent collided their
         // order keys even single-threaded.
         let existing_max: Option<f64> = {
-            let mut rows = self.db.query(
+            let mut rows = db.query(
                 "SELECT json_extract(properties, '$.order') as ord FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' ORDER BY json_extract(properties, '$.order') DESC LIMIT 1",
                 libsql::params![new_parent_id.to_string()],
             ).await.context("Failed to read existing child order for move_children_to_parent")?;
@@ -1804,8 +1844,7 @@ impl SqliteStore {
             orders.push(FractionalOrderCalculator::calculate_order(prev, None));
         }
 
-        let tx = self
-            .db
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin move_children_to_parent transaction")?;
@@ -1880,8 +1919,28 @@ impl SqliteStore {
             ));
         }
 
-        let mut rows = self
-            .db
+        // Guard held across the whole read-modify-write, and every UPDATE runs
+        // in ONE transaction.
+        //
+        // The guard has to span the read: the rewritten properties are computed
+        // from the rows read here, so a concurrent property write landing
+        // between the read and the UPDATE would be silently clobbered.
+        //
+        // It also has to span the whole loop, which does block other writers
+        // for the duration on a type with many instances. Releasing and
+        // re-taking it between batches would trade that for a correctness hole,
+        // not just a weaker guarantee: a concurrent `create_node`/`update_node`
+        // could write an instance carrying the OLD field name after the rename
+        // has already swept past it, leaving the type permanently half-renamed.
+        // A schema field rename is a rare, user-initiated migration, so paying
+        // for it with a bounded write pause is the right side of that trade.
+        //
+        // The transaction earns its place twice over: it makes a partial
+        // failure roll back to a coherent state instead of leaving half the
+        // instances renamed, and it collapses N autocommits into one fsync,
+        // which is what actually keeps the pause bounded.
+        let db = self.write().await;
+        let mut rows = db
             .query(
                 "SELECT id, properties FROM node WHERE node_type = ?1",
                 libsql::params![type_id.to_string()],
@@ -1899,6 +1958,11 @@ impl SqliteStore {
 
         let mut affected = 0u64;
         let now = Utc::now().to_rfc3339();
+
+        let tx = db
+            .transaction()
+            .await
+            .context("Failed to begin schema field rename transaction")?;
 
         for (node_id, mut properties) in nodes {
             let had_field = if let Some(ns_obj) = properties
@@ -1919,16 +1983,20 @@ impl SqliteStore {
             if had_field {
                 let props_json =
                     serde_json::to_string(&properties).context("Failed to serialize properties")?;
-                self.db
-                    .execute(
-                        "UPDATE node SET properties = ?1, modified_at = ?2 WHERE id = ?3",
-                        libsql::params![props_json, now.clone(), node_id],
-                    )
-                    .await
-                    .context("Failed to update node during field rename")?;
+                tx.execute(
+                    "UPDATE node SET properties = ?1, modified_at = ?2 WHERE id = ?3",
+                    libsql::params![props_json, now.clone(), node_id],
+                )
+                .await
+                .context("Failed to update node during field rename")?;
                 affected += 1;
             }
         }
+
+        tx.commit()
+            .await
+            .context("Failed to commit schema field rename")?;
+        drop(db);
 
         tracing::info!(
             type_id = %type_id,
@@ -1977,8 +2045,8 @@ impl SqliteStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin bulk update transaction")?;
@@ -2075,8 +2143,8 @@ impl SqliteStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin bulk hierarchy transaction")?;
@@ -2113,6 +2181,9 @@ impl SqliteStore {
         tx.commit()
             .await
             .context("Failed to commit bulk hierarchy")?;
+        // Release the writer before the notify loop — it reads and fans out
+        // events, and must not keep other writers queued while it does.
+        drop(db);
 
         let ids: Vec<String> = nodes.into_iter().map(|(id, ..)| id).collect();
 
@@ -2172,7 +2243,10 @@ impl SqliteStore {
             serde_json::to_string(&properties).context("Failed to serialize properties")?;
         let now = Utc::now().to_rfc3339();
 
-        self.db.execute(
+        // One guard across the node insert and its parent edge, so no other
+        // writer can observe (or transactionally absorb) the half-built pair.
+        let db = self.write().await;
+        db.execute(
             "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, NULL, 'active', 1, ?5, ?6)",
             libsql::params![id.clone(), node_type.clone(), content.clone(), props_json, now.clone(), now.clone()],
         ).await.context("Failed to create node (streaming)")?;
@@ -2180,11 +2254,12 @@ impl SqliteStore {
         if let Some(ref parent) = parent_id {
             let rel_id = uuid::Uuid::new_v4().to_string();
             let rel_props = serde_json::json!({"order": order}).to_string();
-            self.db.execute(
+            db.execute(
                 "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
                 libsql::params![rel_id, parent.clone(), id.clone(), rel_props, now.clone(), now],
             ).await.context("Failed to create relationship (streaming)")?;
         }
+        drop(db);
 
         let node = Node {
             id: id.clone(),
@@ -2331,7 +2406,8 @@ impl SqliteStore {
         sql.push_str(&format!(" WHERE id = ?{}", sql_params.len() + 1));
         sql_params.push(libsql::Value::Text(id.to_string()));
 
-        self.db
+        self.write()
+            .await
             .execute(&sql, sql_params)
             .await
             .context("Failed to update task node")?;
@@ -2347,7 +2423,8 @@ impl SqliteStore {
     /// needs to know declarations aren't stored in `properties`.
     pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT * FROM node WHERE id = ?1 AND node_type = 'schema' LIMIT 1",
                 libsql::params![id.to_string()],
@@ -2376,7 +2453,8 @@ impl SqliteStore {
     /// (one batched query — no per-schema round trip).
     pub async fn get_all_schemas(&self) -> Result<Vec<crate::models::SchemaNode>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT * FROM node WHERE node_type = 'schema' ORDER BY id",
                 (),
@@ -2404,7 +2482,8 @@ impl SqliteStore {
 
     pub async fn count_nodes_by_type(&self, node_type: &str) -> Result<i64> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT COUNT(*) FROM node WHERE node_type = ?1",
                 libsql::params![node_type.to_string()],
@@ -2420,7 +2499,8 @@ impl SqliteStore {
 
     pub async fn query_node_ids_raw(&self, sql: &str) -> Result<Vec<String>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(sql, ())
             .await
             .context("Failed to execute node query")?;
@@ -2523,7 +2603,8 @@ impl SqliteStore {
         );
 
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 &sql,
                 libsql::params![node_type.to_string(), needle, exclude],
@@ -3032,7 +3113,8 @@ mod large_subtree_chunking_tests {
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
             store
-                .db
+                .write()
+                .await
                 .execute(&sql, params)
                 .await
                 .context("Failed to seed subtree node chunk")?;
@@ -3054,7 +3136,8 @@ mod large_subtree_chunking_tests {
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
             store
-                .db
+                .write()
+                .await
                 .execute(&sql, params)
                 .await
                 .context("Failed to seed subtree relationship chunk")?;
