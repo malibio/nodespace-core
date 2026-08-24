@@ -18,7 +18,7 @@ vi.mock('node:os', async (importOriginal) => {
 delete process.env.CLAUDE_CONFIG_DIR;
 
 const { install, uninstall, isNodespaceBinaryOnPath } = await import('../installer.js');
-const { AGENTS } = await import('../agents.js');
+const { AGENTS, SHARED_SKILL_FRONTMATTER } = await import('../agents.js');
 
 const SKILL_MD_CONTENT = '# NodeSpace Skill\nTest content';
 const SHIM_CONTENT = '// shim content';
@@ -95,21 +95,77 @@ describe('install', () => {
     expect(readFileSync(join(config.installDir, 'SKILL.md'), 'utf8')).toBe(expected);
   });
 
-  it('prepends Claude Code frontmatter to SKILL.md but copies verbatim for other agents', () => {
-    const cc = AGENTS.find(a => a.name === 'claude-code')!;
-    expect(cc.skillFrontmatter).toBeTruthy();
-    mkdirSync(cc.detectionDir, { recursive: true });
-    install(['claude-code'], FAKE_PKG_ROOT);
-    const ccContent = readFileSync(join(cc.installDir, 'SKILL.md'), 'utf8');
-    expect(ccContent.startsWith('---\nname: nodespace')).toBe(true);
-    expect(ccContent).toContain('allowed-tools: Bash(nodespace:*)');
-    expect(ccContent).toContain(SKILL_MD_CONTENT);
+  // A skill folder with no frontmatter is not a valid skill under the Agent
+  // Skills standard — `name` + `description` are the entire discovery surface.
+  // Three of the four targets used to install without it, so the skill could
+  // never activate there.
+  it('prepends frontmatter to SKILL.md for every target, not just Claude Code', () => {
+    for (const config of AGENTS) {
+      expect(config.skillFrontmatter, `${config.name} has no frontmatter`).toBeTruthy();
+      mkdirSync(config.detectionDir, { recursive: true });
+      install([config.name], FAKE_PKG_ROOT);
+      const content = readFileSync(join(config.installDir, 'SKILL.md'), 'utf8');
+      expect(content.startsWith('---\nname: nodespace')).toBe(true);
+      expect(content).toContain('allowed-tools: Bash(nodespace:*)');
+      expect(content).toContain(SKILL_MD_CONTENT);
+    }
+  });
 
-    const codex = AGENTS.find(a => a.name === 'codex')!;
-    expect(codex.skillFrontmatter).toBeUndefined();
-    mkdirSync(codex.detectionDir, { recursive: true });
-    install(['codex'], FAKE_PKG_ROOT);
-    expect(readFileSync(join(codex.installDir, 'SKILL.md'), 'utf8')).toBe(SKILL_MD_CONTENT);
+  it('installs the same frontmatter block for every target', () => {
+    const blocks = new Set(AGENTS.map(a => a.skillFrontmatter));
+    expect(blocks.size).toBe(1);
+    expect([...blocks][0]).toBe(SHARED_SKILL_FRONTMATTER);
+  });
+
+  // The six fields below are the entire set the standard defines. Claude Code
+  // tolerates extra keys, but other distribution paths hard-error on any key
+  // they don't recognize — so a harness-specific field added to the shared
+  // block would silently break installs everywhere else.
+  it('uses only spec-defined frontmatter fields', () => {
+    const SPEC_FIELDS = [
+      'name',
+      'description',
+      'license',
+      'compatibility',
+      'metadata',
+      'allowed-tools',
+    ];
+    const body = SHARED_SKILL_FRONTMATTER.replace(/^---\n/, '').replace(/---\n?$/, '');
+    const topLevelKeys = body
+      .split('\n')
+      .filter(line => /^[A-Za-z][A-Za-z0-9-]*:/.test(line))
+      .map(line => line.slice(0, line.indexOf(':')));
+    expect(topLevelKeys.length).toBeGreaterThan(0);
+    for (const key of topLevelKeys) {
+      expect(SPEC_FIELDS, `"${key}" is not a spec-defined frontmatter field`).toContain(key);
+    }
+  });
+
+  // `name` must match the directory the skill installs into, and is capped at
+  // 64 characters of lowercase alphanumerics and hyphens.
+  it('uses a spec-valid name matching the install directory', () => {
+    const name = /^name:\s*(\S+)/m.exec(SHARED_SKILL_FRONTMATTER)?.[1];
+    expect(name).toBe('nodespace');
+    expect(name!.length).toBeLessThanOrEqual(64);
+    expect(name).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+    for (const config of AGENTS) {
+      expect(basename(config.installDir)).toBe(name);
+    }
+  });
+
+  // The description is capped at 1024 characters by the spec. It is also the
+  // only text an agent sees before deciding whether to load the skill, so it
+  // must carry the vocabulary of the work it should be reached for.
+  it('has a description within the spec length limit that covers docs/specs vocabulary', () => {
+    const description = /description:\s*>\n([\s\S]*?)\n(?=[a-z-]+:|---)/m.exec(
+      SHARED_SKILL_FRONTMATTER
+    )?.[1];
+    expect(description).toBeTruthy();
+    const flattened = description!.trim().replace(/\s+/g, ' ');
+    expect(flattened.length).toBeLessThanOrEqual(1024);
+    for (const term of ['spec', 'ADR', 'architecture', 'design', 'plan']) {
+      expect(flattened.toLowerCase(), `description omits "${term}"`).toContain(term.toLowerCase());
+    }
   });
 
   it('installs all shims (SKILL.md + agent shim) when all source files exist', () => {
@@ -121,7 +177,36 @@ describe('install', () => {
     const results = install([agentName], FAKE_PKG_ROOT);
     expect(results[0].installed).toHaveLength(config.shims.length);
     for (const shim of config.shims) {
-      expect(existsSync(join(config.installDir, basename(shim)))).toBe(true);
+      const relative = shim.startsWith('references/') ? shim : basename(shim);
+      expect(existsSync(join(config.installDir, relative))).toBe(true);
+    }
+  });
+
+  // SKILL.md links to `references/cli.md` by relative path. Shim paths are
+  // flattened to a basename on install, so a reference flattened the same way
+  // would leave the body pointing at a file that isn't where it says — the
+  // agent follows the link, finds nothing, and silently loses the CLI
+  // reference.
+  it('installs references into a references/ subdirectory, not flattened', () => {
+    for (const config of AGENTS) {
+      const refs = config.shims.filter(s => s.startsWith('references/'));
+      expect(refs.length, `${config.name} installs no references`).toBeGreaterThan(0);
+
+      mkdirSync(config.detectionDir, { recursive: true });
+      seedPkgRoot(FAKE_PKG_ROOT, config);
+      install([config.name], FAKE_PKG_ROOT);
+
+      for (const ref of refs) {
+        expect(existsSync(join(config.installDir, ref)), `${config.name}: ${ref}`).toBe(true);
+        expect(existsSync(join(config.installDir, basename(ref)))).toBe(false);
+      }
+
+      const body = readFileSync(join(config.installDir, 'SKILL.md'), 'utf8');
+      for (const ref of refs) {
+        if (body.includes(ref)) {
+          expect(existsSync(join(config.installDir, ref))).toBe(true);
+        }
+      }
     }
   });
 

@@ -23,6 +23,16 @@ use tokio::sync::RwLock;
 /// filesystem lookup, no drift between dev and installed builds.
 const SKILL_MD: &str = include_str!("../../../skill/SKILL.md");
 
+/// `packages/skill/references/cli.md`, embedded for the same reason as
+/// [`SKILL_MD`].
+///
+/// SKILL.md links to this by relative path — it is the on-demand tier holding
+/// the full CLI reference, kept out of the body so the body stays within the
+/// Agent Skills size recommendation. Embedding it too means a PTY session gets
+/// the whole skill rather than a body pointing at a file that was never
+/// written next to it.
+const SKILL_CLI_REFERENCE: &str = include_str!("../../../skill/references/cli.md");
+
 /// Default token budget when none is specified by the caller.
 const DEFAULT_TOKEN_BUDGET: u32 = 50_000;
 
@@ -352,9 +362,17 @@ impl GraphContextAssembler {
     }
 }
 
-/// Write the embedded `SKILL.md` into `session_dir`.
+/// Write the embedded skill — `SKILL.md` plus its `references/` tier — into
+/// `session_dir`.
+///
+/// Both are written because SKILL.md links to `references/cli.md` by relative
+/// path; writing only the body would leave that link dangling and the CLI
+/// reference unreachable from the session.
 async fn write_skill_md(session_dir: &Path) -> Result<(), ContextError> {
     tokio::fs::write(session_dir.join("SKILL.md"), SKILL_MD).await?;
+    let references = session_dir.join("references");
+    tokio::fs::create_dir_all(&references).await?;
+    tokio::fs::write(references.join("cli.md"), SKILL_CLI_REFERENCE).await?;
     Ok(())
 }
 
@@ -721,6 +739,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(written, SKILL_MD);
+    }
+
+    /// SKILL.md links to `references/cli.md` by relative path, so the session
+    /// dir must carry it too — otherwise the body points at a file that was
+    /// never written and the CLI reference is silently unreachable.
+    #[tokio::test]
+    async fn write_skill_md_also_writes_the_references_tier() {
+        let session_dir = tempfile::tempdir().unwrap();
+        write_skill_md(session_dir.path()).await.unwrap();
+
+        let body = tokio::fs::read_to_string(session_dir.path().join("SKILL.md"))
+            .await
+            .unwrap();
+        assert!(
+            body.contains("references/cli.md"),
+            "SKILL.md no longer links to references/cli.md — if the reference \
+             layout changed, update write_skill_md to match"
+        );
+
+        let reference = tokio::fs::read_to_string(session_dir.path().join("references/cli.md"))
+            .await
+            .expect("references/cli.md was not written next to SKILL.md");
+        assert_eq!(reference, SKILL_CLI_REFERENCE);
     }
 
     #[tokio::test]

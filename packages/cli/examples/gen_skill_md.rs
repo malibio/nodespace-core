@@ -55,6 +55,14 @@ use std::process::ExitCode;
 struct GeneratedRegion {
     /// Appears in the markers as `<!-- BEGIN GENERATED: {id} ... -->`.
     id: &'static str,
+    /// Path of the file holding this region, relative to `packages/skill/`.
+    ///
+    /// Regions are not all in `SKILL.md`: the body is kept within the spec's
+    /// size recommendation by moving the CLI reference into `references/`,
+    /// which the standard defines as the on-demand tier. Naming the file per
+    /// region means content can move between the body and a reference file
+    /// without the generator caring where it ended up.
+    file: &'static str,
     /// Human-readable note spliced into the begin marker, telling a reader
     /// which source to edit instead of the file.
     source_note: &'static str,
@@ -65,11 +73,13 @@ fn regions() -> Vec<GeneratedRegion> {
     vec![
         GeneratedRegion {
             id: "schema-rules",
+            file: "references/cli.md",
             source_note: "packages/agent/src/skill_rules.rs, packages/cli/examples/gen_skill_md.rs",
             render: render_schema_rules_block,
         },
         GeneratedRegion {
             id: "cli-surface",
+            file: "references/cli.md",
             source_note:
                 "packages/cli/src/lib.rs (clap derive), packages/cli/examples/gen_skill_md.rs",
             render: render_cli_surface_block,
@@ -303,23 +313,24 @@ fn splice_generated_block(
 ) -> Result<String, String> {
     let begin = begin_marker(region);
     let end = end_marker(region);
+    let file = region.file;
 
     let begin_idx = source
         .find(&begin)
-        .ok_or_else(|| format!("SKILL.md is missing the marker: {begin}"))?;
+        .ok_or_else(|| format!("{file} is missing the marker: {begin}"))?;
     if source[begin_idx + begin.len()..].contains(&begin) {
         return Err(format!(
-            "SKILL.md has more than one occurrence of the begin marker: {begin}"
+            "{file} has more than one occurrence of the begin marker: {begin}"
         ));
     }
     let after_begin = begin_idx + begin.len();
     let end_idx = source[after_begin..]
         .find(&end)
-        .ok_or_else(|| format!("SKILL.md is missing the marker: {end}"))?
+        .ok_or_else(|| format!("{file} is missing the marker: {end}"))?
         + after_begin;
     if source[end_idx + end.len()..].contains(&end) {
         return Err(format!(
-            "SKILL.md has more than one occurrence of the end marker: {end}"
+            "{file} has more than one occurrence of the end marker: {end}"
         ));
     }
 
@@ -330,36 +341,58 @@ fn splice_generated_block(
     ))
 }
 
-/// Applies every registered region to `source`.
-fn regenerate(source: &str) -> Result<String, String> {
-    let mut out = source.to_string();
-    for region in regions() {
-        let block = (region.render)();
-        out = splice_generated_block(&out, &region, &block)?;
-    }
-    Ok(out)
+/// `packages/skill/`, which every region's `file` is relative to.
+fn skill_pkg_dir() -> PathBuf {
+    // CARGO_MANIFEST_DIR is packages/cli — the skill package is its sibling.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skill")
 }
 
-fn skill_md_path() -> PathBuf {
-    // CARGO_MANIFEST_DIR is packages/cli — SKILL.md lives in the sibling
-    // packages/skill package.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skill/SKILL.md")
+/// One file's worth of work: what is on disk now, and what it should be once
+/// every region targeting it has been spliced in.
+struct FileOutcome {
+    path: PathBuf,
+    relative: &'static str,
+    current: String,
+    regenerated: String,
+}
+
+/// Reads each file a region targets and applies every region belonging to it.
+///
+/// Regions are grouped by file so a file is read and written once no matter
+/// how many regions it carries.
+fn compute() -> Result<Vec<FileOutcome>, String> {
+    let dir = skill_pkg_dir();
+    let mut outcomes: Vec<FileOutcome> = Vec::new();
+
+    for region in regions() {
+        let idx = match outcomes.iter().position(|o| o.relative == region.file) {
+            Some(i) => i,
+            None => {
+                let path = dir.join(region.file);
+                let current = fs::read_to_string(&path)
+                    .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+                outcomes.push(FileOutcome {
+                    path,
+                    relative: region.file,
+                    regenerated: current.clone(),
+                    current,
+                });
+                outcomes.len() - 1
+            }
+        };
+        let block = (region.render)();
+        outcomes[idx].regenerated =
+            splice_generated_block(&outcomes[idx].regenerated, &region, &block)?;
+    }
+
+    Ok(outcomes)
 }
 
 fn main() -> ExitCode {
     let mode = env::args().nth(1);
-    let path = skill_md_path();
 
-    let current = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("failed to read {}: {e}", path.display());
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let regenerated = match regenerate(&current) {
-        Ok(r) => r,
+    let outcomes = match compute() {
+        Ok(o) => o,
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::FAILURE;
@@ -367,26 +400,36 @@ fn main() -> ExitCode {
     };
 
     match mode.as_deref() {
-        Some("--write") => match fs::write(&path, &regenerated) {
-            Ok(()) => {
-                println!("Regenerated {}", path.display());
-                ExitCode::SUCCESS
+        Some("--write") => {
+            for o in &outcomes {
+                if o.current == o.regenerated {
+                    continue;
+                }
+                if let Err(e) = fs::write(&o.path, &o.regenerated) {
+                    eprintln!("failed to write {}: {e}", o.path.display());
+                    return ExitCode::FAILURE;
+                }
+                println!("Regenerated {}", o.relative);
             }
-            Err(e) => {
-                eprintln!("failed to write {}: {e}", path.display());
-                ExitCode::FAILURE
-            }
-        },
+            println!("Skill content is up to date.");
+            ExitCode::SUCCESS
+        }
         Some("--check") => {
-            if current == regenerated {
-                println!("{} is up to date.", path.display());
+            let stale: Vec<&str> = outcomes
+                .iter()
+                .filter(|o| o.current != o.regenerated)
+                .map(|o| o.relative)
+                .collect();
+            if stale.is_empty() {
+                println!("Skill content is up to date.");
                 ExitCode::SUCCESS
             } else {
                 eprintln!(
-                    "{} is stale — a generated region no longer matches its source \
+                    "stale generated content in: {}\n\
+                     A generated region no longer matches its source \
                      (packages/agent/src/skill_rules.rs, or the clap definitions in \
                      packages/cli/src/lib.rs). Run `bun run skill:gen` and commit the result.",
-                    path.display()
+                    stale.join(", ")
                 );
                 ExitCode::FAILURE
             }

@@ -27,7 +27,8 @@ pub mod skill_pipeline;
 
 // Shared source of truth for core-type rules referenced by both
 // seed_skill_nodes() and the generated sections of packages/skill/SKILL.md
-// (bin/gen_skill_md.rs). See module docs for the drift this prevents.
+// (packages/cli/examples/gen_skill_md.rs). See module docs for the drift
+// this prevents.
 pub mod skill_rules;
 
 // Property access helpers for namespaced node properties

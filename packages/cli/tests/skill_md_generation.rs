@@ -27,10 +27,44 @@ use clap::{Command as ClapCommand, CommandFactory};
 use nodespace_cli::Cli;
 use std::path::PathBuf;
 
+/// Every markdown file the skill ships, concatenated.
+///
+/// Coverage is asserted against the whole skill folder, not `SKILL.md` alone.
+/// The body is kept within the standard's size recommendation by moving the CLI
+/// reference into `references/`, which the spec defines as the on-demand tier
+/// and which is portable across every target. Content that moves between the
+/// two tiers is still shipped and still reachable, so a check that only read
+/// `SKILL.md` would report false drift the moment anything was moved.
 fn skill_md() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skill/SKILL.md");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skill");
+    let mut combined = String::new();
+
+    let read = |p: &PathBuf| -> String {
+        std::fs::read_to_string(p).unwrap_or_else(|e| panic!("failed to read {}: {e}", p.display()))
+    };
+
+    combined.push_str(&read(&dir.join("SKILL.md")));
+
+    let refs = dir.join("references");
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&refs)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", refs.display()))
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    // Sorted so the concatenation is deterministic regardless of directory order.
+    entries.sort();
+    assert!(
+        !entries.is_empty(),
+        "no reference files found in {} — the CLI reference is expected to live there",
+        refs.display()
+    );
+    for path in entries {
+        combined.push('\n');
+        combined.push_str(&read(&path));
+    }
+
+    combined
 }
 
 /// Subcommands a user can actually invoke — clap's generated `help` and
@@ -205,6 +239,70 @@ fn every_seeded_skill_is_represented() {
         "these seeded skills have no counterpart in SKILL.md: {missing:#?}\n\
          Every skill the local agent is taught should be reachable by an \
          external agent too, or explicitly justified as internal-only."
+    );
+}
+
+/// The SKILL.md body stays within the Agent Skills size recommendations.
+///
+/// The body is loaded in full the moment the skill activates, so its size is a
+/// per-activation cost paid by every agent on every matching task — which is
+/// what the standard's guidance (≤500 lines, <5000 tokens) is about. Detail
+/// belongs in `references/`, loaded only when actually needed.
+///
+/// This guard exists because the file has already crossed the line once: it
+/// was 534 lines before the CLI surface was generated into it, and generating
+/// the previously-missing commands pushed it to 786. Without a test, the next
+/// addition repeats that quietly.
+#[test]
+fn skill_md_body_is_within_spec_size_recommendations() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skill/SKILL.md");
+    let body = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+    const MAX_LINES: usize = 500;
+    let lines = body.lines().count();
+    assert!(
+        lines <= MAX_LINES,
+        "SKILL.md body is {lines} lines, over the {MAX_LINES}-line recommendation. \
+         Move detail into packages/skill/references/ rather than growing the body."
+    );
+
+    // ~4 chars/token is the usual English approximation; the spec's limit is
+    // advisory, so an approximation is the right instrument. Being wrong by a
+    // few percent does not change whether a 500-line file is acceptable.
+    const MAX_TOKENS: usize = 5000;
+    let approx_tokens = body.chars().count() / 4;
+    assert!(
+        approx_tokens < MAX_TOKENS,
+        "SKILL.md body is ~{approx_tokens} tokens, over the {MAX_TOKENS}-token recommendation. \
+         Move detail into packages/skill/references/ rather than growing the body."
+    );
+}
+
+/// Reference files are reachable from the body.
+///
+/// A reference nothing points at is a file an agent never opens. The standard's
+/// progressive disclosure only works if the body names what to load.
+#[test]
+fn every_reference_file_is_linked_from_the_body() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../skill");
+    let body = std::fs::read_to_string(dir.join("SKILL.md")).expect("failed to read SKILL.md");
+
+    let mut unlinked = Vec::new();
+    for entry in std::fs::read_dir(dir.join("references")).expect("failed to read references/") {
+        let path = entry.expect("bad dir entry").path();
+        if path.extension().is_some_and(|x| x == "md") {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !body.contains(&format!("references/{name}")) {
+                unlinked.push(name);
+            }
+        }
+    }
+
+    assert!(
+        unlinked.is_empty(),
+        "these reference files are never mentioned in SKILL.md, so an agent will \
+         not know to read them: {unlinked:#?}"
     );
 }
 

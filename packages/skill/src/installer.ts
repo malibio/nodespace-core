@@ -50,11 +50,17 @@ export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT):
     const installed: string[] = [];
     for (const shim of config.shims) {
       const src = join(packageRoot, shim);
-      const dest = join(config.installDir, basename(shim));
+      // Shim paths flatten to a basename (`shims/codex/x.ts` installs as
+      // `x.ts`), but `references/` must keep its directory: SKILL.md links to
+      // `references/cli.md` by relative path, so flattening it would leave the
+      // body pointing at a file that isn't where it says.
+      const relative = shim.startsWith('references/') ? shim : basename(shim);
+      const dest = join(config.installDir, relative);
       if (existsSync(src)) {
-        mkdirSync(config.installDir, { recursive: true });
-        // SKILL.md gets the agent's frontmatter prepended (Claude Code discovers
-        // a skill by its YAML frontmatter); everything else is copied verbatim.
+        mkdirSync(dirname(dest), { recursive: true });
+        // SKILL.md gets the agent's frontmatter prepended — a skill is
+        // discovered by its YAML `name` + `description` under the Agent Skills
+        // standard; everything else is copied verbatim.
         if (config.skillFrontmatter && basename(shim) === 'SKILL.md') {
           writeFileSync(dest, config.skillFrontmatter + '\n' + readFileSync(src, 'utf8'), 'utf8');
         } else {

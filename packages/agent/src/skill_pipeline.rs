@@ -45,8 +45,8 @@ use nodespace_core::markdown::{NodeTemplate, SeedTier};
 /// retry) that a schema cannot express. These rules are still interpolated
 /// from [`crate::skill_rules`] so they cannot drift from the "Schema
 /// inspection and management" section of `packages/skill/SKILL.md`
-/// (`bin/gen_skill_md.rs` renders the same source in prose form for that,
-/// separate, consumer).
+/// (`packages/cli/examples/gen_skill_md.rs` renders the same source in prose
+/// form for that, separate, consumer).
 fn schema_creation_guidance() -> String {
     format!(
         r#"# Schema Creation & Editing Guidance

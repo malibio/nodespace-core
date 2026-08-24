@@ -10,7 +10,7 @@
  *   1. `tsc` compiles src/ -> dist/ (packages/skill/package.json's own `build`
  *      script), which also makes `packages/skill/dist/install.js` resolvable
  *      directly for dev-mode / source-checkout runs.
- *   2. dist/, shims/, SKILL.md, and package.json (for its `"type": "module"`
+ *   2. dist/, shims/, SKILL.md, references/, and package.json (for its `"type": "module"`
  *      marker, so a standalone dist/install.js still parses as ESM) are
  *      copied into packages/desktop-app/src-tauri/resources/skill/, which
  *      tauri.conf.json declares as a bundled `resources` entry. Tauri copies
@@ -52,7 +52,11 @@ console.log(`Staging skill resources -> ${RESOURCE_DIR}`);
 rmSync(RESOURCE_DIR, { recursive: true, force: true });
 mkdirSync(RESOURCE_DIR, { recursive: true });
 
-for (const entry of ['dist', 'shims', 'SKILL.md', 'package.json']) {
+// `references/` carries the on-demand tier of the skill (the full CLI
+// reference). It is part of the shipped artifact, not a dev-only doc: SKILL.md
+// points at it by relative path, so omitting it leaves the body referring to a
+// file that isn't there.
+for (const entry of ['dist', 'shims', 'SKILL.md', 'references', 'package.json']) {
   cpSync(join(SKILL_DIR, entry), join(RESOURCE_DIR, entry), { recursive: true });
 }
 

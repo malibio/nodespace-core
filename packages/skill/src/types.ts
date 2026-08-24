@@ -6,10 +6,16 @@ export interface AgentConfig {
   installDir: string;
   shims: string[];
   /**
-   * Frontmatter to prepend to `SKILL.md` when installing for this agent. Claude
-   * Code discovers a skill by the YAML `name` + `description` frontmatter; the
-   * shared SKILL.md body carries none (it is agent-agnostic), so agents that
-   * need it supply it here and the installer writes `frontmatter + body`.
+   * Frontmatter to prepend to `SKILL.md` when installing for this agent.
+   *
+   * The Agent Skills standard discovers a skill by its YAML `name` +
+   * `description`, and the checked-in SKILL.md body carries none so that the
+   * file stays a plain body with no harness assumptions baked in. The installer
+   * writes `frontmatter + body`.
+   *
+   * Every target supplies this today — a skill folder without frontmatter is
+   * not a valid skill under the standard. It stays optional only so a future
+   * target that genuinely needs a different block, or none, can say so.
    */
   skillFrontmatter?: string;
 }
