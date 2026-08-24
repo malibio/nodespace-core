@@ -1,7 +1,9 @@
 //! Daemon lifecycle management — macOS (launchd), Linux (systemd), Windows (direct spawn).
 //!
 //! On first launch:
-//!   1. Locate sidecar binaries bundled inside the .app via Tauri's resource resolver.
+//!   1. Locate sidecar binaries bundled beside the app's own executable (Tauri's
+//!      `externalBin` convention — see `resolve_sidecar_path`'s doc comment for
+//!      why this is NOT the `Resources`/resource-resolver tree).
 //!   2. Copy them to ~/.nodespace/bin/ (skipped if dest already matches bundled size).
 //!   3. Register the daemon as a user service:
 //!      - macOS: write ~/Library/LaunchAgents/<plist_filename()> and bootstrap it.
@@ -23,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tokio::time::timeout;
 
 const DAEMON_BIN_DIR: &str = ".nodespace/bin";
@@ -120,8 +122,7 @@ fn plist_filename() -> String {
 /// `binary_updated` once verification fails. `ensure_daemon_running` handles
 /// extraction and restart afterward.
 #[cfg(unix)]
-pub fn kill_stale_daemon_sync(app: &tauri::App) {
-    let handle = app.handle();
+pub fn kill_stale_daemon_sync() {
     let home = match home_dir() {
         Some(h) => h,
         None => return,
@@ -130,7 +131,7 @@ pub fn kill_stale_daemon_sync(app: &tauri::App) {
     let socket_path = home.join(daemon_socket_relative());
     let installed = bin_dir.join(daemon_binary_name());
 
-    let bundled_size = match resolve_sidecar_path_sync(handle) {
+    let bundled_size = match resolve_sidecar_path_sync() {
         Some(p) => match std::fs::metadata(&p) {
             Ok(m) => m.len(),
             Err(_) => return,
@@ -202,11 +203,11 @@ pub fn kill_stale_daemon_sync(app: &tauri::App) {
     let _ = std::fs::remove_file(&socket_path);
 }
 
-fn resolve_sidecar_path_sync(app: &tauri::AppHandle) -> Option<PathBuf> {
-    use tauri::path::BaseDirectory;
-    let triple = tauri::utils::platform::target_triple().ok()?;
-    let name = format!("binaries/{}-{}", daemon_binary_name(), triple);
-    app.path().resolve(&name, BaseDirectory::Resource).ok()
+fn resolve_sidecar_path_sync() -> Option<PathBuf> {
+    sidecar_path_from_exe(
+        &std::env::current_exe().ok()?,
+        &bundled_sidecar_name(daemon_binary_name()),
+    )
 }
 
 /// Result of the daemon health check.
@@ -592,17 +593,55 @@ fn verify_signature(_path: &Path) -> bool {
     true
 }
 
-/// Resolve the platform-tagged sidecar path inside the Tauri bundle.
-fn resolve_sidecar_path(app: &AppHandle, name: &str) -> Result<PathBuf> {
-    use tauri::path::BaseDirectory;
-
-    let triple =
-        tauri::utils::platform::target_triple().context("Cannot determine target triple")?;
-    let sidecar_name = format!("binaries/{}-{}", name, triple);
-
-    app.path()
-        .resolve(&sidecar_name, BaseDirectory::Resource)
+/// Resolve a sidecar's path inside the installed Tauri bundle.
+///
+/// `nodespaced`/`nodespace` are declared under `bundle.externalBin` in
+/// `tauri.conf.json`, not `bundle.resources` — two things distinguish that
+/// from what the code here used to assume:
+///
+/// 1. **Directory.** Tauri places `externalBin` sidecars next to the app's own
+///    executable (`Contents/MacOS/` on macOS), not under `Contents/Resources/`.
+///    Resolving via `BaseDirectory::Resource` (the API for `resources` entries,
+///    which is where `resources/skill` and `resources/models` — the *other*
+///    kind of bundled file this app ships — correctly land) looked in a
+///    directory these binaries were never copied into, so every daemon-setup
+///    call failed to even stat the sidecar on a freshly installed app.
+///    `current_exe()`'s directory is the correct base on every platform Tauri
+///    targets.
+/// 2. **Filename.** The *source* tree under `src-tauri/binaries/` holds one
+///    triple-suffixed file per target (`nodespaced-aarch64-apple-darwin`, so a
+///    cross-compilation source tree can hold several), but the bundler copies
+///    the one matching the current build into the bundle **renamed to the bare
+///    name** — confirmed directly against a real build output
+///    (`Contents/MacOS/nodespaced`, no triple). The runtime lookup has to match
+///    that renamed, installed file, not the source-tree name.
+fn resolve_sidecar_path(_app: &AppHandle, name: &str) -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("Cannot resolve current executable path")?;
+    sidecar_path_from_exe(&exe, &bundled_sidecar_name(name))
         .with_context(|| format!("Cannot resolve sidecar path for '{}'", name))
+}
+
+/// The installed sidecar's filename: the bare name Tauri renames it to when
+/// bundling, plus the platform's native executable extension. `.exe` on
+/// Windows; no extension on macOS/Linux, where executables don't carry one.
+fn bundled_sidecar_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Pure form of the sidecar-path computation: the installed sidecar lives
+/// beside the running executable, since Tauri bundles `externalBin` entries
+/// into the same directory as the app binary itself on every target
+/// (`Contents/MacOS/` on macOS, alongside the `.exe` on Windows, alongside the
+/// main binary in the AppImage/deb layout on Linux) — never under a Resources
+/// tree. Takes the executable path as a parameter (rather than calling
+/// `current_exe()` itself) so this is exercisable with a synthetic path in a
+/// unit test, independent of where cargo actually places the test binary.
+fn sidecar_path_from_exe(exe_path: &Path, sidecar_name: &str) -> Option<PathBuf> {
+    Some(exe_path.parent()?.join(sidecar_name))
 }
 
 #[cfg(unix)]
@@ -1228,5 +1267,81 @@ mod windows_taskkill_image_name_tests {
     fn pro_edition_image_name_matches_pro_binary() {
         assert_eq!(daemon_binary_name_for(true), "nodespaced-pro");
         assert_eq!(daemon_image_name_for(true), "nodespaced-pro.exe");
+    }
+}
+
+/// `externalBin` sidecars are bundled beside the app's own executable —
+/// `Contents/MacOS/` on macOS, alongside the `.exe` on Windows, alongside the
+/// main binary in the AppImage/deb layout on Linux — never under a Resources
+/// tree. This pins that against the three bundle shapes directly, so a future
+/// change back to a Resources-relative lookup (the bug this module exists to
+/// fix — see `resolve_sidecar_path`'s doc comment) fails a test immediately
+/// instead of shipping silently, the way it did the first time.
+#[cfg(test)]
+mod sidecar_path_tests {
+    use super::{bundled_sidecar_name, sidecar_path_from_exe};
+    use std::path::Path;
+
+    #[test]
+    fn sidecar_sits_beside_the_macos_app_executable() {
+        let exe = Path::new("/Applications/NodeSpace.app/Contents/MacOS/nodespace-app");
+        // Bare name, no target-triple suffix: confirmed against a real
+        // `tauri build` output — the bundler renames the triple-suffixed
+        // source-tree file to the bare name when staging it into the bundle
+        // (`Contents/MacOS/nodespaced`, not `nodespaced-aarch64-apple-darwin`).
+        let sidecar = sidecar_path_from_exe(exe, "nodespaced").unwrap();
+        assert_eq!(
+            sidecar,
+            Path::new("/Applications/NodeSpace.app/Contents/MacOS/nodespaced"),
+            "must resolve inside Contents/MacOS/, beside the app binary — NOT under \
+             Contents/Resources/, which is where `resources` entries (skill, models) land, \
+             not `externalBin` entries"
+        );
+    }
+
+    #[test]
+    fn sidecar_sits_beside_the_windows_exe() {
+        // Forward slashes deliberately: `Path` only parses `\` as a separator
+        // when compiled FOR Windows, so a `C:\...` literal parses as a single
+        // opaque component (no parent) on this test's actual host. `/` is a
+        // valid separator to `Path` on every target, Windows included, so this
+        // exercises the same join logic portably rather than skipping the
+        // platform on non-Windows hosts.
+        let exe = Path::new("C:/Program Files/NodeSpace/nodespace-app.exe");
+        let sidecar = sidecar_path_from_exe(exe, "nodespaced.exe").unwrap();
+        assert_eq!(
+            sidecar,
+            Path::new("C:/Program Files/NodeSpace/nodespaced.exe")
+        );
+    }
+
+    #[test]
+    fn sidecar_sits_beside_the_linux_binary() {
+        let exe = Path::new("/opt/nodespace/nodespace-app");
+        let sidecar = sidecar_path_from_exe(exe, "nodespaced").unwrap();
+        assert_eq!(sidecar, Path::new("/opt/nodespace/nodespaced"));
+    }
+
+    #[test]
+    fn a_rootless_executable_path_has_no_sidecar_directory() {
+        // Pathological input (current_exe() returning a bare filename with no
+        // parent) — must degrade to None rather than panic.
+        let exe = Path::new("nodespace-app");
+        assert_eq!(
+            sidecar_path_from_exe(exe, "nodespaced"),
+            Some(Path::new("nodespaced").to_path_buf()),
+            "an empty parent (bare relative filename) is itself a valid, if unusual, base \
+             directory — Path::parent() returns Some(\"\") here, not None"
+        );
+    }
+
+    #[test]
+    fn bundled_name_adds_exe_only_on_windows() {
+        let name = bundled_sidecar_name("nodespaced");
+        if cfg!(windows) {
+            assert_eq!(name, "nodespaced.exe");
+        } else {
+            assert_eq!(name, "nodespaced");
+        }
     }
 }

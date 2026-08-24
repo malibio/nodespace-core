@@ -412,7 +412,7 @@ pub fn run() {
             // an outdated daemon. ensure_daemon_running (spawned below) then extracts
             // the fresh binary and restarts via launchd/systemd.
             #[cfg(unix)]
-            crate::daemon_setup::kill_stale_daemon_sync(app);
+            crate::daemon_setup::kill_stale_daemon_sync();
 
             // Manage the gRPC client EAGERLY via a lazy channel (connects on first
             // RPC). Previously `manage(GrpcClient)` ran only after the async connect
