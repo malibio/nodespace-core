@@ -48,6 +48,25 @@ pub struct WorkspaceContext {
     /// `relevant_schemas` is non-empty — there is nothing to traverse from
     /// otherwise.
     pub related_schemas: Vec<SchemaNode>,
+    /// Count of `relevant_schemas` entries that came from semantic retrieval,
+    /// BEFORE `append_schemas_named_in_query`'s lexical backstop ran.
+    ///
+    /// A caller that adds its own entries to `relevant_schemas` on top of this
+    /// (e.g. `local_agent_service.rs`'s recently-created-schema injector) needs
+    /// a budget computed against what semantic search actually returned, not
+    /// against the post-lexical-append length — otherwise an unrelated,
+    /// unbounded signal writing into the same vector can silently zero out the
+    /// injector's remaining slots. See `local_agent_service.rs::build_workspace_context`.
+    ///
+    /// An upper bound on the true final semantic-sourced count, not always
+    /// exact: it is captured from the raw retrieval hits, before the
+    /// hydration step re-resolves each hit against the full schema corpus and
+    /// can drop one that no longer exists there (e.g. deleted between
+    /// retrieval and hydration). That direction of error is harmless for the
+    /// budget above — it can only make a caller slightly more conservative
+    /// (fewer slots believed available than truly are), never reproduce the
+    /// starvation this field exists to prevent.
+    pub semantic_schema_count: usize,
 }
 
 /// An active playbook.
@@ -377,6 +396,13 @@ pub async fn build_workspace_context(
         _ => vec![],
     };
 
+    // Captured before the lexical backstop below appends to `retrieved_hits` —
+    // this is the count a caller layering its own additions on top of
+    // `relevant_schemas` (e.g. the recently-created-schema injector in
+    // `local_agent_service.rs`) needs for a budget that isn't blind to what
+    // the lexical backstop already consumed. See `semantic_schema_count`.
+    let semantic_schema_count = retrieved_hits.len();
+
     // Lexical backstop for a schema the semantic index cannot see yet.
     //
     // Embeddings are generated on a ~30s debounce (`EmbeddingService`'s
@@ -457,6 +483,7 @@ pub async fn build_workspace_context(
         active_playbooks,
         relevant_schemas,
         related_schemas,
+        semantic_schema_count,
     })
 }
 
@@ -563,6 +590,7 @@ mod tests {
             }],
             relevant_schemas: vec![],
             related_schemas: vec![],
+            semantic_schema_count: 0,
         }
     }
 
@@ -626,6 +654,7 @@ mod tests {
                 &["on_call", "resolved"],
             )],
             related_schemas: vec![],
+            semantic_schema_count: 0,
         };
 
         let rendered = ctx.format_for_prompt(4000);
@@ -769,6 +798,40 @@ mod tests {
         );
         let ids: Vec<&str> = hits.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["invoice", "venue"]);
+    }
+
+    /// The count a caller needs to budget a SEPARATE addition against
+    /// `relevant_schemas` (e.g. `local_agent_service.rs`'s recently-created
+    /// schema injector) must reflect what semantic retrieval actually found —
+    /// NOT the length after this unbounded lexical backstop has appended to
+    /// it. A turn naming several types by name can push the vector well past
+    /// any per-turn cap on its own; a caller that read the post-append length
+    /// as "how many slots has semantic search used" would see zero slots
+    /// remaining and skip its own injection even when semantic search
+    /// contributed nothing. Recorded as `semantic_schema_count` in
+    /// `build_workspace_context`, captured before this function runs — this
+    /// pins that the two counts diverge exactly when they need to.
+    #[test]
+    fn lexical_append_does_not_retroactively_inflate_the_semantic_count() {
+        let all = vec![
+            named_schema("invoice", "Invoice", false),
+            named_schema("venue", "Venue", false),
+            named_schema("customer", "Customer", false),
+        ];
+        let semantic_hits = vec![named_schema("invoice", "Invoice", false)];
+        let semantic_schema_count = semantic_hits.len();
+
+        let hits = append_schemas_named_in_query(
+            semantic_hits,
+            &all,
+            "book the venue and log the customer for the invoice run",
+        );
+
+        assert_eq!(hits.len(), 3, "expected all three named schemas: {hits:?}");
+        assert_eq!(
+            semantic_schema_count, 1,
+            "the count captured before lexical append must stay untouched by it"
+        );
     }
 
     fn sample_schema_with_relationships(
@@ -964,6 +1027,7 @@ mod tests {
             active_playbooks: vec![],
             relevant_schemas: vec![sample_schema("invoice", "Invoice", &[])],
             related_schemas: vec![],
+            semantic_schema_count: 0,
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.contains("invoice \"Invoice\"\n"));
@@ -986,6 +1050,7 @@ mod tests {
             active_playbooks: vec![],
             relevant_schemas: vec![],
             related_schemas: vec![],
+            semantic_schema_count: 0,
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.is_empty());
@@ -998,6 +1063,7 @@ mod tests {
             active_playbooks: vec![],
             relevant_schemas: vec![],
             related_schemas: vec![],
+            semantic_schema_count: 0,
         };
         let output = ctx.format_for_prompt(4000);
         assert!(output.contains("COLLECTIONS:"));
