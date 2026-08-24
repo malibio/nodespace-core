@@ -1722,6 +1722,193 @@ async fn test_create_schema_still_reports_a_named_entry_missing_its_type() {
     );
 }
 
+/// Dropping an informationless entry must not renumber the entries that remain.
+/// The whole value of the per-entry check is telling the caller WHICH element to
+/// fix; a position that points at an element the caller got right sends it to
+/// rewrite working input, which is the degrading-retry loop these errors exist
+/// to break.
+#[tokio::test]
+async fn test_create_schema_reports_the_position_the_caller_actually_sent() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Venue",
+            "fields": [
+                { "description": null, "name": null },
+                { "type": "number" }
+            ]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("the second entry has no name")
+        .to_string();
+    assert!(
+        msg.contains("fields[1]"),
+        "the malformed entry was sent at index 1 and must be reported there: {msg}"
+    );
+    assert!(
+        !msg.contains("fields[0]"),
+        "index 0 is the entry that gets dropped — reporting it points the caller \
+         at something it did not get wrong: {msg}"
+    );
+}
+
+/// An array of nothing but informationless entries is a caller that never
+/// declared a single field. Dropping them all leaves `fields: []`, which
+/// `handle_create_schema` reads as a deliberate fieldless (relationship-only)
+/// schema and creates one — a silent wrong success where the caller gets no
+/// signal to retry and the user gets a type that holds nothing.
+#[tokio::test]
+async fn test_create_schema_rejects_a_fields_array_of_only_null_entries() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Feature Write-up",
+            "fields": [{ "description": null, "name": null }]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a fields array declaring nothing must be rejected, not emptied")
+        .to_string();
+    assert!(
+        msg.contains("fields[0]"),
+        "the caller must be told which entry declared nothing: {msg}"
+    );
+}
+
+/// An explicitly empty `fields: []` stays valid — a relationship-only schema is
+/// a deliberate choice, and it is only the *collapse* of a non-empty array to
+/// empty that has to be caught.
+#[tokio::test]
+async fn test_create_schema_still_accepts_an_explicitly_empty_fields_array() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(&svc, json!({ "name": "Tag", "fields": [] })).await;
+
+    assert!(
+        result.is_ok(),
+        "an explicitly empty fields array is a deliberate relationship-only \
+         schema: {result:?}"
+    );
+}
+
+/// A null `name` reaches serde as `invalid type: null, expected a string` —
+/// which names neither the key nor what to do — unless it is treated as absent.
+/// A model that writes `"name": null` inside a field entry writes it at the top
+/// level too.
+#[tokio::test]
+async fn test_create_schema_null_name_gets_the_actionable_message() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({ "name": null, "fields": [{ "name": "amount", "type": "number" }] }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a null name must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("top-level"),
+        "a null name must get the same actionable guidance as an absent one: {msg}"
+    );
+    assert!(
+        !msg.contains("invalid type: null"),
+        "the bare serde type error is what this check exists to replace: {msg}"
+    );
+}
+
+/// The same for a name of the wrong type entirely — serde's message for it does
+/// not name the key either.
+#[tokio::test]
+async fn test_create_schema_non_string_name_gets_the_actionable_message() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({ "name": 42, "fields": [{ "name": "amount", "type": "number" }] }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a numeric name must be rejected")
+        .to_string();
+    assert!(
+        msg.contains("\"name\"") && msg.contains("top-level"),
+        "a wrongly-typed name must be reported by key, with the shape it needs: {msg}"
+    );
+}
+
+/// A null `name` one level down, inside a field entry that carries other real
+/// values, is the same defect: it is not informationless (so it is not dropped)
+/// and it is not a string (so it must be reported by position).
+#[tokio::test]
+async fn test_create_schema_reports_a_null_field_name() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Venue",
+            "fields": [{ "name": null, "type": "number" }]
+        }),
+    )
+    .await;
+
+    let msg = result
+        .expect_err("a null field name is a real error")
+        .to_string();
+    assert!(
+        msg.contains("fields[0]") && msg.contains("\"name\""),
+        "a null field name must be located like an absent one: {msg}"
+    );
+}
+
+/// `add_fields` is `fields` under another name and takes the same treatment.
+/// Leaving it unpatched reproduced, on `update_schema`, the exact failure
+/// `create_schema` was fixed for.
+#[tokio::test]
+async fn test_update_schema_ignores_an_all_null_add_fields_entry() {
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Venue",
+            "fields": [{ "name": "capacity", "type": "number" }]
+        }),
+    )
+    .await
+    .expect("seed schema");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "venue",
+            "add_fields": [
+                { "name": "city", "type": "text" },
+                { "description": null, "name": null }
+            ]
+        }),
+    )
+    .await;
+
+    let value = result.expect("an informationless entry must not fail the batch");
+    assert_eq!(
+        value["fieldsAdded"], 1,
+        "only the real field is added: {value:?}"
+    );
+}
+
 // ============================================================================
 // title_template resolution is owned by validate_template_tokens
 // ============================================================================
