@@ -92,6 +92,9 @@ jobs:
           echo "Sidecars built:"
           ls -la "${BIN_DIR}/"
 
+      - name: Build and stage skill resources
+        run: bun run build:skill
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -212,6 +215,10 @@ jobs:
 
           echo "Sidecars built:"
           ls -la "${BIN_DIR}/"
+
+      - name: Build and stage skill resources
+        if: steps.filter.outputs.skip != 'true'
+        run: bun run build:skill
 
       - name: Build Tauri app
         if: steps.filter.outputs.skip != 'true'
