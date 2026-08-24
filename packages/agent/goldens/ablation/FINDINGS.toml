@@ -247,6 +247,76 @@
 #     eval prompts must not share text with guidance; here, a SCHEMA supplied a
 #     name the model adopted.
 #
+#     CORRECTION: this section named skill_rules.rs's "RELATIONSHIP_VS_FIELD"
+#     as carrying the fourth survivor ("ADR supersedes adr"). It does not --
+#     that example lives in TARGET_TYPE_MUST_EXIST's `imperative` (skill_rules.rs
+#     ~line 124); RELATIONSHIP_VS_FIELD is the one-sentence rule immediately
+#     above it and contains no example at all. Constant misidentified, line
+#     number was right.
+#
+# ---------------------------------------------------------------------------
+# 6B. THE PREDICTION MEASURED (core#2190) -- CONFIRMED, BOTH DIRECTIONS
+# ---------------------------------------------------------------------------
+#
+# ablation/must-exist-id-{baseline,armA,armB}.toml. A fresh case (contamination
+# guard #1932: does not reuse dev-schema-creation's text), 3 turns exercising
+# all three survivors against a type (`arch_decision`) chosen to be
+# conceptually as close to "ADR" as possible while never spelling "ADR" or
+# "adr" anywhere in the prompt:
+#
+#   turn 1  create_node.node_type              -- must copy "arch_decision"
+#   turn 2  create_schema.relationships[].targetType -- same
+#   turn 3  update_schema.schema_id            -- same, with a `review` type
+#           also in scope as a recency-bias distractor
+#
+#   arm       node_type       targetType      schema_id       result
+#   baseline  arch_decision   arch_decision   arch_decision   9/9 (current text)
+#   armA      arch_decision   arch_decision   arch_decision   9/9 ('adr' -> 'my_type')
+#   armB      arch_decision   arch_decision   arch_decision   9/9 ('adr' deleted, no replacement)
+#
+# FORWARD (do they contaminate): NO. "adr" appears in zero of 27 tool calls
+# across the three arms, 3 reps each.
+#
+# REVERSE (does removing the example hurt id-copying, confirming "illustrates
+# format"): ALSO NO. armB ties baseline and armA exactly. The example is not
+# merely non-contaminating -- on this case it is fully INERT: the "copy
+# exactly ... never shorten, singularize, paraphrase, or guess" instruction on
+# create_node and the EXISTING SCHEMAS block itself (which already renders
+# every id in correct lowercase-snake_case form) are doing all the observable
+# work. This goes one step past section 6A(b)'s prediction: not "illustrates
+# format instead of contaminating" but "does neither, on this case."
+#
+# Turn 2 needed four elicitation attempts before it reliably reached
+# `relationships[].targetType` at all (see must-exist-id-baseline.toml's own
+# notes) -- a separate, unfiled observation about create_schema's relationship
+# mechanism on this model, orthogonal to the survivor question.
+#
+# CAVEATS: one case, one model, one concept. A 9/9 tie cannot rule out a
+# low-frequency effect; mitigated by measuring the same case at 3 reps across
+# 3 arms (27 calls) rather than a single run. Per the issue's own instruction,
+# this negative result is treated as complete -- no code removed.
+#
+# DOCTRINE PROPOSED FOR ADR-064 (not yet amended into the ADR document --
+# flagged here for review rather than merged unilaterally, since amending an
+# Accepted ADR is an architecture decision):
+#
+#   Addendum to Rule 1 (tool schemas own argument shape): a worked example
+#   inside a schema's description is licensed to ILLUSTRATE FORMAT for a value
+#   the model must copy from context that already exists (an id, drawn from a
+#   block the model can see), but is NOT licensed to SUPPLY A CANDIDATE VALUE
+#   for something the model is choosing or creating. The two are told apart by
+#   asking: does context elsewhere in the prompt already constrain the correct
+#   answer, or does the example's own content become one of the live
+#   candidates? core#2188 measured the second case (create_schema.name, a
+#   value being CREATED, example adopted as the answer 3/3). core#2190
+#   measured the first case (three must-already-exist ids, example inert in
+#   both directions, 27/27). Where the value is already fully constrained by
+#   other supplied context (an explicit copy-exactly instruction, a listing
+#   that already shows the correct form), an additional worked example is not
+#   merely safe -- it is redundant, and may be dropped for the same context-
+#   budget reasons ADR-064 Rule 5 gives resident prose, though that is a
+#   separate, unmeasured claim from "safe to keep."
+#
 # ---------------------------------------------------------------------------
 # 7A. WHAT IS ACTUALLY ESTABLISHED
 # ---------------------------------------------------------------------------
@@ -259,6 +329,10 @@
 #   - The "ADR" schema-example contamination, and its fix.
 #   - Off-topic prose in an emptied guidance slot measured WORSE than an empty
 #     slot -- malformed output, 3/3.
+#   - The three surviving 'adr' examples do NOT contaminate, and removing them
+#     does NOT degrade id-copying either -- inert in both directions, 27/27
+#     (section 6B). No code change followed; a doctrine addendum is proposed
+#     instead, pending review before ADR-064 itself is amended.
 #
 # DOES NOT HOLD:
 #   - Any recommendation to trim skill_rules.rs. Not measured validly.
