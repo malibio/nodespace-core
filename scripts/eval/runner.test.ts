@@ -814,6 +814,17 @@ describe("checkUniformity: full pass with tool diversity", () => {
     expect(checkUniformity(21, 21)).not.toBeNull();
   });
 
+  // Straddle MIN_DISTINCT_TOOLS_FOR_REAL_PASS rather than testing only far from
+  // it: with cases at 0/1/6 alone the constant could be changed to 4 and every
+  // test would still pass, so the threshold would not actually be pinned.
+  test("accepts a full pass at exactly the threshold", () => {
+    expect(checkUniformity(21, 21, undefined, 3)).toBeNull();
+  });
+
+  test("flags a full pass one below the threshold", () => {
+    expect(checkUniformity(21, 21, undefined, 2)).not.toBeNull();
+  });
+
   test("a partial result is unaffected either way", () => {
     expect(checkUniformity(17, 21, undefined, 6)).toBeNull();
     expect(checkUniformity(17, 21, undefined, 0)).toBeNull();

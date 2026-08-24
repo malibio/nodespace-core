@@ -664,3 +664,65 @@ describe("type-keyed property flattening", () => {
     expect(nodeSatisfies(node!, { hasPropertyValue: 9 })).toBe(false);
   });
 });
+
+// -- changedNodes under flattening --------------------------------------
+//
+// Review finding: flattening silently changed what `diffSnapshots` compares,
+// on the one comparator behind `expectNoWrites` — a false-PASS path. These pin
+// the intent in both directions so the loosening cannot widen unnoticed.
+//
+// Built through `toSnapshotNode` rather than the `node()` helper: the helper
+// constructs a SnapshotNode directly, so it would never exercise the flattening
+// these tests exist to check.
+
+describe("diffSnapshots: persistence keys vs real fields", () => {
+  const taskNode = (schemaVersion: number, status: string) =>
+    toSnapshotNode({
+      id: "a",
+      node_type: "task",
+      content: "one",
+      properties: { task: { _schema_version: schemaVersion, status } },
+    })!;
+
+  test("a _schema_version-only bump is NOT a change", () => {
+    // Persistence bumping a schema version the model never touched must not
+    // red-line a read scenario through expectNoWrites.
+    const d = diffSnapshots(
+      snapshot([taskNode(1, "open")]),
+      snapshot([taskNode(2, "open")]),
+    );
+    expect(d.changedNodes).toEqual([]);
+  });
+
+  test("a real field change inside the wrapper IS still a change", () => {
+    // The loosening must be bounded to PERSISTENCE_KEYS: anything a model can
+    // actually write still compares exactly.
+    const d = diffSnapshots(
+      snapshot([taskNode(1, "open")]),
+      snapshot([taskNode(1, "done")]),
+    );
+    expect(d.changedNodes.map((c) => c.after.properties.status)).toEqual(["done"]);
+  });
+
+  test("a real field change alongside a version bump IS a change", () => {
+    const d = diffSnapshots(
+      snapshot([taskNode(1, "open")]),
+      snapshot([taskNode(2, "done")]),
+    );
+    expect(d.changedNodes).toHaveLength(1);
+  });
+});
+
+describe("flattenTypeKeyedProperties: collision precedence", () => {
+  test("the wrapper wins over a same-named sibling", () => {
+    // Stated rule, not defended behaviour: no daemon serialization produces
+    // this today. Pinned so the precedence is not silently reversed.
+    const n = toSnapshotNode({
+      id: "n1",
+      node_type: "task",
+      content: "collision",
+      properties: { task: { status: "inner" }, status: "outer" },
+    });
+    expect(n!.properties.status).toBe("inner");
+  });
+});

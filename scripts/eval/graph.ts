@@ -121,7 +121,6 @@ function runCli(env: EvalEnv, args: string[]): unknown {
   return out ? JSON.parse(out) : null;
 }
 
-/** Narrow one CLI node object into a SnapshotNode, tolerating absent fields. */
 /**
  * Bookkeeping keys the daemon writes itself. Excluded from the flattened view
  * so `minProperties` counts what the MODEL wrote, not what persistence added:
@@ -165,6 +164,11 @@ export function flattenTypeKeyedProperties(
   // Keys beside the wrapper are real properties and must survive: the daemon is
   // not required to put everything inside it, and dropping a sibling here would
   // trade one silent-miss bug for another.
+  //
+  // PRECEDENCE on a name collision — `{task: {status: "inner"}, status: "outer"}`
+  // — the wrapper wins, because it is the one the daemon writes typed field
+  // values into; a same-named sibling is the anomaly. No daemon serialization
+  // produces this today, so the rule is stated rather than defended.
   const merged: Record<string, unknown> = isWrapper
     ? { ...omit(props, nodeType), ...(wrapped as Record<string, unknown>) }
     : { ...props };
@@ -178,6 +182,7 @@ function omit(o: Record<string, unknown>, key: string): Record<string, unknown> 
   return rest;
 }
 
+/** Narrow one CLI node object into a SnapshotNode, tolerating absent fields. */
 export function toSnapshotNode(raw: unknown): SnapshotNode | null {
   if (typeof raw !== "object" || raw === null) return null;
   const o = raw as Record<string, unknown>;
@@ -355,6 +360,19 @@ function edgeKey(e: SnapshotEdge): string {
  * `changedNodes` entry, so a read scenario would red out because a JSON object
  * came back with its keys in a different order — a false failure on five
  * scenarios, from something the model had no part in.
+ *
+ * WHAT IT NOW COMPARES: flattened properties, since `toSnapshotNode` lifts the
+ * type-keyed wrapper before a node reaches here. `_schema_version` is dropped
+ * with it, so a node whose ONLY difference is a persistence-bumped schema
+ * version no longer counts as changed (measured: 1 changed node before, 0
+ * after). That is the intended direction — `expectNoWrites` should not red-line
+ * a read scenario because persistence touched a field the model never saw — but
+ * it is a deliberate loosening of the one comparator behind a false-PASS path,
+ * so it is recorded here rather than left to be inferred, and pinned by
+ * `diffSnapshots` in end-state.test.ts.
+ *
+ * The loosening is bounded to keys in `PERSISTENCE_KEYS`. Any field a model can
+ * actually write still compares exactly.
  *
  * SOUNDNESS RESTS ON THE INPUT DOMAIN, so state it: this is the only
  * comparator behind `changedNodes`, and `changedNodes` is what

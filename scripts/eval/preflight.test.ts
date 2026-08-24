@@ -241,6 +241,17 @@ describe("embeddedSkillCount", () => {
     expect(embeddedSkillCount("/db", () => ({ exitCode: 0, stdout: "oops" }))).toBe(0);
   });
 
+  test("fails closed when the probe THROWS", () => {
+    // `Bun.spawnSync` throws on a missing executable rather than returning a
+    // non-zero exitCode, so a machine without `sqlite3` took neither of the
+    // guarded branches — the throw escaped into `gate()`, which renders only
+    // EnvironmentError actionably and rethrows the rest as a stack trace.
+    const n = embeddedSkillCount("/db", () => {
+      throw new Error("Executable not found in $PATH: sqlite3");
+    });
+    expect(n).toBe(0);
+  });
+
   test("fails closed when no database path is known", () => {
     let ran = false;
     const n = embeddedSkillCount("", () => {

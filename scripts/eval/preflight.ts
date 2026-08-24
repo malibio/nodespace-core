@@ -296,7 +296,7 @@ export function seededSkillCount(
  * property. The path comes from the daemon's own `database list`, so it cannot
  * drift onto a different database than the one being scored.
  */
-function retrievableSkillCount(env: EvalEnv, _limit: number): number {
+function retrievableSkillCount(env: EvalEnv): number {
   return embeddedSkillCount(readServedDatabasePath(env));
 }
 
@@ -305,7 +305,21 @@ function retrievableSkillCount(env: EvalEnv, _limit: number): number {
  *
  * Returns 0 — never a fallback count — when the query cannot be run at all, so
  * an unreadable database keeps the gate waiting rather than waving it through.
- * `sqlite3` is already required by the harness's own diagnostics.
+ *
+ * "Cannot be run" includes `sqlite3` not being installed. `Bun.spawnSync`
+ * THROWS on a missing executable rather than returning a non-zero `exitCode`,
+ * so the exit-code branch alone does not deliver the guarantee above: the throw
+ * would escape through `awaitSkillIndex` into `gate()`, which converts only
+ * `EnvironmentError` into an actionable message and rethrows anything else as a
+ * raw stack trace — on the environment-vs-model boundary this gate exists to
+ * police. The whole probe call is therefore wrapped, which also covers an
+ * injected probe that throws, not just the default one.
+ *
+ * `sqlite3` is a real dependency of this gate. The other mentions of it in this
+ * file are remediation TEXT printed for a human, never executed, so they do not
+ * establish it as already-required — this is the first place the harness runs
+ * it. It ships with macOS and every mainstream Linux; a machine without it
+ * fails closed here rather than silently scoring.
  */
 export function embeddedSkillCount(
   dbPath: string,
@@ -323,7 +337,12 @@ export function embeddedSkillCount(
   },
 ): number {
   if (!dbPath) return 0;
-  const r = run(dbPath);
+  let r: { exitCode: number | null; stdout: string };
+  try {
+    r = run(dbPath);
+  } catch {
+    return 0;
+  }
   if (r.exitCode !== 0) return 0;
   return Number.parseInt(r.stdout.trim(), 10) || 0;
 }
@@ -365,7 +384,7 @@ export function awaitSkillIndex(
   // Injected so the wait/timeout logic is testable without a daemon: the
   // interesting behaviour is "waits for a late index, gives up on one that
   // never arrives", and neither is expressible against a live process.
-  probe: (env: EvalEnv) => number = (e) => retrievableSkillCount(e, expected),
+  probe: (env: EvalEnv) => number = (e) => retrievableSkillCount(e),
   sleep: (ms: number) => void = (ms) => Bun.sleepSync(ms),
   now: () => number = Date.now,
 ): void {
