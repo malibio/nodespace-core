@@ -6,6 +6,17 @@ notes = """
 ABLATION ARM -- the honest production baseline. Real 9-tool surface AND the real
 three-candidate Stage-2 block, both captured from a live daemon turn.
 
+SNAPSHOT, NOT CURRENT PRODUCTION
+
+This file and its sibling arms are a verbatim capture of the prompt production
+sent WHEN THE ABLATION WAS RUN, and are deliberately not updated when guidance
+changes -- rewriting them would invalidate the measurements recorded against
+them. One known divergence from today's production: the captured
+create_relationship guidance recommends `related_to`, a name the validator
+rejects unless the source node's schema declares it (core#2234); production now
+names `mentions` as the fallback. Expect further drift over time, and read a
+number taken here as a number about THIS captured prompt.
+
 WHY THIS ARM EXISTS
 
 full-tool-surface.toml fixed the tool surface but kept the base case's single

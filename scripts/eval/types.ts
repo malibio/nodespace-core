@@ -7,6 +7,9 @@
  * scripts/eval/runner.ts and is not reimplemented per eval.
  */
 
+import type { EvalEnv } from "./env.ts";
+import type { GraphDiff } from "./graph.ts";
+
 /**
  * One tool call's outcome, beyond its name.
  *
@@ -163,6 +166,22 @@ export interface Scenario {
    */
   priorTurns?: string[];
   /**
+   * This scenario exists only to establish state for later ones — run and
+   * recorded, but NOT scored.
+   *
+   * Scenarios within a group share a chat node, so an early failure craters
+   * every scenario after it and the results stop being independent
+   * observations: one ambiguous verb in a setup turn has been traced through
+   * three downstream failures that were all the same failure counted three
+   * times. Marking setup as setup keeps the state it establishes while
+   * removing the phantom failures from the denominator.
+   *
+   * A setup turn is still recorded in full, and the runner reports whether it
+   * did what it was supposed to — a setup turn that silently did nothing makes
+   * its successors unwinnable, so it must not vanish from the results file.
+   */
+  setup?: boolean;
+  /**
    * Free-form per-eval fields (expectation shape, load-bearing flags, ...).
    * The runner passes these back to `score` untouched and records them in the
    * results file; it never interprets them.
@@ -198,6 +217,40 @@ export interface ScenarioResult {
    * failure silently deflates every cell it appears in.
    */
   excludedAsEmptyGeneration?: boolean;
+  /**
+   * This scenario was fixture setup (see `Scenario.setup`) — run and recorded,
+   * excluded from the scored denominator.
+   *
+   * `passed` still carries the verdict so a setup turn that failed to establish
+   * its state is visible rather than silently invalidating its successors; it
+   * simply does not count as a scored observation.
+   */
+  excludedAsSetup?: boolean;
+  /**
+   * What the graph actually did this turn: the diff between the pre-turn and
+   * post-turn snapshots.
+   *
+   * Recorded so a verdict carries its evidence. Reading a results file should
+   * not require re-running the eval to find out what was written.
+   */
+  graphDiff?: GraphDiff;
+  /**
+   * The verdict the retired TRAJECTORY assertions would have returned, kept as
+   * a diagnostic alongside the outcome score that replaced them.
+   *
+   * Not scored. It is here because trajectory answers a question outcome
+   * cannot — HOW the model got there, which is what a debugging session
+   * actually needs — and because a scenario where the two disagree is the
+   * signal that either the expectation or the model changed. Absent on results
+   * files written before outcome grading landed.
+   */
+  trajectory?: { passed: boolean; failure?: string };
+  /**
+   * The scenario asserted a tool that Stage-2 routing never offered this turn,
+   * so the assertion was unreachable. Excluded from the denominator for the
+   * same reason as `excludedAsEmptyGeneration`.
+   */
+  excludedAsToolNotOffered?: boolean;
 }
 
 /**
@@ -215,12 +268,104 @@ export interface EvalFixture {
    */
   groups: ScenarioGroup[];
   /**
+   * Establish graph state for a group BEFORE its first turn runs.
+   *
+   * Called once per group, after its chat node exists and before any scenario
+   * in it is dispatched. Returns silently for groups that need nothing.
+   *
+   * WHY THIS EXISTS, since it is the one place the harness writes fixture data
+   * rather than asserting on it. A scenario that tests resolving an INDIRECT
+   * reference needs a referent the agent never wrote, and nothing a scored turn
+   * creates can be one: every write a turn makes is replayed into later turns
+   * as a terse fact carrying its property values and its id inline (see
+   * `terse_write_fact` in the daemon), so the referent is always sitting in the
+   * prompt as literal text. Seeding outside the scored turns is what keeps the
+   * referent out of that channel — `completed_writes` is built only from a
+   * turn's own tool executions, so a node written this way is absent from the
+   * rendered chat history entirely.
+   *
+   * SCOPE, because "absent from history" is not "absent from the prompt" and
+   * conflating the two is how two prior attempts at this shipped a false claim.
+   * A seed that also creates a SCHEMA puts that schema's type name and field
+   * names in front of the model: workspace context retrieves schemas
+   * semantically and interpolates them into the system prompt. What stays out
+   * is INSTANCE data — titles, property VALUES, ids — because only
+   * `"schema"`-type nodes are retrieved that way.
+   *
+   * That boundary is what a seeded scenario must be designed against: seeding
+   * hides the answer, not the vocabulary. Recorded by
+   * `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+   * (packages/core/src/ops/context_ops.rs).
+   *
+   * NOT a contradiction of the harness's "assert, do not own" stance, which is
+   * about DAEMON AND DATABASE LIFECYCLE — the caller starts the daemon and owns
+   * the DB; this harness never does. Writing nodes through the CLI is something
+   * the runner already does for every group (`newChat` creates the chat node
+   * the same way); this hook is that same capability, named.
+   *
+   * Runs through the CLI rather than touching a store directly, so seeded state
+   * is byte-identical to what the daemon would have produced.
+   */
+  seedGroup?(env: EvalEnv, group: ScenarioGroup): void;
+  /**
    * Score one scenario from its turns. `turns` excludes prior-context turns,
    * which the runner strips before calling this.
    *
    * Must be pure and daemon-free so it is unit-testable without a model.
    */
   score(scenario: Scenario, turns: TurnRecord[]): Verdict;
+  /**
+   * Opt in to graph end-state grading.
+   *
+   * Present only on evals whose scenarios act on the graph. The routing eval
+   * scores which SKILL fired and writes nothing, so snapshotting it would cost
+   * a CLI round-trip per turn to diff a graph that never changes — hence a
+   * capability a fixture declares rather than a behavior every eval pays for.
+   *
+   * When present, the runner captures a snapshot before and after each scored
+   * turn and passes the diff to `scoreOutcome`, whose verdict is THE score.
+   * `score` still runs, and its verdict is recorded as a trajectory
+   * diagnostic (see `ScenarioResult.trajectory`).
+   */
+  graph?: {
+    /**
+     * Node types to enumerate when snapshotting. Types created during the run
+     * are discovered from the schema list and do not need to be listed here;
+     * this is the seed set for types that may already exist.
+     */
+    types: string[];
+    /**
+     * Score one scenario from what the graph actually did. Must be pure over
+     * the diff, so it is unit-testable without a daemon.
+     */
+    scoreOutcome(
+      scenario: Scenario,
+      diff: GraphDiff,
+      /**
+       * The scored turn, for the one property a diff cannot express: whether
+       * the model ASKED instead of acting.
+       *
+       * A clarification writes nothing, so it is indistinguishable from doing
+       * nothing by end-state alone — yet on an underdetermined prompt it is
+       * the correct outcome, and scoring it as failure rewards a model that
+       * guesses over one that checks.
+       */
+      turns?: TurnRecord[],
+    ): Verdict;
+  };
+  /**
+   * Optional: the action tools this scenario's expectation asserts on.
+   *
+   * Stage-2 routing scopes the tool surface per turn, so a scenario can assert
+   * a tool the model was never offered — it then reds out for "not calling" a
+   * tool it could not call. That is an environment fault of the same class as
+   * a degenerate empty generation, and the runner excludes it on the same
+   * grounds rather than scoring it (see the `toolsOffered` guard in run()).
+   *
+   * Return an empty array for scenarios that assert an absence (`noTools`),
+   * where no tool needs to be offered for the assertion to be reachable.
+   */
+  requiredTools?(scenario: Scenario): string[];
   /**
    * Optional per-scenario fields to record in the results file beyond
    * pass/fail — routing signals, matched skill, and similar.
@@ -283,24 +428,152 @@ export interface GuidanceProvenance {
   [nodeType: string]: Array<{ key: string; version: string }>;
 }
 
-/** The results file an eval run writes. */
+/** One repetition's scored scenarios and the conditions that produced them. */
+export interface RepResult {
+  /** 1-based index of this repetition within the run. */
+  rep: number;
+  /**
+   * Provenance for THIS rep, not the run.
+   *
+   * Recorded per rep rather than once per file because the whole point of
+   * repeating is that reps are not interchangeable: one that hit a degraded
+   * environment — a daemon restarted onto different guidance, a model that
+   * loaded into a smaller window the second time, a working tree that went
+   * dirty mid-run — must be identifiable after the fact. A single file-level
+   * provenance block would silently attribute every rep to the first rep's
+   * conditions.
+   */
+  provenance: Provenance;
+  summary: RepSummary;
+  results: ScenarioResult[];
+}
+
+/** One rep's scored totals. */
+export interface RepSummary {
+  /**
+   * Scored scenarios only — excludes empty-generation and setup exclusions.
+   */
+  total: number;
+  passed: number;
+  failed: number;
+  /**
+   * Scenarios excluded as degenerate empty generations, not scored either
+   * way. Kept separate from `failed` so the rate is visible rather than
+   * silently deflating the pass rate; present (possibly 0) whenever the
+   * runner supports the exclusion, so its absence marks an older results
+   * file rather than a run with none.
+   */
+  excludedEmptyGenerations?: number;
+  /**
+   * Scenarios excluded as fixture setup (see `Scenario.setup`), not scored
+   * either way. Reported separately from `excludedEmptyGenerations` because
+   * the two mean opposite things: an empty generation is a fault whose rate
+   * matters, while a setup turn is a deliberate, fixed part of the fixture.
+   */
+  excludedSetup?: number;
+  /**
+   * How many scored scenarios' trajectory diagnostic DISAGREED with the
+   * outcome score. Not a failure count — it is the number worth looking at
+   * after a rep, because each disagreement is either a scenario whose
+   * expectation no longer describes the behavior or a real change in how the
+   * model reaches its result.
+   */
+  trajectoryDisagreements?: number;
+}
+
+/**
+ * One scenario's outcome across every rep of a run.
+ *
+ * This is the unit the multi-rep summary is built from, and the reason the
+ * eval repeats at all: "fails 3/3" and "fails 1/3" are different findings that
+ * a single run renders identically, and only the second one is debuggable.
+ */
+export interface ScenarioReliability {
+  id: string;
+  scenario: string;
+  /** Reps in which this scenario was actually scored (exclusions removed). */
+  scoredReps: number;
+  /** Scored reps in which it passed. */
+  passedReps: number;
+  /**
+   * Reps excluded as degenerate empty generations. Counted toward neither
+   * `passedReps` nor the pass^k denominator — an inference bug is not evidence
+   * either way about the scenario, so a rep that hit one must not make a
+   * scenario look unreliable.
+   */
+  excludedReps: number;
+  /**
+   * The scenario passed in every rep where it was scored, and was scored at
+   * least once. This is the pass^k predicate: an all-or-nothing verdict, which
+   * is what makes the aggregate a reliability measure rather than a best-case
+   * one.
+   */
+  passedAll: boolean;
+  /** It both passed and failed across reps — the score is not reproducible. */
+  flipped: boolean;
+  /**
+   * Every rep of this scenario was fixture setup (see `Scenario.setup`) —
+   * run and recorded, excluded from the scored denominator.
+   *
+   * Carried up to the reliability level so baseline comparison can skip it:
+   * a setup turn's verdict is not a result to regress against, and a baseline
+   * predating the setup reclassification still holds a scored verdict under
+   * the same id. Its failure is surfaced during the run instead, where it
+   * means something — the state its successors needed.
+   */
+  setup?: boolean;
+}
+
+/**
+ * A run's aggregate across reps.
+ *
+ * `passAtK` is the headline and `passAt1` sits alongside it deliberately: the
+ * property that matters for a model writing to a user's graph is whether it
+ * does the right thing every time, not whether it can. Two models with the
+ * same pass^1 and different flip rates are not equally good, and only pass^k
+ * separates them.
+ */
+export interface RunAggregate {
+  /** Number of reps that ran. */
+  reps: number;
+  /**
+   * Scenarios scored in at least one rep — the denominator for both metrics
+   * below. A scenario excluded as an empty generation in EVERY rep was never
+   * scored at all and is counted here as neither passing nor failing.
+   */
+  scoredScenarios: number;
+  /** Scenarios that passed in every rep where they were scored. */
+  passAtK: number;
+  /**
+   * Mean scored pass count across reps — the single-run number this project
+   * has historically quoted, kept alongside pass^k so the gap between
+   * best-case capability and reliability is readable rather than lost.
+   */
+  passAt1: number;
+  /** Scenarios that both passed and failed across reps. */
+  flipped: number;
+  /** Per-scenario detail, in fixture order. */
+  scenarios: ScenarioReliability[];
+}
+
+/**
+ * The results file an eval run writes.
+ *
+ * Always rep-shaped, including for `--runs 1`: a single-rep file that looked
+ * structurally different from a multi-rep one would mean every reader needs
+ * two code paths, and the single-rep shape is exactly the one that produced
+ * the confident wrong conclusions repeating exists to prevent.
+ */
 export interface EvalResults {
   eval: string;
   label: string;
+  /**
+   * Provenance of the FIRST rep, for readers that want one block without
+   * walking `reps`. The per-rep blocks in `reps[].provenance` are
+   * authoritative — a rep that drifted is only visible there.
+   */
   provenance: Provenance;
-  summary: {
-    /** Scored scenarios only — excludes empty-generation exclusions. */
-    total: number;
-    passed: number;
-    failed: number;
-    /**
-     * Scenarios excluded as degenerate empty generations, not scored either
-     * way. Kept separate from `failed` so the rate is visible rather than
-     * silently deflating the pass rate; present (possibly 0) whenever the
-     * runner supports the exclusion, so its absence marks an older results
-     * file rather than a run with none.
-     */
-    excludedEmptyGenerations?: number;
-  };
-  results: ScenarioResult[];
+  /** Aggregate across every rep: pass^k, pass^1, and per-scenario flips. */
+  aggregate: RunAggregate;
+  reps: RepResult[];
 }

@@ -225,6 +225,7 @@ impl QueryService {
             "modified_at" => a.modified_at.cmp(&b.modified_at),
             "content" => a.content.cmp(&b.content),
             "node_type" => a.node_type.cmp(&b.node_type),
+            "title" => a.title.cmp(&b.title),
             // Type-specific properties (accessed via namespaced properties JSON)
             // Access properties[node_type][field] for proper namespaced access
             _ => {
@@ -339,13 +340,30 @@ impl QueryService {
 
     /// Resolve field name for SQLite queries (Namespaced property access)
     ///
-    /// Metadata fields accessed directly: created_at, modified_at, content, node_type
+    /// Metadata fields accessed directly: created_at, modified_at, content, node_type, title
     /// Type-specific fields use json_extract: json_extract(properties, '$.task.status')
+    ///
+    /// NOTE the deliberate asymmetry with [`Self::build_property_filter`],
+    /// which resolves the namespaced path itself rather than calling here. A
+    /// sort entry is an ordering hint, so reading a same-named top-level column
+    /// is the useful reading of `title`; a property filter is an explicit
+    /// statement ABOUT the properties JSON, and silently redirecting it to a
+    /// column would answer a different question than the caller asked. Do not
+    /// "unify" the two without changing that contract first.
     fn resolve_field(&self, field: &str, target_type: &str) -> String {
-        if ["created_at", "modified_at", "content", "node_type"].contains(&field) {
+        if ["created_at", "modified_at", "content", "node_type", "title"].contains(&field) {
             field.to_string()
         } else if target_type == "*" {
-            format!("json_extract(properties, '$.{}')", field)
+            // Properties are namespaced per node type, so a wildcard query has
+            // no single literal path — the namespace segment differs row by
+            // row. Build it from the row's own node_type: a fixed '$.<field>'
+            // is structurally NULL for EVERY row, which SQL then happily
+            // ORDERs by and LIMITs on, cutting the real matches before the
+            // in-Rust re-sort below ever sees them.
+            format!(
+                "json_extract(properties, '$.' || node_type || '.{}')",
+                field
+            )
         } else {
             format!("json_extract(properties, '$.{}.{}')", target_type, field)
         }
@@ -362,8 +380,19 @@ impl QueryService {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Property filter missing 'property' field"))?;
 
+        // A property filter always reads the properties JSON, never a
+        // same-named top-level column — `resolve_field` is not reused here
+        // because its metadata shortcut would make a user field called
+        // `title` silently query the title column instead.
+        //
+        // Under a wildcard the namespace segment differs row by row, so it is
+        // taken from the row's own node_type: a fixed '$.<field>' is
+        // structurally NULL for EVERY row and matches nothing.
         let field = if target_type == "*" {
-            format!("json_extract(properties, '$.{}')", property)
+            format!(
+                "json_extract(properties, '$.' || node_type || '.{}')",
+                property
+            )
         } else {
             format!("json_extract(properties, '$.{}.{}')", target_type, property)
         };
@@ -393,7 +422,9 @@ impl QueryService {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Metadata filter missing property"))?;
 
-        if !["created_at", "modified_at", "node_type", "content"].contains(&property.as_str()) {
+        if !["created_at", "modified_at", "node_type", "content", "title"]
+            .contains(&property.as_str())
+        {
             anyhow::bail!("Invalid metadata field: {}", property);
         }
 

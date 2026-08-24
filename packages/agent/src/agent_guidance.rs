@@ -308,10 +308,28 @@ mod tests {
         for (idx, _) in source.match_indices("prompt:") {
             // Only treat this as an object key. `prompt:` also appears inside
             // identifiers/field access (e.g. `fixture.prompt:`) and prose.
+            //
+            // The BACKTICK is excluded for a distinct reason from the
+            // identifier characters: a fixture's own doc comment legitimately
+            // names the thing this parser looks for, as inline code
+            // (`prompt:`). Without this the match is taken as a key and the
+            // parser reads on to the next quote, capturing a span of comment
+            // prose as one enormous "prompt". That inflates the site count and
+            // is a latent false positive, since arbitrary comment text could
+            // collide with guidance wording (#2237).
+            //
+            // Deliberately NOT extended to `"` or `'`. Those cannot appear here
+            // as a key's own quote anyway — a JSON-style key writes `prompt":`,
+            // with the quote between the word and the colon, so this scan never
+            // matches it at all (a separate, pinned gap; see
+            // `eval_prompt_parser_does_not_yet_see_a_quoted_prompt_key`).
+            // Excluding them would only add a rule with nothing to exclude,
+            // while making the next reader think the quoted-key shape is
+            // handled.
             if source[..idx]
                 .chars()
                 .next_back()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '`')
             {
                 continue;
             }
@@ -684,6 +702,124 @@ mod tests {
                 "an \\\"escaped\\\" quote inside"
             ],
             "backticked and escaped literals must parse in full, not truncate"
+        );
+    }
+
+    /// A fixture's own doc comment may name `prompt:` as inline code without
+    /// that mention being taken for a scenario prompt (#2237).
+    ///
+    /// Before the backtick exclusion, the mention below counted as a site and
+    /// the parser read on to the next quote, swallowing the following prose
+    /// into one enormous "prompt" — inflating the site count and leaving
+    /// arbitrary comment text able to collide with guidance wording.
+    #[test]
+    fn eval_prompt_parser_ignores_a_backticked_mention_in_a_comment() {
+        let src = r#"
+            /**
+             * This guard parses the `prompt:` literals out of this file, so a
+             * planted example cannot masquerade as generalization.
+             */
+            { prompt: "the only real prompt here" },
+        "#;
+        let (got, sites) = eval_prompts(src);
+        assert_eq!(sites, 1, "the backticked mention must not count as a site");
+        assert_eq!(got, vec!["the only real prompt here"]);
+    }
+
+    /// KNOWN GAP, pinned rather than fixed: a JSON-style quoted key
+    /// (`{"prompt": "..."}`) is invisible to this parser.
+    ///
+    /// The scan is `match_indices("prompt:")`, and a quoted key writes
+    /// `prompt":` — the quote sits BETWEEN the word and the colon, so the
+    /// literal never matches and the site is never even considered. This is a
+    /// fail-open shape: such a prompt would be silently exempt from the
+    /// contamination guard, and the `prompts.len() == sites` assertion cannot
+    /// catch it because the site is not counted either.
+    ///
+    /// Not fixed here because widening what the scan matches is a change to
+    /// the guard's own detection surface and deserves its own measurement
+    /// rather than riding along with a prose fix. No fixture uses the shape
+    /// today — this test is what will notice if that stops being true, since
+    /// it fails the moment the parser learns the shape and someone has to
+    /// consciously flip it.
+    #[test]
+    fn eval_prompt_parser_does_not_yet_see_a_quoted_prompt_key() {
+        let (got, sites) = eval_prompts(r#"{ "prompt": "a quoted key is missed" }"#);
+        assert_eq!(
+            sites, 0,
+            "if this now finds the site, the parser learned the quoted-key shape — \
+             update this test to assert it PARSES, and drop the caveat above"
+        );
+        assert!(got.is_empty());
+    }
+
+    /// No model-facing channel may recommend a relationship name the validator
+    /// rejects.
+    ///
+    /// `create_relationship` accepts a relation DECLARED on the source node's
+    /// own schema, or one of `BUILTIN_RELATIONSHIP_NAMES`. Anything else is
+    /// refused by `NodeService::create_relationship`.
+    ///
+    /// Both the tool's `relationship_type` description and the seeded
+    /// Relationship Management skill previously offered `related_to` as a
+    /// generic fallback. It is not built-in and is declared on no seeded
+    /// schema, so a model following either instruction had its write rejected —
+    /// found when the agent matrix's relationship scenario turned out to be
+    /// unwinnable by construction (#1977, #2234).
+    ///
+    /// Keyed off `BUILTIN_RELATIONSHIP_NAMES` rather than a hardcoded list, so
+    /// changing the universal set updates what this test permits — the point is
+    /// that the prose and the validator cannot drift apart again, which is the
+    /// failure that actually happened.
+    #[test]
+    fn guidance_never_recommends_a_rejected_relationship_name() {
+        use nodespace_core::models::schema::BUILTIN_RELATIONSHIP_NAMES;
+
+        // Names a reader could mistake for universal but which the validator
+        // refuses on a type that does not declare them. `related_to` is the one
+        // that actually shipped; the others are plausible near-misses that
+        // would fail the same way.
+        //
+        // Matched as a bare substring, which cannot tell a recommendation from
+        // a prohibition — guidance reading "never use related_to" would fail
+        // this, reporting it as an offer. Kept deliberately: the guard's job is
+        // to keep these names OUT of model-facing text, and prose telling a
+        // small model what not to do is a weaker instrument than not naming it
+        // (the resident-prompt ablation is the standing evidence). If a name
+        // here later becomes legal — a universal, or one a seeded schema
+        // declares — remove it from NOT_UNIVERSAL rather than loosening the
+        // match; the constant pre-check below already forces that for builtins.
+        const NOT_UNIVERSAL: [&str; 4] =
+            ["related_to", "relates_to", "links_to", "associated_with"];
+
+        for name in NOT_UNIVERSAL {
+            assert!(
+                !BUILTIN_RELATIONSHIP_NAMES.contains(&name),
+                "{name} is now a built-in — remove it from this test's list rather \
+                 than weakening the assertion below"
+            );
+        }
+
+        let mut violations: Vec<String> = Vec::new();
+        for (channel, text) in guidance_corpus() {
+            for name in NOT_UNIVERSAL {
+                if text.contains(name) {
+                    violations.push(format!(
+                        "  {channel} offers {name:?}, which create_relationship rejects \
+                         unless the source node's schema declares it"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "model-facing guidance recommends a relationship name the validator \
+             refuses — a model that follows it has its write rejected:\n{}\n\n\
+             Legal names are a relation declared on the source node's own type, \
+             or one of {BUILTIN_RELATIONSHIP_NAMES:?}. Prefer \"mentions\" as the \
+             generic fallback.",
+            violations.join("\n")
         );
     }
 }

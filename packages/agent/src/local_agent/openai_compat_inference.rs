@@ -7,8 +7,8 @@
 //! format — one protocol implementation serves every such provider.
 
 use crate::agent_types::{
-    ChatInferenceEngine, ChatModelSpec, InferenceError, InferenceRequest, InferenceUsage,
-    ModelFamily, StreamingChunk,
+    ChatInferenceEngine, ChatMessage, ChatModelSpec, InferenceError, InferenceRequest,
+    InferenceUsage, ModelFamily, StreamingChunk,
 };
 use crate::local_agent::ndjson::NdjsonLineBuffer;
 use async_trait::async_trait;
@@ -84,6 +84,31 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// failure, and a connected-but-stalled server is not one.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Retries allowed after a 429 or 5xx before the turn is failed.
+///
+/// Retries FOLLOW the initial send, so this many retries means up to
+/// `RETRY_MAX_ATTEMPTS + 1` requests. Combined with `RETRY_MAX_DELAY` the
+/// worst case is 80s of waiting — long enough to ride out the burst limits
+/// hosted free tiers enforce, short enough that a genuine outage surfaces as
+/// an error instead of a hung run.
+const RETRY_MAX_ATTEMPTS: u32 = 4;
+
+/// First backoff wait; doubles per attempt (2s, 4s, 8s, 16s).
+const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
+
+/// Ceiling on any single wait, including a server-supplied `Retry-After`.
+///
+/// Bounds the WORST case, which is driven by `Retry-After` rather than the
+/// backoff: the header replaces the computed delay, so `RETRY_MAX_ATTEMPTS`
+/// waits of this length is the true maximum (80s at these values). The
+/// exponential path alone would only reach 30s.
+///
+/// Deliberately below what a server might ask for. Honouring a full 60s
+/// `Retry-After` four times over would stall a single turn for four minutes,
+/// and the caller here is a measurement run — better to fail the turn and
+/// record it than to hide two minutes of waiting inside one scenario.
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(20);
+
 impl OpenAiCompatInferenceEngine {
     pub fn new(base_url: String, api_key: String, model_name: String) -> Self {
         Self {
@@ -147,6 +172,28 @@ struct OpenAiMessage {
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenAiRequestToolCall>>,
+}
+
+/// An assistant message's outgoing tool call, replayed from history so a
+/// subsequent `tool`-role result has a matching call in the same request —
+/// required by strict OpenAI-compatible servers (see module docs on
+/// `OpenAiMessage`).
+#[derive(Serialize)]
+struct OpenAiRequestToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    call_type: String,
+    function: OpenAiRequestToolCallFunction,
+}
+
+#[derive(Serialize)]
+struct OpenAiRequestToolCallFunction {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Serialize)]
@@ -213,6 +260,32 @@ struct OpenAiUsage {
     completion_tokens: u32,
 }
 
+/// Map an internal history message to its OpenAI wire-format equivalent,
+/// replaying tool calls and the tool-result `name` so a strict
+/// OpenAI-compatible server accepts the replayed history — see the module
+/// docs on [`OpenAiMessage`] for why this matters.
+fn to_openai_message(msg: &ChatMessage) -> OpenAiMessage {
+    OpenAiMessage {
+        role: msg.role.as_str().to_string(),
+        content: msg.content.clone(),
+        tool_call_id: msg.tool_call_id.clone(),
+        name: msg.name.clone(),
+        tool_calls: (!msg.tool_calls.is_empty()).then(|| {
+            msg.tool_calls
+                .iter()
+                .map(|tc| OpenAiRequestToolCall {
+                    id: tc.id.clone(),
+                    call_type: "function".to_string(),
+                    function: OpenAiRequestToolCallFunction {
+                        name: tc.function_name.clone(),
+                        arguments: tc.arguments_json.clone(),
+                    },
+                })
+                .collect()
+        }),
+    }
+}
+
 #[async_trait]
 impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
     async fn generate(
@@ -220,15 +293,7 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
         request: InferenceRequest,
         on_chunk: Box<dyn Fn(StreamingChunk) + Send>,
     ) -> Result<InferenceUsage, InferenceError> {
-        let messages: Vec<OpenAiMessage> = request
-            .messages
-            .iter()
-            .map(|msg| OpenAiMessage {
-                role: msg.role.as_str().to_string(),
-                content: msg.content.clone(),
-                tool_call_id: msg.tool_call_id.clone(),
-            })
-            .collect();
+        let messages: Vec<OpenAiMessage> = request.messages.iter().map(to_openai_message).collect();
 
         let tools = request.tools.map(|tool_defs| {
             tool_defs
@@ -288,22 +353,61 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
             req_builder = req_builder.bearer_auth(&self.api_key);
         }
 
-        let response = req_builder
-            .send()
-            .await
-            .map_err(|e| InferenceError::Engine(e.to_string()))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response
-                .text()
+        // Rate limits are transient, so a 429 is retried rather than failing
+        // the turn. Without this a throttled endpoint yields a turn that called
+        // no tools, which every negative assertion scores GREEN and every
+        // positive one scores red -- an eval run that silently measures the
+        // provider's capacity instead of the model.
+        //
+        // `Retry-After` is honoured when present; otherwise the wait doubles
+        // from RETRY_BASE_DELAY. Both are capped by RETRY_MAX_DELAY so a
+        // pathological header cannot stall a run indefinitely.
+        let mut attempt: u32 = 0;
+        let response = loop {
+            let builder = req_builder
+                .try_clone()
+                .ok_or_else(|| InferenceError::Engine("request is not retryable".to_string()))?;
+            let response = builder
+                .send()
                 .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(InferenceError::Engine(format!(
-                "OpenAI-compat API error {}: {}",
-                status, body
-            )));
-        }
+                .map_err(|e| InferenceError::Engine(e.to_string()))?;
+
+            let status = response.status();
+            if status.is_success() {
+                break response;
+            }
+
+            let retryable =
+                status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+            if !retryable || attempt >= RETRY_MAX_ATTEMPTS {
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "unknown error".to_string());
+                return Err(InferenceError::Engine(format!(
+                    "OpenAI-compat API error {}: {}",
+                    status, body
+                )));
+            }
+
+            let after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs);
+            let backoff = RETRY_BASE_DELAY * 2u32.pow(attempt);
+            let wait = after.unwrap_or(backoff).min(RETRY_MAX_DELAY);
+
+            tracing::warn!(
+                status = %status,
+                attempt = attempt + 1,
+                wait_secs = wait.as_secs_f32(),
+                "OpenAI-compat endpoint throttled; backing off"
+            );
+            tokio::time::sleep(wait).await;
+            attempt += 1;
+        };
 
         let mut final_usage = InferenceUsage {
             prompt_tokens: 0,
@@ -486,6 +590,7 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_types::{Role, ToolCallRaw};
 
     #[test]
     fn test_is_openai_compat_prefix() {
@@ -550,6 +655,57 @@ mod tests {
         assert!(delta.tool_calls.is_empty());
     }
 
+    /// The retry policy stays bounded.
+    ///
+    /// A hosted endpoint under load can 429 indefinitely. Retrying is right,
+    /// retrying forever is not: an eval that hangs is worse than one that
+    /// reports an error, because it consumes the operator's time instead of
+    /// their attention. These bounds keep the worst case at 80s — every attempt
+    /// honouring a `Retry-After` at the ceiling, which is the path that governs
+    /// it rather than the exponential backoff.
+    #[test]
+    fn retry_policy_is_bounded() {
+        // The WORST case is every attempt honouring a `Retry-After` at the
+        // ceiling — the header replaces the backoff, so this branch governs
+        // the bound. Asserting only over the exponential path (30s here) would
+        // pass while the real maximum drifted, which is how the previous
+        // version of this test missed a 240s bound it claimed was 120s.
+        let worst_with_retry_after: u64 = RETRY_MAX_ATTEMPTS as u64 * RETRY_MAX_DELAY.as_secs();
+        assert!(
+            worst_with_retry_after <= 120,
+            "worst-case retry wait {worst_with_retry_after}s exceeds the 2 minute bound"
+        );
+
+        let backoff_only: u64 = (0..RETRY_MAX_ATTEMPTS)
+            .map(|a| {
+                (RETRY_BASE_DELAY * 2u32.pow(a))
+                    .min(RETRY_MAX_DELAY)
+                    .as_secs()
+            })
+            .sum();
+        assert!(
+            backoff_only <= worst_with_retry_after,
+            "the exponential path ({backoff_only}s) should not exceed the \
+             Retry-After ceiling ({worst_with_retry_after}s)"
+        );
+        // Const blocks, not runtime asserts: both compare compile-time
+        // constants, so the invariant is provable at build time and a
+        // violation should break the build rather than wait for someone to
+        // run the test.
+        const {
+            assert!(
+                RETRY_MAX_ATTEMPTS >= 1,
+                "a zero-attempt policy is just the old terminal-failure behaviour"
+            );
+        }
+        const {
+            assert!(
+                RETRY_BASE_DELAY.as_secs() <= RETRY_MAX_DELAY.as_secs(),
+                "base delay above the ceiling makes the ceiling meaningless"
+            );
+        }
+    }
+
     #[test]
     fn test_token_count_estimate() {
         let engine = OpenAiCompatInferenceEngine::new(
@@ -574,5 +730,70 @@ mod tests {
             "gpt-4o".to_string(),
         );
         assert_eq!(engine.model_name(), "gpt-4o");
+    }
+
+    #[test]
+    fn replayed_assistant_tool_call_carries_tool_calls_on_the_wire() {
+        // Regression test for issue #2198: a replayed assistant turn that
+        // issued a tool call must serialize with a `tool_calls` array, or a
+        // strict OpenAI-compatible server rejects the following `tool`
+        // message with "must be a response to a preceding message with
+        // tool_calls".
+        let assistant_turn = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "call_abc".to_string(),
+                function_name: "search_nodes".to_string(),
+                arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+            }],
+        );
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        assert_eq!(json["role"], "assistant");
+        let tool_calls = json["tool_calls"]
+            .as_array()
+            .expect("tool_calls must be present on a replayed assistant tool-call turn");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], "call_abc");
+        assert_eq!(tool_calls[0]["type"], "function");
+        assert_eq!(tool_calls[0]["function"]["name"], "search_nodes");
+        assert_eq!(
+            tool_calls[0]["function"]["arguments"],
+            r#"{"query":"Q3 budget"}"#
+        );
+    }
+
+    #[test]
+    fn replayed_tool_result_carries_its_tool_name_on_the_wire() {
+        // Regression test for issue #2198: the OpenAI wire format expects a
+        // `name` field on `tool`-role messages; dropping it left the model
+        // unable to see which tool a past result came from.
+        let tool_result = ChatMessage::tool_result(r#"{"nodes":[]}"#, "call_abc", "search_nodes");
+
+        let wire = to_openai_message(&tool_result);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        assert_eq!(json["role"], "tool");
+        assert_eq!(json["tool_call_id"], "call_abc");
+        assert_eq!(
+            json["name"], "search_nodes",
+            "tool-role messages must carry the tool name on replay"
+        );
+    }
+
+    #[test]
+    fn a_plain_text_turn_omits_tool_calls_and_name() {
+        // A non-tool turn must not grow a spurious `tool_calls` or `name`
+        // field — only turns that actually carry that data should emit it.
+        let turn = ChatMessage::text(Role::User, "hello");
+
+        let wire = to_openai_message(&turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        assert!(json.get("tool_calls").is_none());
+        assert!(json.get("name").is_none());
+        assert!(json.get("tool_call_id").is_none());
     }
 }

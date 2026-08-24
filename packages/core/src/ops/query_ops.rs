@@ -181,12 +181,14 @@ impl AgentFilterItem {
             // content search (`LOWER(content) LIKE …`), NOT the property path, which
             // builds `json_extract(properties, '$.<type>.content')` that is
             // structurally always NULL and yields a silent `count: 0` false-negative
-            // (an existing "Buy cereal" task returns nothing). Any other property
-            // name keeps the property path.
-            return Ok(if prop == "content" {
-                "content"
-            } else {
-                "property"
+            // (an existing "Buy cereal" task returns nothing). `title` is a
+            // top-level column too, and routes to the metadata category that
+            // reads it directly, for the same reason. Any other property name
+            // keeps the property path.
+            return Ok(match prop {
+                "content" => "content",
+                "title" => "metadata",
+                _ => "property",
             });
         }
         // Nothing to infer from. When the model *did* supply a category, name it

@@ -97,7 +97,8 @@ async fn poll_until_idle_with_new_assistant_reply(
         if tokio::time::Instant::now() >= deadline {
             panic!(
                 "ai-chat turn did not reach idle-with-new-reply within {timeout:?}; \
-                 last status={status:?}, assistant_count={assistant_count}"
+                 last status={status:?}, assistant_count={assistant_count}; \
+                 node={node}"
             );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;

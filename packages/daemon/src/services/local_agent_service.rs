@@ -1916,15 +1916,27 @@ pub fn completed_writes_from(executions: &[ToolExecutionRecord]) -> Vec<AiChatCo
             // nodes elsewhere, so the evidence matches what it already reads).
             // Relationship writes report no node id at all. Schema writes report
             // no `id` either, but `create_schema`/`update_schema` return the
-            // schema's own identifier under `schema_id` — the same string a
-            // later `create_node` call must copy into `node_type` — so it is
-            // captured here under the same field rather than left blank; a
-            // terse fact built from this record needs that id to reference the
-            // schema by the name a later turn will actually use.
+            // schema's own identifier — the same string a later `create_node`
+            // call must copy into `node_type` — so it is captured here under
+            // the same field rather than left blank; a terse fact built from
+            // this record needs that id to reference the schema by the name a
+            // later turn will actually use.
+            //
+            // The key is `schemaId`, not `schema_id`: `CreateSchemaOutput` and
+            // `SchemaUpdateOutput` both carry
+            // `#[serde(rename_all = "camelCase")]`, so camelCase is what
+            // reaches the wire. The snake_case spelling this used to look for
+            // matched nothing, silently degrading every schema write's history
+            // to the id-less phrasing of `terse_write_fact`.
+            //
+            // Only the camelCase spelling is accepted. `result` is populated
+            // exclusively by `exec_create_schema`/`exec_update_schema`, which
+            // serialize those structs, so a snake_case key has no producer —
+            // tolerating one would encode a false claim about the wire format.
             let node_id = r
                 .result
                 .get("id")
-                .or_else(|| r.result.get("schema_id"))
+                .or_else(|| r.result.get("schemaId"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
 
@@ -2345,6 +2357,68 @@ mod tests {
     use nodespace_agent::local_agent::agent_loop::CANONICAL_ARGS_MAX_CHARS;
     use nodespace_core::models::Node;
     use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
+
+    /// A completed `create_schema` write must capture the new type's id.
+    ///
+    /// `completed_writes_from` reads the affected node's id from the tool
+    /// RESULT, falling back to the schema's own identifier for schema writes
+    /// (which report no `id`). That fallback has to spell the key the way the
+    /// result actually serializes it: `CreateSchemaOutput` carries
+    /// `#[serde(rename_all = "camelCase")]`, so the wire key is `schemaId`,
+    /// and a lookup for `schema_id` silently matches nothing.
+    ///
+    /// The consequence is not cosmetic, and it lands on exactly the chains the
+    /// matrix scores. With no id captured, `terse_write_fact` renders the
+    /// weaker of its two phrasings — "a schema named 'Architecture Decision'
+    /// was created" instead of "a schema with id 'architecture_decision' ...".
+    /// The id is the string a later `create_node` must copy into `node_type`,
+    /// so dropping it removes from history the one token the next turn needs,
+    /// and leaves the model to guess the normalized spelling from the display
+    /// name. Every multi-turn chain that creates a type and then records an
+    /// instance against it depends on this.
+    ///
+    /// Asserts against the real serialization rather than a hand-written key,
+    /// so a future rename of the output struct's serde policy re-breaks this
+    /// test rather than silently re-breaking history.
+    #[test]
+    fn completed_create_schema_write_captures_the_schema_id() {
+        let output = nodespace_core::schema::CreateSchemaOutput {
+            schema_id: "architecture_decision".to_string(),
+            is_core: false,
+            version: 1,
+            description: String::new(),
+            fields: Vec::new(),
+            relationships: Vec::new(),
+            warnings: None,
+        };
+        let result = serde_json::to_value(&output).expect("output serializes");
+
+        // Guard the premise: this test is only meaningful if the result really
+        // does carry the id under a key other than `id`.
+        assert!(
+            result.get("id").is_none(),
+            "premise broken: create_schema now reports a top-level `id`, so the \
+             schema-id fallback this test covers is no longer the path taken"
+        );
+
+        let writes = completed_writes_from(&[ToolExecutionRecord {
+            tool_call_id: "c1".to_string(),
+            name: "create_schema".to_string(),
+            args: serde_json::json!({"name": "Architecture Decision"}),
+            result,
+            is_error: false,
+            duration_ms: 0,
+        }]);
+
+        assert_eq!(writes.len(), 1, "the create_schema write must be recorded");
+        assert_eq!(
+            writes[0].node_id.as_deref(),
+            Some("architecture_decision"),
+            "the schema's own id must be captured from the tool result — without \
+             it the terse fact rendered into the next turn's history omits the \
+             identifier a later create_node has to copy into node_type"
+        );
+    }
 
     /// Load and render a chat node's history, the way a turn does.
     ///
@@ -3770,6 +3844,497 @@ model = "model-b"
              instead of silently omitting it the way it would if this still \
              read the old 'properties' key: {:?}",
             assistant.content
+        );
+    }
+
+    /// Build one persisted assistant turn carrying a single completed write.
+    fn assistant_turn(content: &str, write: AiChatCompletedWrite) -> AiChatMessage {
+        AiChatMessage {
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            timestamp: None,
+            reasoning: None,
+            completed_writes: vec![write],
+            question: None,
+            options: Vec::new(),
+        }
+    }
+
+    fn user_turn(content: &str) -> AiChatMessage {
+        AiChatMessage {
+            role: "user".to_string(),
+            content: content.to_string(),
+            timestamp: None,
+            reasoning: None,
+            completed_writes: vec![],
+            question: None,
+            options: Vec::new(),
+        }
+    }
+
+    /// The facts agent-matrix scenario 11d depends on ARE in its history.
+    ///
+    /// 11d ("What did we settle on that the rebuild has to respect?") fails for
+    /// every model measured, and the leading hypothesis was that it is
+    /// unwinnable by construction: the prompt template drops `role="tool"`
+    /// history, so if the earlier `create_relationship` result never reached
+    /// the model, no model could traverse a link it cannot see.
+    ///
+    /// This test settles that, and REFUTES it. Tool-role messages are indeed
+    /// dropped by `node_history_from_messages` — the `_ => return Vec::new()`
+    /// arm — but the writes they carried are not lost: each one is re-rendered
+    /// as a terse "Fact: ..." line plus a system-role record of the write. So
+    /// the turn going into 11d can see both endpoint ids AND the edge between
+    /// them, stated twice.
+    ///
+    /// Which inverts the diagnosis. 11d is not starved of the fact; it is
+    /// HANDED the answer. A model that reads its history and replies without
+    /// traversing is behaving reasonably — the prompt is answerable from what
+    /// it was given — and `TOOL_STRATEGY_RULES`'s first bullet ("CONVERSATIONAL
+    /// TURNS USE NO TOOLS ... answer directly in text") points the same way.
+    /// That makes the across-the-board failure a property of the scenario's
+    /// setup rather than a harness defect or a capability gap, and it is why
+    /// this is pinned as a test: the next person to read "every model returns
+    /// tools: []" should find the refutation here rather than re-derive it.
+    #[test]
+    fn scenario_11d_history_already_contains_the_link_it_asks_about() {
+        let history = node_history_from_messages(vec![
+            user_turn("Log a decision: the reports page uses server-side rendering"),
+            assistant_turn(
+                "I logged the decision.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://dec1".to_string()),
+                    summary: Some("the reports page uses server-side rendering".to_string()),
+                    canonical_args:
+                        r#"{"content":"server-side rendering","node_type":"text"}"#.to_string(),
+                },
+            ),
+            user_turn("Add a task to rebuild the reports page"),
+            assistant_turn(
+                "Added the task.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://task1".to_string()),
+                    summary: Some("rebuild the reports page".to_string()),
+                    canonical_args:
+                        r#"{"content":"rebuild the reports page","node_type":"task"}"#.to_string(),
+                },
+            ),
+            user_turn("Point that rebuild task at the decision it has to respect"),
+            assistant_turn(
+                "Linked them.",
+                AiChatCompletedWrite {
+                    tool: "create_relationship".to_string(),
+                    // Relationship writes report no node id — see
+                    // `completed_writes_from`. The edge lives in `summary`.
+                    node_id: None,
+                    summary: Some(
+                        "nodespace://task1 -[mentions]-> nodespace://dec1".to_string(),
+                    ),
+                    canonical_args: r#"{"from_id":"nodespace://task1","relationship_type":"mentions","to_id":"nodespace://dec1"}"#.to_string(),
+                },
+            ),
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains("nodespace://task1") && rendered.contains("nodespace://dec1"),
+            "both endpoint ids must survive into 11d's history, or the traversal \
+             genuinely has nothing to act on: {rendered}"
+        );
+        assert!(
+            rendered.contains("mentions"),
+            "the recorded edge must survive into 11d's history — its absence is \
+             what would have made the scenario unwinnable: {rendered}"
+        );
+        assert!(
+            rendered.contains("server-side rendering"),
+            "the DECISION's own text — the literal answer to 'what did we settle \
+             on' — is present in history, which is why a model can answer 11d \
+             without traversing anything: {rendered}"
+        );
+        assert!(
+            !history.iter().any(|m| matches!(m.role, Role::Tool)),
+            "tool-role messages really are dropped from rebuilt history, so the \
+             assertions above are evidence that the writes are re-rendered \
+             through another channel rather than that tool history survives"
+        );
+    }
+
+    /// The facts agent-matrix scenario 6 depends on ARE in its history.
+    ///
+    /// 6 asserts the `[resolve_query, update_node]` subsequence for "The
+    /// five-day one got signed off — mark it that way". The scenario's own
+    /// comment explains the design intent: "the five-day one" is meant to be an
+    /// INDIRECT reference that only `resolve_query` can resolve, deliberately
+    /// chosen over the spec's name so a plain `search_nodes` could not shortcut
+    /// it.
+    ///
+    /// That intent does not survive contact with the rendered history. The
+    /// create_node write from scenario 4 is re-rendered with its property
+    /// values inline — "properties estimated_days 5 ... (id nodespace://fw1)" —
+    /// so the discriminator AND the node id are both sitting in the prompt as
+    /// plain text. "The five-day one" is therefore a direct string match
+    /// against history, not an indirect reference at all, and a model can go
+    /// straight to `update_node` with the right id.
+    ///
+    /// This is the mechanism behind the observed failure where a capable model
+    /// called `update_node`, produced the correct end state, and scored red
+    /// only for skipping `resolve_query`. Pinned here because the fixture's
+    /// comment asserts the opposite, and a reader trusting that comment would
+    /// look for the bug in `resolve_query` rather than in the history.
+    #[test]
+    fn scenario_6_history_resolves_its_indirect_reference_directly() {
+        let history = node_history_from_messages(vec![
+            user_turn("Put one down for offline sync, still a draft, we reckon five days"),
+            assistant_turn(
+                "Added it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw1".to_string()),
+                    summary: Some("offline sync".to_string()),
+                    canonical_args: r#"{"node_type":"feature_writeup","field_values":{"signed_off":false,"estimated_days":5},"content":"offline sync"}"#.to_string(),
+                },
+            ),
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains("estimated_days 5"),
+            "the day count scenario 6 discriminates on is rendered inline, which \
+             is what turns 'the five-day one' into a direct string match: {rendered}"
+        );
+        assert!(
+            rendered.contains("nodespace://fw1"),
+            "the target node's id is in history too, so update_node needs no \
+             separate resolution step to obtain it: {rendered}"
+        );
+    }
+
+    /// What matrix scenario 12's rendered history does and does NOT contain.
+    ///
+    /// SCOPE, because an earlier version of this test was read as proving more
+    /// than it does. It establishes that the history does not LEXICALLY STATE
+    /// the ordering — no "biggest", "largest", "highest". It does NOT establish
+    /// that the ordering is underivable, and those are different claims.
+    ///
+    /// They are different because the three estimates and all three ids are
+    /// rendered inline, adjacent, in a uniform format. `max(9, 21, 4)` is an
+    /// in-context comparison, so a model can pick the right id without reading
+    /// anything back. Scenario 12 is therefore a test of comparative reference
+    /// RESOLUTION, not of decomposition; the group header in
+    /// scripts/eval/fixtures/agent-matrix.ts carries the full reasoning, and
+    /// #2248 tracks the decomposition gap that remains open.
+    ///
+    /// The negative assertion is kept anyway, because it still pins something
+    /// real: if a future change to `terse_write_fact` started emitting a
+    /// superlative (a "largest estimate" summary line, say), 12d would degrade
+    /// from "rank three values" to "match one word" — the exact decay that cost
+    /// scenario 6 its indirection — and this test is what would catch it.
+    ///
+    /// The positive assertions are load-bearing in the other direction: they
+    /// stop the negative one passing vacuously on an empty render, which a
+    /// broken helper or a changed role filter would otherwise produce.
+    #[test]
+    fn scenario_12_history_states_the_values_but_not_the_ordering() {
+        let history = node_history_from_messages(vec![
+            user_turn("Log the checkout rewrite, we think nine days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw10".to_string()),
+                    summary: Some("checkout rewrite".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":9},"content":"checkout rewrite"}"#
+                            .to_string(),
+                },
+            ),
+            user_turn("Also the search indexer, that one's twenty-one days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw11".to_string()),
+                    summary: Some("search indexer".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":21},"content":"search indexer"}"#
+                            .to_string(),
+                },
+            ),
+            user_turn("And the audit log export, call it four days"),
+            assistant_turn(
+                "Logged it.",
+                AiChatCompletedWrite {
+                    tool: "create_node".to_string(),
+                    node_id: Some("nodespace://fw12".to_string()),
+                    summary: Some("audit log export".to_string()),
+                    canonical_args:
+                        r#"{"node_type":"feature_writeup","field_values":{"estimated_days":4},"content":"audit log export"}"#
+                            .to_string(),
+                },
+            ),
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Positive: the three instances and their estimates ARE in history.
+        // Without these, the negative assertion below could pass on an empty
+        // string — which would make the scenario look winnable while measuring
+        // nothing at all.
+        for (title, days, id) in [
+            ("checkout rewrite", "estimated_days 9", "nodespace://fw10"),
+            ("search indexer", "estimated_days 21", "nodespace://fw11"),
+            ("audit log export", "estimated_days 4", "nodespace://fw12"),
+        ] {
+            assert!(
+                rendered.contains(title),
+                "setup instance '{title}' must be in history, or scenario 12 has \
+                 nothing to compare: {rendered}"
+            );
+            assert!(
+                rendered.contains(days),
+                "'{days}' must be in history, or the comparison has no values to \
+                 range over: {rendered}"
+            );
+            assert!(
+                rendered.contains(id),
+                "'{id}' must be in history — with every id inline, choosing the \
+                 right one is a ranking problem rather than a lookup, which is \
+                 what scenario 12 measures: {rendered}"
+            );
+        }
+
+        // Negative: nothing in history STATES the ordering, so the prompt's
+        // words ("the biggest") match no substring of it and 12d cannot be
+        // answered by lookup alone. Note the limit of this claim: the values
+        // themselves ARE inline, so the ranking is still derivable in-context.
+        // See this test's docstring.
+        let lowered = rendered.to_lowercase();
+        for phrase in [
+            "biggest",
+            "largest",
+            "longest",
+            "highest",
+            "most days",
+            "the max",
+        ] {
+            assert!(
+                !lowered.contains(phrase),
+                "history must not name the ordering ('{phrase}'), or scenario 12's \
+                 comparative reference degenerates into the direct string match \
+                 that cost scenario 6 its indirection: {rendered}"
+            );
+        }
+    }
+
+    /// Matrix scenario 13's referent is absent from its rendered history.
+    ///
+    /// This is the test scenarios 6 and 12 could not have passed, and it is the
+    /// point of seeding 13's state out of band.
+    ///
+    /// 6 named "the five-day one" and #2242 found `estimated_days 5` and the id
+    /// both rendered inline. 12 named a comparative over three written values,
+    /// and #2250's review found the values themselves inline, so the ranking was
+    /// derivable without a read. Both failed for one underlying reason: every
+    /// scalar a scored turn writes is replayed by `terse_write_fact`, so a
+    /// referent the AGENT wrote is always in the prompt as literal text.
+    ///
+    /// 13's incident records are created through the CLI before the group's
+    /// first turn, never by a tool call. `completed_writes_from` only records a
+    /// turn's own tool executions, so none of that state reaches the rendered
+    /// prompt — which this test asserts directly, on the real renderer.
+    ///
+    /// The history modelled here is 13's actual shape: the scored turn is the
+    /// FIRST turn of its group, so the only thing preceding it is nothing at
+    /// all. The assertions are written against a history containing an
+    /// unrelated earlier exchange as well, which is the stricter case: it
+    /// proves the referent is absent even when history is non-empty, so the
+    /// negative assertions cannot pass merely because there is nothing to
+    /// search.
+    #[test]
+    fn scenario_13_seeded_referent_is_absent_from_history() {
+        let history = node_history_from_messages(vec![
+            user_turn("What can you do?"),
+            AiChatMessage {
+                role: "assistant".to_string(),
+                content: "I can help you track work in your graph.".to_string(),
+                timestamp: None,
+                reasoning: None,
+                completed_writes: vec![],
+                question: None,
+                options: Vec::new(),
+            },
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Positive: history rendered at all. Without this the negative
+        // assertions below would pass on an empty string, which is precisely
+        // the vacuous-pass trap that let scenario 12's proof look sound.
+        assert!(
+            rendered.contains("What can you do?"),
+            "the unrelated turn must render, or the absence assertions below \
+             prove nothing: {rendered}"
+        );
+
+        // Negative: nothing about the seeded incidents is in the prompt. Each
+        // of these is a separate route by which a model could shortcut the
+        // lookup, and all must be closed for 13 to measure decomposition.
+        for absent in [
+            // The on-call name the prompt refers to.
+            "rowan",
+            // The target's title — what `contentMatches` scores on.
+            "search index corruption",
+            // The other two seeded records: present in the graph, and their
+            // absence here is what makes the lookup discriminate rather than
+            // guess.
+            "checkout latency spike",
+            "auth token expiry storm",
+            // The type and the property name. Absent from HISTORY, which is
+            // what this test covers — but NOT absent from the prompt overall:
+            // workspace context retrieves the seeded schema semantically and
+            // renders both into the system prompt. Asserted here anyway,
+            // because history is a channel they have no business appearing in
+            // and a change that put them there would be a real regression;
+            // just do not read these two lines as proof the model cannot see
+            // them. See
+            // `scenario_13_seeded_schema_reaches_the_prompt_but_its_instances_do_not`
+            // in packages/core/src/ops/context_ops.rs for the channel that
+            // does carry them, and why 13 is still sound.
+            "incident_report",
+            "on_call",
+        ] {
+            assert!(
+                !rendered.to_lowercase().contains(absent),
+                "'{absent}' must NOT be in the rendered history — scenario 13's \
+                 referent is seeded out of band precisely so no part of it \
+                 reaches the prompt. A leak here means 13 has degraded into the \
+                 direct string match that cost scenarios 6 and 12 their \
+                 indirection: {rendered}"
+            );
+        }
+    }
+
+    /// Scenario 13's ACTUAL history shape: empty.
+    ///
+    /// The test above deliberately uses a non-empty unrelated history, which is
+    /// the stricter case for the negative assertions — it proves the referent is
+    /// absent even when there is text to find it in. This pins the shape 13
+    /// really runs with, since 13 is the first and only scenario in its group.
+    ///
+    /// Trivial by construction, and that is the point worth recording: with no
+    /// prior turns there is no history channel at all, so the referent's absence
+    /// from it is structural rather than contingent on what got rendered.
+    #[test]
+    fn scenario_13_runs_with_no_prior_history() {
+        let history = node_history_from_messages(Vec::new());
+        assert!(
+            history.is_empty(),
+            "13 is the first turn of its group, so it has no prior history — the \
+             referent cannot leak through a channel that carries nothing: \
+             {history:?}"
+        );
+    }
+
+    /// A turn's OWN write leaks the target's title into the next turn — which
+    /// is why scenario 13 is a single-turn group.
+    ///
+    /// Discovered while proving 13's referent absent. The `Fact:` line for an
+    /// `update_node` is id-and-values only, so that channel is clean. The
+    /// EVIDENCE BLOCK is not: `completed_writes_message` renders
+    /// `- update_node "<summary>" -> <id>`, and `write_summary_arg` resolves an
+    /// update's summary through `content`/`title`, so the node's title lands in
+    /// the prompt verbatim.
+    ///
+    /// For scenario 13 as written this is harmless: it is the only scenario in
+    /// its group, so nothing ever reads the history its write produces. It is
+    /// pinned anyway because it is a live constraint on that group — APPENDING
+    /// A SECOND SCENARIO TO 13'S GROUP WOULD HAND THE MODEL THE SEEDED TITLE,
+    /// re-creating exactly the direct-string-match defect that cost scenarios 6
+    /// and 12 their indirection, and it would do so silently.
+    ///
+    /// Asserts current behavior deliberately. If `write_summary_arg` is ever
+    /// narrowed for updates, this test fails and the constraint above can be
+    /// relaxed.
+    #[test]
+    fn a_turns_own_write_leaks_its_targets_title_via_the_evidence_block() {
+        let history = node_history_from_messages(vec![
+            user_turn("The incident Rowan was on call for — mark it resolved"),
+            assistant_turn(
+                "Marked it resolved.",
+                AiChatCompletedWrite {
+                    tool: "update_node".to_string(),
+                    node_id: Some("nodespace://inc2".to_string()),
+                    summary: Some("search index corruption".to_string()),
+                    canonical_args: r#"{"id":"nodespace://inc2","field_values":{"resolved":true}}"#
+                        .to_string(),
+                },
+            ),
+        ]);
+
+        let rendered = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // The write's own fact renders — the turn did happen.
+        assert!(
+            rendered.contains("nodespace://inc2"),
+            "the turn's own write must render as a fact: {rendered}"
+        );
+
+        // The `Fact:` phrasing for update_node is id-and-values only.
+        assert!(
+            rendered.contains("was updated with resolved true"),
+            "update_node's fact should carry its values, not its title: {rendered}"
+        );
+
+        // But the evidence block DOES carry the title. Pinned as the constraint
+        // it is, not asserted away.
+        assert!(
+            rendered.contains(r#"update_node "search index corruption""#),
+            "EXPECTED LEAK: the evidence block renders the update's summary, \
+             which resolves to the node's title. If this no longer holds, \
+             `write_summary_arg` was narrowed and scenario 13's group may safely \
+             gain a second scenario — see this test's docstring: {rendered}"
+        );
+
+        // The on-call value is not part of the WRITE's rendering. It is in the
+        // rendered history — but only because the user's own prompt is replayed
+        // verbatim, which is unavoidable and harmless: the model already said
+        // it. What matters is that the write does not ALSO surface it as
+        // established fact, so scope this to the write's own lines rather than
+        // to the whole transcript.
+        let write_lines: String = rendered
+            .lines()
+            .filter(|l| l.starts_with("Fact:") || l.trim_start().starts_with("- "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !write_lines.to_lowercase().contains("rowan"),
+            "the on-call value is not part of this write and must not be \
+             rendered as a completed fact: {write_lines}"
         );
     }
 

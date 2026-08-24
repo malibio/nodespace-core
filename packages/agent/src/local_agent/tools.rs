@@ -1050,9 +1050,18 @@ fn def_create_relationship() -> ToolDefinition {
                     "type": "string",
                     "description": "Id of the record acted upon — the one being superseded, blocked, or belonged to. Copied exactly from a tool result."
                 },
+                // Stated as prose rather than a JSON `enum`, deliberately —
+                // ADR-064 rule 1 otherwise prefers the schema channel, because
+                // a stated constraint measurably outperforms prose. It cannot
+                // apply here: the legal set is SOURCE-NODE-DEPENDENT (whatever
+                // that node's own type declares, plus the four universals), so
+                // no static list is correct for every call. An enum naming only
+                // the universals would be wrong in the other direction —
+                // forbidding the schema-declared names this parameter exists to
+                // encourage.
                 "relationship_type": {
                     "type": "string",
-                    "description": "The relation's name, lowercase snake_case. Use a name defined on the relevant schema(s) (e.g. 'supersedes', 'has_task') if one applies, otherwise a generic label (member_of, mentions, related_to, etc.)."
+                    "description": "The relation's name, lowercase snake_case. Must be either a relationship DECLARED on the source record's own type (e.g. 'supersedes', 'has_task'), or one of these four universal names, which are legal between any two records: member_of, has_child, mentions, has_role. Any other name is rejected — when no declared relation fits, use 'mentions'."
                 }
             },
             "required": ["from_id", "to_id", "relationship_type"]
@@ -1751,6 +1760,46 @@ impl Tool {
         matches!(self.write_semantics(), WriteSemantics::DuplicableWrite)
     }
 
+    /// Whether this tool irreversibly removes data the user already has.
+    ///
+    /// A strict subset of [`Tool::is_write`], and deliberately narrower:
+    /// `is_write` asks whether the graph changes at all, this asks whether
+    /// something the user already stored goes away. Creating an unwanted node
+    /// or setting a wrong status is a write the user can see and correct;
+    /// deleting the node they meant to update is not. Routing uses that
+    /// distinction to gate the surface hardest against the one error that
+    /// cannot be walked back (ADR-038: "the expensive error ... is gated
+    /// hardest").
+    ///
+    /// Note this is a different question from [`Tool::duplicate_is_destructive`],
+    /// whose "destructive" is about *repeating* a call across turns — a second
+    /// `create_node` duplicating the user's data. That is a cross-turn
+    /// idempotency property; this one is about what a single successful call
+    /// does.
+    ///
+    /// An exhaustive match rather than a list, for the same reason
+    /// [`Tool::write_semantics`] is: a tool added later must not silently
+    /// default to "safe", it has to be classified by whoever adds it.
+    pub fn removes_user_data(self) -> bool {
+        match self {
+            Tool::DeleteNode => true,
+            Tool::SearchNodes
+            | Tool::ResolveQuery
+            | Tool::SearchSemantic
+            | Tool::GetNode
+            | Tool::GetRelatedNodes
+            | Tool::SearchSkills
+            | Tool::RouteClarify
+            | Tool::UpdateNode
+            | Tool::UpdateTaskStatus
+            | Tool::UpdateSchema
+            | Tool::CreateNode
+            | Tool::CreateSchema
+            | Tool::CreateRelationship
+            | Tool::CreateNodesFromMarkdown => false,
+        }
+    }
+
     /// Whether this tool has a required parameter whose description sends the
     /// model to the `EXISTING SCHEMAS` block that only Stage-2 routing
     /// (`routing::render_candidates_for_prompt`) injects.
@@ -1842,6 +1891,22 @@ pub fn is_write_tool(tool: &str) -> bool {
     Tool::from_name(tool).is_some_and(Tool::is_write)
 }
 
+/// Whether a tool irreversibly removes user data, by wire name. Computed from
+/// the registry.
+///
+/// An unrecognised name is **not** destructive. This is the opposite of how
+/// `routing::skill_is_mutating` treats an unknown name, and the asymmetry is
+/// deliberate: there, an unknown blast radius must not get the *lower* bar, so
+/// the unknown case is pushed up to "mutating". Here, an unknown name is
+/// already covered by that mutating classification, and calling it destructive
+/// as well would raise the strictest bar in the system on every skill that
+/// merely has a typo'd or externally-registered tool in its whitelist.
+/// Destructiveness is an affirmative claim about a tool this build actually
+/// knows.
+pub fn removes_user_data_tool(tool: &str) -> bool {
+    Tool::from_name(tool).is_some_and(Tool::removes_user_data)
+}
+
 /// All tool definitions for the graph executor, derived from the registry.
 pub fn all_tool_definitions() -> Vec<ToolDefinition> {
     // Force evaluation of the completeness proof; an associated const is only
@@ -1904,12 +1969,15 @@ impl GraphToolExecutor {
     /// and/or typed properties.
     ///
     /// Routing is by capability, transparent to the model:
-    /// - **No property filters** (plain title keyword and/or type listing) →
-    ///   `node_ops::query_nodes`, which owns `title contains` matching (the
-    ///   title index is the only path that filters by title).
-    /// - **Property filters present** → `query_ops::execute_query`
+    /// - **No property filters and no sorting** (plain title keyword and/or
+    ///   type listing) → `node_ops::query_nodes`.
+    /// - **Property filters or sorting present** → `query_ops::execute_query`
     ///   (`QueryService`), which pushes typed property conditions to SQL
-    ///   `json_extract` — the correct path for operators and date comparisons.
+    ///   `json_extract` — the correct path for operators and date comparisons,
+    ///   and the only one that honours `sorting`.
+    ///
+    /// Both filter a keyword against `title`, so which one runs never changes
+    /// which nodes a keyword selects.
     ///
     /// Both paths return each node's `properties` in the summary.
     /// Shared search core behind `search_nodes` and `resolve_query`.
@@ -1940,7 +2008,22 @@ impl GraphToolExecutor {
         // matches, silently returning zero results.
         let query = search_ops::normalize_enumerate_query(&query);
 
-        let output = if filters.is_empty() {
+        // `sorting` is only honoured by the QueryService path, so a sorted
+        // request routes there even with no property filters. Sending it down
+        // the `query_nodes` branch instead would accept the argument, drop it,
+        // and hand back an arbitrary row reported as a success — the shape a
+        // model reads as "the largest one" when asking for a superlative via
+        // `sorting` + `limit: 1`.
+        //
+        // Both branches match the keyword against TITLE, so which one runs
+        // cannot change what a keyword means. That matters because title is not
+        // simply the content: a schema carrying a `title_template` builds it
+        // from properties instead, so matching content there would silently
+        // return a DIFFERENT set — trading the dropped-sort bug for a
+        // dropped-keyword one.
+        let sorted = sorting.as_ref().is_some_and(|s| !s.is_empty());
+
+        let output = if filters.is_empty() && !sorted {
             // Title/type listing: only `node_ops::query_nodes` filters by title.
             let filters = query.map(|q| {
                 vec![node_ops::QueryFilterItem {
@@ -1967,14 +2050,15 @@ impl GraphToolExecutor {
             .map_err(|e| ops_error_to_tool(e, tool_name))?
         } else {
             // Typed property query: route through QueryService (SQL json_extract).
-            // A non-empty title keyword is added as a content filter alongside the
-            // property predicates (QueryService has no title path).
+            // A non-empty keyword is added as a title filter alongside the
+            // property predicates, so it selects the same nodes the
+            // `query_nodes` branch above would have selected.
             let mut filters = filters;
             if let Some(q) = query {
                 filters.push(query_ops::AgentFilterItem {
-                    filter_type: Some("content".to_string()),
+                    filter_type: Some("metadata".to_string()),
                     operator: "contains".to_string(),
-                    property: None,
+                    property: Some("title".to_string()),
                     value: Some(Value::String(q)),
                     case_sensitive: Some(false),
                     relationship_type: None,
@@ -3758,6 +3842,40 @@ mod tests {
     }
 
     #[test]
+    fn removing_user_data_is_a_strict_subset_of_writing() {
+        // Routing gates hardest on the tools that cannot be walked back, so
+        // this classification must never widen past the writes — a read that
+        // claimed to remove data would raise the strictest bar over a search.
+        for tool in Tool::ALL {
+            if tool.removes_user_data() {
+                assert!(
+                    tool.is_write(),
+                    "{} removes user data but is not classified as a write",
+                    tool.name()
+                );
+            }
+        }
+
+        let destructive: Vec<&str> = Tool::ALL
+            .iter()
+            .filter(|t| t.removes_user_data())
+            .map(|t| t.name())
+            .collect();
+        // Pinned deliberately rather than asserted loosely: adding a second
+        // destructive tool should make an author confirm the routing bar is
+        // what they want for it, not slip in silently.
+        assert_eq!(destructive, vec!["delete_node"]);
+    }
+
+    #[test]
+    fn an_unregistered_tool_name_does_not_count_as_removing_user_data() {
+        // The asymmetry with `is_write_tool`'s unknown handling is deliberate
+        // and load-bearing — see `removes_user_data_tool`'s doc comment.
+        assert!(!removes_user_data_tool("some_external_tool"));
+        assert!(removes_user_data_tool("delete_node"));
+    }
+
+    #[test]
     fn route_clarify_schema_requires_question_and_options_with_id_and_label() {
         let def = def_route_clarify();
         let schema = &def.parameters_schema;
@@ -3879,17 +3997,56 @@ mod tests {
     }
 
     /// `relationship_type` should steer the model toward schema-defined
-    /// relationship names before generic labels.
+    /// relationship names before generic labels, and must not offer a name the
+    /// validator rejects.
+    ///
+    /// The second half is the one that shipped broken (#2234): this test used
+    /// to assert only the literal phrase "relevant schema", which the old
+    /// description satisfied while also recommending `related_to` — a name
+    /// `NodeService::create_relationship` refuses unless the source node's own
+    /// schema declares it. Asserting a phrase let the contradiction through, so
+    /// the checks below are on the description's SUBSTANCE: it must point at
+    /// schema-declared names, and every generic label it names must actually be
+    /// legal.
     #[test]
     fn create_relationship_type_prefers_schema_defined_names() {
+        use nodespace_core::models::schema::BUILTIN_RELATIONSHIP_NAMES;
+
         let def = Tool::CreateRelationship.definition();
         let desc = def.parameters_schema["properties"]["relationship_type"]["description"]
             .as_str()
             .unwrap()
             .to_string();
+        // Asserts that the description states the CONSTRAINT — that a name
+        // outside the legal set is refused — rather than that it contains some
+        // particular noun. Three drafts of this check were weaker than they
+        // looked, which is the whole reason this test is being rewritten:
+        //   - `contains("relevant schema")` (the original) passed on the
+        //     broken description that also recommended `related_to`;
+        //   - `contains("schema") || contains("type")` was near-vacuous, since
+        //     the parameter is itself named `relationship_type`;
+        //   - `contains("declared")` looked precise but is satisfied by the
+        //     trailing "when no declared relation fits" clause, so a
+        //     description that DROPPED the requirement still passed —
+        //     verified by mutation.
+        // "rejected" is the one word that has to survive: it is what tells the
+        // model the set is closed, and no other clause supplies it.
         assert!(
-            desc.contains("relevant schema"),
-            "relationship_type description must point at schema-defined relationship names, got: {desc:?}"
+            desc.contains("rejected"),
+            "relationship_type description must state that a name outside the legal set is \
+             REJECTED — without it the model has no signal the set is closed, got: {desc:?}"
+        );
+        for name in BUILTIN_RELATIONSHIP_NAMES {
+            assert!(
+                desc.contains(name),
+                "relationship_type description must name the universal relationship {name:?} \
+                 so the model has a legal fallback, got: {desc:?}"
+            );
+        }
+        assert!(
+            !desc.contains("related_to"),
+            "relationship_type description offers 'related_to', which the validator \
+             rejects unless the source node's schema declares it (#2234), got: {desc:?}"
         );
     }
 
