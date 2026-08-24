@@ -268,16 +268,94 @@ export function seededSkillCount(
 }
 
 /**
- * Number of seeded skill nodes that are semantically retrievable right now.
+ * Number of seeded skill nodes that carry an embedding right now.
  *
- * Counts via a semantic `--type skill` search rather than a plain node count:
- * the question is not whether the rows exist (they are inserted synchronously
- * at startup) but whether they carry EMBEDDINGS, which is what skill retrieval
- * actually queries. A type-only enumeration returns every skill the instant the
- * daemon boots and would wave through exactly the broken state this detects.
+ * Counts embedded rows in SQL rather than issuing a semantic search, because
+ * no CLI query can answer this question. `search --type skill` with a real
+ * query is filtered by the default Knowledge scope (text/header/code-block/
+ * schema/table), which does not include `skill`, and the CLI exposes no
+ * `--scope` flag to widen it (`packages/cli/src/commands/search.rs`). The
+ * scope filter is bypassed only for an ENUMERATE query, so the two obvious
+ * probes sit on opposite sides of `should_skip_scope_filter`
+ * (`packages/core/src/ops/search_ops.rs`):
+ *
+ *   search "update an existing node" --type skill  -> always 0 (scope-filtered)
+ *   search ""                        --type skill  -> 8       (bypass applies)
+ *
+ * The previous implementation used the first as its numerator and the second
+ * as its denominator, so the gate compared 8 against a structurally-zero count
+ * and could never pass — it blocked every run of the matrix, for every model,
+ * until its 120s timeout expired.
+ *
+ * Switching the numerator to the enumerate form is NOT the fix: `enumerate_nodes`
+ * queries rows by type and never consults embeddings, so it returns every skill
+ * the instant the daemon boots and would wave through exactly the cold-index
+ * state this gate exists to catch.
+ *
+ * Reading the embedding table directly is the only probe that asserts the real
+ * property. The path comes from the daemon's own `database list`, so it cannot
+ * drift onto a different database than the one being scored.
  */
-function retrievableSkillCount(env: EvalEnv, limit: number): number {
-  return skillSearchCount(env, "update an existing node", limit) ?? 0;
+function retrievableSkillCount(env: EvalEnv): number {
+  return embeddedSkillCount(readServedDatabasePath(env));
+}
+
+/**
+ * Skill rows carrying an embedding, read from the served database.
+ *
+ * Returns 0 — never a fallback count — when the query cannot be run at all, so
+ * an unreadable database keeps the gate waiting rather than waving it through.
+ *
+ * "Cannot be run" includes `sqlite3` not being installed. `Bun.spawnSync`
+ * THROWS on a missing executable rather than returning a non-zero `exitCode`,
+ * so the exit-code branch alone does not deliver the guarantee above: the throw
+ * would escape through `awaitSkillIndex` into `gate()`, which converts only
+ * `EnvironmentError` into an actionable message and rethrows anything else as a
+ * raw stack trace — on the environment-vs-model boundary this gate exists to
+ * police. The whole probe call is therefore wrapped, which also covers an
+ * injected probe that throws, not just the default one.
+ *
+ * `sqlite3` is a real dependency of this gate. The other mentions of it in this
+ * file are remediation TEXT printed for a human, never executed, so they do not
+ * establish it as already-required — this is the first place the harness runs
+ * it. It ships with macOS and every mainstream Linux; a machine without it
+ * fails closed here rather than silently scoring.
+ */
+export function embeddedSkillCount(
+  dbPath: string,
+  run: (db: string) => { exitCode: number | null; stdout: string } = (db) => {
+    const r = Bun.spawnSync(
+      [
+        "sqlite3",
+        db,
+        "SELECT COUNT(DISTINCT e.node_id) FROM node n " +
+          "JOIN embedding e ON e.node_id = n.id WHERE n.node_type = 'skill'",
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: SKILL_PROBE_TIMEOUT_MS },
+    );
+    return { exitCode: r.exitCode, stdout: r.stdout.toString() };
+  },
+): number {
+  if (!dbPath) return 0;
+  let r: { exitCode: number | null; stdout: string };
+  try {
+    r = run(dbPath);
+  } catch {
+    // Deliberately unnarrowed. This also swallows a programming error inside a
+    // caller-supplied probe, which is a real cost — but the alternative is
+    // matching on Bun's "Executable not found in $PATH" message, which couples
+    // this gate to a runtime's error text. Failing closed is the safe direction
+    // either way: a swallowed throw leaves the count at 0, so the gate reports
+    // an actionable EnvironmentError rather than scoring against an index it
+    // could not verify.
+    //
+    // `readServedDatabasePath` is evaluated by the CALLER, outside this try, so
+    // its own fail-closed EnvironmentError still propagates instead of being
+    // flattened into a misleading "index not ready".
+    return 0;
+  }
+  if (r.exitCode !== 0) return 0;
+  return Number.parseInt(r.stdout.trim(), 10) || 0;
 }
 
 /**
@@ -306,18 +384,18 @@ export function awaitSkillIndex(
   env: EvalEnv,
   timeoutMs: number = SKILL_INDEX_TIMEOUT_MS,
   // Derived from the database by default (see `seededSkillCount`); injectable
-  // so the wait/timeout behaviour stays testable without a daemon. Declared
-  // BEFORE `probe` deliberately: `probe`'s own default reads this parameter,
-  // and TypeScript default-value closures may reference any earlier parameter
-  // in the list — putting `expected` after would make that a forward
-  // reference, correct today only because JS resolves default expressions at
-  // call time rather than at declaration time. Ordering it first makes the
-  // dependency visible instead of relying on that.
+  // so the wait/timeout behaviour stays testable without a daemon.
+  //
+  // This used to sit before `probe` because `probe`'s default read it; that
+  // dependency is gone (the default is now `(e) => retrievableSkillCount(e)`,
+  // which counts embedded rows and needs no expected value). The order is kept
+  // only because it is the published signature and every caller passes
+  // positionally — there is no longer a forward-reference hazard either way.
   expected: number = seededSkillCount(env),
   // Injected so the wait/timeout logic is testable without a daemon: the
   // interesting behaviour is "waits for a late index, gives up on one that
   // never arrives", and neither is expressible against a live process.
-  probe: (env: EvalEnv) => number = (e) => retrievableSkillCount(e, expected),
+  probe: (env: EvalEnv) => number = (e) => retrievableSkillCount(e),
   sleep: (ms: number) => void = (ms) => Bun.sleepSync(ms),
   now: () => number = Date.now,
 ): void {

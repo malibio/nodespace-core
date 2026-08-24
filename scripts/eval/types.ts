@@ -251,6 +251,14 @@ export interface ScenarioResult {
    * same reason as `excludedAsEmptyGeneration`.
    */
   excludedAsToolNotOffered?: boolean;
+  /**
+   * A `setup: true` turn earlier in this scenario's group failed its own
+   * assertion, so the state this scenario depends on was never established and
+   * its assertion is unreachable. Excluded from the denominator for the same
+   * reason as `excludedAsToolNotOffered`: the harness knows the precondition is
+   * missing, so a red here would describe the fixture, not the model.
+   */
+  excludedAsSetupFailed?: boolean;
 }
 
 /**

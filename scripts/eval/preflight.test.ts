@@ -8,7 +8,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { awaitSkillIndex, extractSeedEntries, seededSkillCount } from "./preflight.ts";
+import {
+  awaitSkillIndex,
+  embeddedSkillCount,
+  extractSeedEntries,
+  seededSkillCount,
+} from "./preflight.ts";
 
 describe("extractSeedEntries", () => {
   test("extracts key and version from seeded nodes", () => {
@@ -196,5 +201,64 @@ describe("seededSkillCount", () => {
   // generic "index not ready" — the wrong fault, reported late.
   test("reports broken seeding instead of waiting for skills that cannot appear", () => {
     expect(() => seededSkillCount(env, () => 0)).toThrow(/zero skill nodes/);
+  });
+});
+
+// -- embeddedSkillCount -------------------------------------------------
+//
+// The gate this feeds must be able to FAIL. Its predecessor could not: the
+// numerator was scope-filtered to a structural zero while the denominator was
+// an enumerate, so it blocked every run until timeout. These assert both
+// directions — a warm index passes, and a cold one does not — because a probe
+// that always returns the seed count is exactly as broken as one that always
+// returns zero, just in the opposite direction.
+
+describe("embeddedSkillCount", () => {
+  test("reports the embedded row count on a warm index", () => {
+    const n = embeddedSkillCount("/db", () => ({ exitCode: 0, stdout: "8\n" }));
+    expect(n).toBe(8);
+  });
+
+  test("reports 0 on a cold index, so the gate keeps waiting", () => {
+    // Rows exist but carry no embeddings yet — the state the gate exists for.
+    const n = embeddedSkillCount("/db", () => ({ exitCode: 0, stdout: "0\n" }));
+    expect(n).toBe(0);
+  });
+
+  test("reports a partial index, so a half-embedded state does not pass", () => {
+    const n = embeddedSkillCount("/db", () => ({ exitCode: 0, stdout: "5\n" }));
+    expect(n).toBe(5);
+  });
+
+  test("fails closed when the query cannot run", () => {
+    // An unreadable database must keep the gate waiting rather than wave it
+    // through on a fallback count.
+    expect(embeddedSkillCount("/db", () => ({ exitCode: 1, stdout: "" }))).toBe(0);
+    expect(embeddedSkillCount("/db", () => ({ exitCode: null, stdout: "" }))).toBe(0);
+  });
+
+  test("fails closed on unparseable output", () => {
+    expect(embeddedSkillCount("/db", () => ({ exitCode: 0, stdout: "oops" }))).toBe(0);
+  });
+
+  test("fails closed when the probe THROWS", () => {
+    // `Bun.spawnSync` throws on a missing executable rather than returning a
+    // non-zero exitCode, so a machine without `sqlite3` took neither of the
+    // guarded branches — the throw escaped into `gate()`, which renders only
+    // EnvironmentError actionably and rethrows the rest as a stack trace.
+    const n = embeddedSkillCount("/db", () => {
+      throw new Error("Executable not found in $PATH: sqlite3");
+    });
+    expect(n).toBe(0);
+  });
+
+  test("fails closed when no database path is known", () => {
+    let ran = false;
+    const n = embeddedSkillCount("", () => {
+      ran = true;
+      return { exitCode: 0, stdout: "8\n" };
+    });
+    expect(n).toBe(0);
+    expect(ran).toBe(false);
   });
 });

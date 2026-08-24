@@ -436,9 +436,21 @@ export function partitionExcluded(results: ScenarioResult[]): {
    * and leaving it uncounted made the totals stop reconciling.
    */
   toolNotOfferedCount: number;
+  /**
+   * Turns excluded because a setup turn in their group failed.
+   *
+   * Counted separately for the same reason as `toolNotOfferedCount`: it names a
+   * distinct cause (the fixture's own precondition), and folding it into the
+   * others would hide which failure a run is suffering.
+   */
+  setupFailedCount: number;
 } {
   const scored = results.filter(
-    (r) => !r.excludedAsEmptyGeneration && !r.excludedAsSetup && !r.excludedAsToolNotOffered,
+    (r) =>
+      !r.excludedAsEmptyGeneration &&
+      !r.excludedAsSetup &&
+      !r.excludedAsToolNotOffered &&
+      !r.excludedAsSetupFailed,
   );
   return {
     scored,
@@ -447,6 +459,7 @@ export function partitionExcluded(results: ScenarioResult[]): {
       (r) => r.excludedAsSetup && !r.excludedAsEmptyGeneration,
     ).length,
     toolNotOfferedCount: results.filter((r) => r.excludedAsToolNotOffered).length,
+    setupFailedCount: results.filter((r) => r.excludedAsSetupFailed).length,
   };
 }
 
@@ -536,6 +549,17 @@ export function aggregateReps(reps: ScenarioResult[][]): RunAggregate {
 }
 
 /**
+ * How many distinct tools a full-pass run must have called to be believed.
+ *
+ * Set well below the suite's real diversity (a complete matrix run exercises
+ * create/update/search/schema/relationship tools) but above what a degenerate
+ * environment can produce: a run whose every turn dies calls zero tools, and one
+ * stuck on a single code path calls one. Three is comfortably clear of both
+ * without pinning the guard to this fixture's exact tool set.
+ */
+const MIN_DISTINCT_TOOLS_FOR_REAL_PASS = 3;
+
+/**
  * Decide whether a scored run's pass rate is uniform enough to be a harness
  * signature rather than a result. Returns `null` when the run is fine, or an
  * `EnvironmentError` when it should abort.
@@ -549,9 +573,33 @@ export function checkUniformity(
   passed: number,
   total: number,
   minScenarios = 4,
+  // Number of DISTINCT tools called across the scored scenarios. The signature
+  // this guard exists to catch produces identical turns - every send failing the
+  // same way, so every turn calls nothing (or the same nothing). A run where the
+  // model actually exercised the suite calls many different tools, and that is
+  // observable without a model in the loop.
+  //
+  // Defaulted to 0 so an omitted argument keeps the pre-existing behaviour
+  // (every uniform run is suspicious); callers that can measure diversity pass
+  // it and get the narrower check.
+  distinctToolsCalled = 0,
 ): EnvironmentError | null {
   if (total < minScenarios) return null;
   if (passed !== 0 && passed !== total) return null;
+  // A full pass with a varied tool surface is a RESULT, not a signature.
+  //
+  // The original premise here - "real runs on this suite have never been
+  // perfectly uniform" - held only while outcome scoring was mis-reading
+  // type-keyed properties and suppressing passes on correct writes. With that
+  // fixed, a capable model legitimately passes everything: DeepSeek V4 Pro
+  // scored 21/21 and this guard discarded the run and wrote no results file.
+  //
+  // A uniform ZERO is left suspicious regardless of diversity: the known false
+  // results were all-fail, and a model that calls varied tools and still fails
+  // every scenario is exactly the "same unhandled code path" case.
+  if (passed === total && distinctToolsCalled >= MIN_DISTINCT_TOOLS_FOR_REAL_PASS) {
+    return null;
+  }
   return new EnvironmentError(
     `Every scored scenario ${passed === 0 ? "FAILED" : "PASSED"} (${passed}/${total}). ` +
       `A rate this uniform across an entire run is a harness signature, not a result — ` +
@@ -810,6 +858,11 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
   };
 
   for (const group of fixture.groups) {
+    // Set when a `setup: true` turn fails its own assertion. Every later
+    // scenario in the group then depends on state that was never established,
+    // so scoring them measures the fixture, not the model — see the exclusion
+    // where this is read.
+    let setupFailed: string | null = null;
     const chatId = newChat(env);
     console.error(
       `[${fixture.name}] chat ${chatId} for: ${group.map((s) => s.id).join(", ")}`,
@@ -848,6 +901,28 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
     const groupNodeIds = new Set<string>();
 
     for (const scenario of group) {
+      // A setup turn earlier in this group failed to establish its state, so
+      // this scenario's assertion is unreachable through no fault of the model.
+      // Excluded on the same grounds as an unrouted turn: the harness has
+      // already declared the precondition missing, and scoring it anyway
+      // produces a red that reads as model behaviour. Setup turns themselves
+      // still run — they are already unscored, and a later one may re-establish
+      // enough state to make the failure legible in the log.
+      if (setupFailed !== null && scenario.setup !== true) {
+        results.push({
+          id: scenario.id,
+          scenario: scenario.scenario,
+          prompt: scenario.prompt,
+          passed: false,
+          turns: [],
+          excludedAsSetupFailed: true,
+        });
+        console.error(
+          `[${fixture.name}] → ${scenario.scenario}\n` +
+            `[${fixture.name}]   ⊗ excluded (setup ${setupFailed} did not establish its state)`,
+        );
+        continue;
+      }
       console.error(`[${fixture.name}] → ${scenario.scenario}`);
 
       // Prior turns establish context and are never scored.
@@ -1009,11 +1084,13 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         console.error(`[${fixture.name}]     ↳ ${verdict.failure}`);
       // A setup turn that failed to establish its state makes every scenario
       // after it unwinnable. It is not scored, but it must not pass silently.
-      if (scenario.setup && !verdict.passed)
+      if (scenario.setup && !verdict.passed) {
         console.error(
           `[${fixture.name}]     ⚠ setup did not establish its state — ` +
-            `later scenarios in this group may be unwinnable`,
+            `later scenarios in this group are excluded, not scored`,
         );
+        setupFailed ??= scenario.id;
+      }
     }
   }
 
@@ -1170,6 +1247,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
         excludedCount,
         setupCount,
         toolNotOfferedCount,
+        setupFailedCount,
       } = partitionExcluded(results);
       const passed = scored.filter((r) => r.passed).length;
 
@@ -1189,7 +1267,15 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
       // rather than on the pooled scores: a single impossible rep is exactly as
       // much a harness signature as a single impossible run, and averaging it
       // into the others is how it would stop being visible.
-      const uniformityError = checkUniformity(passed, scored.length);
+      const distinctToolsCalled = new Set(
+        scored.flatMap((r) => (r.turns ?? []).flatMap((t) => t.toolsCalled ?? [])),
+      ).size;
+      const uniformityError = checkUniformity(
+        passed,
+        scored.length,
+        undefined,
+        distinctToolsCalled,
+      );
       if (uniformityError) abortOnEnvironment(fixture.name, uniformityError);
 
       reps.push({
@@ -1202,6 +1288,7 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
           excludedEmptyGenerations: excludedCount,
           excludedSetup: setupCount,
           excludedToolNotOffered: toolNotOfferedCount,
+          excludedSetupFailed: setupFailedCount,
           trajectoryDisagreements,
         },
         results,
@@ -1329,6 +1416,19 @@ export async function runEval(fixture: EvalFixture): Promise<never> {
   if (toolNotOffered > 0) {
     console.log(
       `   Unrouted: ${toolNotOffered} scenario-rep(s) (asserted tool never offered — not scored)`,
+    );
+  }
+  // Reported separately again, for the same reason: this names the FIXTURE's
+  // own precondition as the cause, which is neither an inference bug nor a
+  // routing miss. Without its own line the denominator shrinks with nothing on
+  // screen to explain it.
+  const setupFailed = reps.reduce(
+    (n, r) => n + (r.summary.excludedSetupFailed ?? 0),
+    0,
+  );
+  if (setupFailed > 0) {
+    console.log(
+      `   Blocked:  ${setupFailed} scenario-rep(s) (group setup failed — not scored)`,
     );
   }
   const disagreements = reps.reduce(

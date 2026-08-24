@@ -781,3 +781,52 @@ describe("agent-matrix minProperties scoring (issue #1937)", () => {
     });
   });
 });
+
+// -- uniformity guard vs. a legitimate full pass -------------------------
+//
+// The guard's original premise ("real runs have never been perfectly uniform")
+// held only while outcome scoring mis-read type-keyed properties and suppressed
+// passes on correct writes. Once that was fixed a capable model passed
+// everything and the guard discarded the run, writing no results file. These
+// pin BOTH directions: a varied full pass is believed, and the degenerate
+// shapes the guard exists for are still caught.
+
+describe("checkUniformity: full pass with tool diversity", () => {
+  test("believes a full pass that called varied tools", () => {
+    expect(checkUniformity(21, 21, undefined, 6)).toBeNull();
+  });
+
+  test("still flags a full pass that called almost nothing", () => {
+    // Every turn passing while the model barely acted is the shape a broken
+    // environment produces - e.g. negative assertions scoring green because
+    // every send died before inference.
+    expect(checkUniformity(21, 21, undefined, 1)).not.toBeNull();
+    expect(checkUniformity(21, 21, undefined, 0)).not.toBeNull();
+  });
+
+  test("still flags a uniform ZERO regardless of diversity", () => {
+    // A model calling many tools and failing every scenario is the "same
+    // unhandled code path" case, so diversity must not excuse it.
+    expect(checkUniformity(0, 21, undefined, 6)).not.toBeNull();
+  });
+
+  test("omitted diversity keeps the strict pre-existing behaviour", () => {
+    expect(checkUniformity(21, 21)).not.toBeNull();
+  });
+
+  // Straddle MIN_DISTINCT_TOOLS_FOR_REAL_PASS rather than testing only far from
+  // it: with cases at 0/1/6 alone the constant could be changed to 4 and every
+  // test would still pass, so the threshold would not actually be pinned.
+  test("accepts a full pass at exactly the threshold", () => {
+    expect(checkUniformity(21, 21, undefined, 3)).toBeNull();
+  });
+
+  test("flags a full pass one below the threshold", () => {
+    expect(checkUniformity(21, 21, undefined, 2)).not.toBeNull();
+  });
+
+  test("a partial result is unaffected either way", () => {
+    expect(checkUniformity(17, 21, undefined, 6)).toBeNull();
+    expect(checkUniformity(17, 21, undefined, 0)).toBeNull();
+  });
+});
