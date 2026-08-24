@@ -35,7 +35,15 @@ function getCurrentVersion(): string {
 }
 
 /**
- * Update version in tauri.conf.json and Cargo.toml
+ * Update version in tauri.conf.json, Cargo.toml, and both package.json files.
+ *
+ * tauri.conf.json, packages/desktop-app/package.json, and src-tauri/Cargo.toml
+ * are the three files scripts/check-version-sync.ts enforces as canonical
+ * (nodespace-core#1686) -- the pre-push gate fails the release commit itself
+ * if any of them drift. This function used to update the ROOT package.json
+ * instead of packages/desktop-app/package.json, which isn't one of the three
+ * check-version-sync.ts actually compares -- every release silently left the
+ * real canonical sibling stale until the next push happened to touch it.
  */
 function updateVersion(newVersion: string): void {
   // Remove 'v' prefix if present
@@ -59,7 +67,17 @@ function updateVersion(newVersion: string): void {
   writeFileSync(cargoPath, cargoContent);
   console.log(`✅ Updated src-tauri/Cargo.toml to ${version}`);
 
-  // Update root package.json
+  // Update packages/desktop-app/package.json -- the canonical sibling
+  // check-version-sync.ts actually checks.
+  const appPackageJsonPath = path.join(process.cwd(), "packages/desktop-app/package.json");
+  const appPackageJson = JSON.parse(readFileSync(appPackageJsonPath, "utf-8"));
+  appPackageJson.version = version;
+  writeFileSync(appPackageJsonPath, JSON.stringify(appPackageJson, null, 2) + "\n");
+  console.log(`✅ Updated packages/desktop-app/package.json to ${version}`);
+
+  // Update root package.json too, for monorepo-wide consistency -- not part
+  // of check-version-sync.ts's canonical set, but there's no reason to leave
+  // it stale.
   const packageJsonPath = path.join(process.cwd(), "package.json");
   const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
   packageJson.version = version;
