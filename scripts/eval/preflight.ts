@@ -341,6 +341,17 @@ export function embeddedSkillCount(
   try {
     r = run(dbPath);
   } catch {
+    // Deliberately unnarrowed. This also swallows a programming error inside a
+    // caller-supplied probe, which is a real cost — but the alternative is
+    // matching on Bun's "Executable not found in $PATH" message, which couples
+    // this gate to a runtime's error text. Failing closed is the safe direction
+    // either way: a swallowed throw leaves the count at 0, so the gate reports
+    // an actionable EnvironmentError rather than scoring against an index it
+    // could not verify.
+    //
+    // `readServedDatabasePath` is evaluated by the CALLER, outside this try, so
+    // its own fail-closed EnvironmentError still propagates instead of being
+    // flattened into a misleading "index not ready".
     return 0;
   }
   if (r.exitCode !== 0) return 0;
@@ -373,13 +384,13 @@ export function awaitSkillIndex(
   env: EvalEnv,
   timeoutMs: number = SKILL_INDEX_TIMEOUT_MS,
   // Derived from the database by default (see `seededSkillCount`); injectable
-  // so the wait/timeout behaviour stays testable without a daemon. Declared
-  // BEFORE `probe` deliberately: `probe`'s own default reads this parameter,
-  // and TypeScript default-value closures may reference any earlier parameter
-  // in the list — putting `expected` after would make that a forward
-  // reference, correct today only because JS resolves default expressions at
-  // call time rather than at declaration time. Ordering it first makes the
-  // dependency visible instead of relying on that.
+  // so the wait/timeout behaviour stays testable without a daemon.
+  //
+  // This used to sit before `probe` because `probe`'s default read it; that
+  // dependency is gone (the default is now `(e) => retrievableSkillCount(e)`,
+  // which counts embedded rows and needs no expected value). The order is kept
+  // only because it is the published signature and every caller passes
+  // positionally — there is no longer a forward-reference hazard either way.
   expected: number = seededSkillCount(env),
   // Injected so the wait/timeout logic is testable without a daemon: the
   // interesting behaviour is "waits for a late index, gives up on one that
