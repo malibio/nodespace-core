@@ -57,6 +57,15 @@ pub struct WorkspaceContext {
     /// against the post-lexical-append length — otherwise an unrelated,
     /// unbounded signal writing into the same vector can silently zero out the
     /// injector's remaining slots. See `local_agent_service.rs::build_workspace_context`.
+    ///
+    /// An upper bound on the true final semantic-sourced count, not always
+    /// exact: it is captured from the raw retrieval hits, before the
+    /// hydration step re-resolves each hit against the full schema corpus and
+    /// can drop one that no longer exists there (e.g. deleted between
+    /// retrieval and hydration). That direction of error is harmless for the
+    /// budget above — it can only make a caller slightly more conservative
+    /// (fewer slots believed available than truly are), never reproduce the
+    /// starvation this field exists to prevent.
     pub semantic_schema_count: usize,
 }
 

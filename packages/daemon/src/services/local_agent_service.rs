@@ -2490,6 +2490,69 @@ mod tests {
             .expect("create ai-chat")
     }
 
+    /// Create a non-core schema node, freshly persisted — so `created_at` is
+    /// "now" and it is eligible for the recency injector's 5-minute window.
+    async fn create_schema_node(node_service: &Arc<NodeService>, display_name: &str) -> String {
+        let node = Node::new(
+            "schema".to_string(),
+            display_name.to_string(),
+            serde_json::json!({ "isCore": false, "fields": [] }),
+        );
+        node_service.create_node(node).await.expect("create schema")
+    }
+
+    /// End-to-end regression for the starvation bug fixed by
+    /// `semantic_schema_count`: an unbounded lexical name-match can no longer
+    /// exhaust the recency injector's budget before the injector runs.
+    ///
+    /// No embedding service is configured, so semantic retrieval always
+    /// returns zero hits — every entry in `relevant_schemas` after this call
+    /// comes from either the lexical backstop or the recency injector, which
+    /// isolates their interaction from semantic search noise. Five schemas
+    /// are created and named outright in the query (enough to exhaust
+    /// `MAX_SCHEMAS = 5` through the lexical backstop alone); a sixth,
+    /// unnamed schema is also freshly created and therefore recency-eligible.
+    /// Before the fix, `remaining_slots` was computed from the post-append
+    /// `relevant_schemas.len()` — already 5 by the time the injector ran — so
+    /// the sixth schema was silently dropped even though semantic search
+    /// itself found nothing and never "used" a slot of its own.
+    #[tokio::test]
+    async fn lexical_backstop_does_not_starve_the_recency_injector() {
+        let (_svc, node_service, _tempdir) = test_service().await;
+
+        let named = [
+            "Invoice",
+            "Venue",
+            "Customer",
+            "Release Plan",
+            "Incident Report",
+        ];
+        for display_name in named {
+            create_schema_node(&node_service, display_name).await;
+        }
+        create_schema_node(&node_service, "Feature Writeup").await;
+
+        let query = "book the venue, log the customer, raise an invoice, add a \
+                     release plan, and file an incident report";
+        let rendered = build_workspace_context(&node_service, None, Some(query))
+            .await
+            .expect("workspace context");
+
+        for named_type in named {
+            assert!(
+                rendered.contains(named_type),
+                "expected the lexically-named schema '{named_type}' in the rendered \
+                 context:\n{rendered}"
+            );
+        }
+        assert!(
+            rendered.contains("Feature Writeup"),
+            "the recently-created, unnamed schema was starved by the lexical \
+             backstop's unrelated schemas exhausting a budget it never drew \
+             from:\n{rendered}"
+        );
+    }
+
     /// Create an ai-chat node already sitting in `status: "processing"` with a
     /// trailing user message — the exact shape the frontend produces via
     /// batch-update before triggering a turn (mirrors `scripts/aichat.ts`).
