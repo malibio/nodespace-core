@@ -408,15 +408,26 @@ pub async fn build_workspace_context(
     // in full anyway (incoming reachability depends on schemas outside the
     // retrieved set). Two separate `get_all_schemas()` awaits here meant two
     // full-table reads per turn where one serves.
-    let all_schemas = match node_service.get_all_schemas().await {
-        Ok(schemas) => Some(schemas),
-        Err(e) => {
-            tracing::warn!(error = %e, "workspace_context: fetching the schema corpus failed; the lexical backstop and relationship hydration are both skipped this turn");
-            None
+    //
+    // Still conditional, though. Neither consumer exists on a turn with no
+    // query and no hits — a resident context build with no message to retrieve
+    // against — and the read before this change was gated on `retrieved_hits`
+    // being non-empty. Fetching unconditionally would add a full-table read to
+    // exactly the turns that previously did none.
+    let lexical_query = query.filter(|q| !q.trim().is_empty());
+    let all_schemas = if lexical_query.is_none() && retrieved_hits.is_empty() {
+        None
+    } else {
+        match node_service.get_all_schemas().await {
+            Ok(schemas) => Some(schemas),
+            Err(e) => {
+                tracing::warn!(error = %e, "workspace_context: fetching the schema corpus failed; the lexical backstop and relationship hydration are both skipped this turn");
+                None
+            }
         }
     };
 
-    let retrieved_hits = match (query.filter(|q| !q.trim().is_empty()), &all_schemas) {
+    let retrieved_hits = match (lexical_query, &all_schemas) {
         (Some(q), Some(schemas)) => append_schemas_named_in_query(retrieved_hits, schemas, q),
         _ => retrieved_hits,
     };
