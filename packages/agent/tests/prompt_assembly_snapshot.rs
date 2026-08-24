@@ -291,6 +291,7 @@ fn fixture_workspace_context() -> WorkspaceContext {
         ],
         relevant_schemas: vec![fixture_schema_ticket(), fixture_schema_adr()],
         related_schemas: vec![fixture_schema_release()],
+        semantic_schema_count: 2,
     }
 }
 
