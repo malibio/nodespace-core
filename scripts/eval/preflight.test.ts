@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { awaitSkillIndex, extractSeedEntries } from "./preflight.ts";
+import { awaitSkillIndex, extractSeedEntries, seededSkillCount } from "./preflight.ts";
 
 describe("extractSeedEntries", () => {
   test("extracts key and version from seeded nodes", () => {
@@ -167,5 +167,36 @@ describe("awaitSkillIndex", () => {
         8,
       ),
     ).toThrow(/Only 7 of 8/);
+  });
+});
+
+describe("seededSkillCount", () => {
+  const env = {
+    nsBin: "x",
+    socket: "s",
+    log: "l",
+    model: "m",
+    timeoutMs: 1,
+    aichat: "a",
+  };
+
+  test("uses the enumerated row count as the denominator", () => {
+    expect(seededSkillCount(env, () => 9)).toBe(9);
+  });
+
+  // A CLI hiccup is not evidence about how many skills exist, so it degrades
+  // to the known seed count rather than to a denominator of zero (which would
+  // wave the gate through against an empty index).
+  test("falls back to the known seed count when enumeration fails", () => {
+    expect(seededSkillCount(env, () => null)).toBe(8);
+  });
+
+  // A SUCCESSFUL enumeration returning zero is the opposite situation: the
+  // rows are inserted synchronously at startup, so zero of them means seeding
+  // never ran. Substituting the fallback made the gate poll for eight skills
+  // that cannot appear, burning the full 120s timeout before reporting a
+  // generic "index not ready" — the wrong fault, reported late.
+  test("reports broken seeding instead of waiting for skills that cannot appear", () => {
+    expect(() => seededSkillCount(env, () => 0)).toThrow(/zero skill nodes/);
   });
 });

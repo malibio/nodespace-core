@@ -182,6 +182,19 @@ const FALLBACK_SEEDED_SKILL_COUNT = 8;
 const SKILL_INDEX_TIMEOUT_MS = 120_000;
 const SKILL_INDEX_POLL_MS = 3_000;
 
+/**
+ * Per-probe ceiling.
+ *
+ * `spawnSync` blocks the whole process, so a daemon that stops responding
+ * mid-request hangs the probe forever — and with it `awaitSkillIndex`, whose
+ * deadline is only consulted between probes. The bounded wait it advertises is
+ * only bounded if each probe is. Generous relative to a search that normally
+ * returns in well under a second, so a slow machine is not mistaken for a hung
+ * daemon; a timed-out probe returns `null` like any other failure and the wait
+ * loop keeps polling until its own deadline.
+ */
+const SKILL_PROBE_TIMEOUT_MS = 15_000;
+
 /** Run a `--type skill` search and return the result count, or `null` on error. */
 function skillSearchCount(env: EvalEnv, query: string, limit: number): number | null {
   const r = Bun.spawnSync(
@@ -199,8 +212,10 @@ function skillSearchCount(env: EvalEnv, query: string, limit: number): number | 
       "--limit",
       String(limit),
     ],
-    { stdout: "pipe", stderr: "pipe" },
+    { stdout: "pipe", stderr: "pipe", timeout: SKILL_PROBE_TIMEOUT_MS },
   );
+  // A killed probe reports `exitCode: null`, which is also not 0 — both are
+  // "no usable count", which is what `null` means to the caller.
   if (r.exitCode !== 0) return null;
   try {
     const parsed = JSON.parse(r.stdout.toString()) as { count?: number };
@@ -218,13 +233,38 @@ function skillSearchCount(env: EvalEnv, query: string, limit: number): number | 
  * is what makes it usable as the denominator: it is known correct immediately,
  * while the numerator below is what has to catch up.
  *
- * Falls back to the known seed count if the enumeration fails, so a CLI hiccup
- * degrades to today's behaviour rather than waving the gate through with a
- * denominator of zero.
+ * Falls back to the known seed count if the enumeration FAILS (`null`), so a CLI
+ * hiccup degrades to today's behaviour rather than waving the gate through with
+ * a denominator of zero.
+ *
+ * A successful enumeration returning 0 is a different thing entirely and must
+ * not take that fallback. The rows are inserted synchronously at startup, so
+ * zero of them means seeding did not happen — and substituting 8 makes the gate
+ * wait the full timeout for skills that cannot ever appear, then report a
+ * generic "index not ready". The real fault is knowable now, so it is reported
+ * now.
  */
-function seededSkillCount(env: EvalEnv): number {
-  const count = skillSearchCount(env, "", 100);
-  return count === null || count === 0 ? FALLBACK_SEEDED_SKILL_COUNT : count;
+export function seededSkillCount(
+  env: EvalEnv,
+  // Injected so the fail/zero/real-count branches are testable without a
+  // daemon, the same way `awaitSkillIndex` takes its probe.
+  enumerate: (env: EvalEnv) => number | null = (e) => skillSearchCount(e, "", 100),
+): number {
+  const count = enumerate(env);
+  if (count === null) return FALLBACK_SEEDED_SKILL_COUNT;
+  if (count === 0) {
+    throw new EnvironmentError(
+      `The daemon reports zero skill nodes, so no amount of waiting will make the ` +
+        `skill index ready — Stage-2 would score every turn against an empty tool ` +
+        `surface.\n` +
+        `  Skill rows are inserted synchronously at daemon startup, so an empty ` +
+        `enumeration means seeding never ran against this database.`,
+      `Confirm the daemon booted against the seeded database and re-check:\n` +
+        `    sqlite3 <db> "SELECT COUNT(*) FROM node WHERE node_type='skill'"\n` +
+        `  Zero rows means the daemon must be restarted against a seeded database.`,
+    );
+  }
+  return count;
 }
 
 /**
