@@ -2315,8 +2315,14 @@ async fn build_workspace_context(
     // Inject schemas created in the last 5 minutes that may not yet be indexed
     // in the embedding store (30s debounce). This ensures the model sees custom
     // types it just created when composing the next turn in the same session.
-    // Capped at MAX_SEMANTIC_SCHEMAS total to prevent unbounded context growth
-    // during batch schema creation sessions.
+    //
+    // Budgeted against `semantic_schema_count`, NOT `relevant_schemas.len()`.
+    // `relevant_schemas` also receives entries from `append_schemas_named_in_query`
+    // (a separate, unbounded lexical backstop inside `build_workspace_context`)
+    // before this injector ever runs. Budgeting off the post-append length let
+    // that backstop silently zero out `remaining_slots` on any turn naming
+    // several schemas by name, starving this injector even though it had never
+    // consumed a "slot" of its own — found in a post-merge audit (#2261).
     const MAX_SCHEMAS: usize = 5;
     if let Ok(all_schemas) = node_service.get_all_schemas().await {
         let cutoff = chrono::Utc::now() - chrono::Duration::minutes(5);
@@ -2325,7 +2331,7 @@ async fn build_workspace_context(
             .iter()
             .map(|s| s.id.clone())
             .collect();
-        let remaining_slots = MAX_SCHEMAS.saturating_sub(context.relevant_schemas.len());
+        let remaining_slots = MAX_SCHEMAS.saturating_sub(context.semantic_schema_count);
         let mut injected = 0;
         for schema in all_schemas {
             if injected >= remaining_slots {
