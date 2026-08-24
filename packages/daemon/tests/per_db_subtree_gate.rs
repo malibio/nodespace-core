@@ -65,6 +65,11 @@ fn gated_context() -> (SharedContext, Arc<Mutex<Vec<String>>>) {
         has_model: false,
         scheduler: Arc::new(EmbeddingScheduler::new()),
         subtree_gate_factory: Arc::new(factory),
+        local_agent: nodespace_daemon::SharedLocalAgent::new(
+            nodespace_daemon::nodespace_dir()
+                .expect("nodespace dir")
+                .join("daemon.toml"),
+        ),
     };
     (context, seen)
 }

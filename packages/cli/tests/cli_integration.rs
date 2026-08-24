@@ -102,6 +102,11 @@ fn routing_test_context() -> SharedContext {
         has_model: false,
         scheduler: Arc::new(nodespace_core::services::EmbeddingScheduler::new()),
         subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
+        local_agent: nodespace_daemon::SharedLocalAgent::new(
+            nodespace_daemon::nodespace_dir()
+                .expect("nodespace dir")
+                .join("daemon.toml"),
+        ),
     }
 }
 

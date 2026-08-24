@@ -39,6 +39,11 @@ fn test_context() -> (SharedContext, Arc<EmbeddingScheduler>) {
         has_model: false,
         scheduler: scheduler.clone(),
         subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
+        local_agent: nodespace_daemon::SharedLocalAgent::new(
+            nodespace_daemon::nodespace_dir()
+                .expect("nodespace dir")
+                .join("daemon.toml"),
+        ),
     };
     (context, scheduler)
 }

@@ -24,7 +24,7 @@ use tokio::sync::{watch, RwLock};
 
 use super::{
     AgentSessionHandler, EmbeddingReady, EmbeddingsServiceImpl, ImportServiceImpl,
-    LocalAgentServiceImpl, NodeServiceImpl, SettingsServiceImpl,
+    LocalAgentServiceImpl, NodeServiceImpl, SettingsServiceImpl, SharedLocalAgent,
 };
 
 /// The process-global build context every per-database service set needs
@@ -66,6 +66,15 @@ pub struct SharedContext {
     /// than that) see it. The boot database, opened before the hand-over, is
     /// gated explicitly by the Pro daemon instead.
     pub subtree_gate_factory: Arc<OnceLock<SubtreeGateFactory>>,
+    /// The daemon's single chat engine and model catalog, shared by every
+    /// database's `LocalAgentServiceImpl`.
+    ///
+    /// The loaded model is a machine resource — gigabytes of weights on one
+    /// accelerator, chosen from the app's single model selector — so it belongs
+    /// here next to the embedding model rather than being rebuilt per database.
+    /// What each database keeps is the graph-bound half: its own tool executor,
+    /// prompt assembler, in-flight turns, and ai-chat event watcher.
+    pub local_agent: Arc<SharedLocalAgent>,
 }
 
 /// Builds the subtree access gate guarding `database_id`. See
@@ -102,6 +111,32 @@ pub struct DatabaseServices {
     pub embedding_state: Arc<RwLock<Option<EmbeddingReady>>>,
 }
 
+impl DatabaseServices {
+    /// Stop everything [`build_database_services`] started for this database
+    /// (ADR-053: per-database compute scoping): the ai-chat event watcher, any
+    /// turn still in flight, and this database's embedding processor.
+    ///
+    /// This is the *only* way a service set is retired, and every path that
+    /// retires one must go through it — deliberate close, idle eviction, daemon
+    /// shutdown, and a set discarded for losing an open race. Dropping the
+    /// `Arc` is not equivalent and never was: the watcher task holds its own
+    /// clone of this database's `NodeService`, which owns the event sender the
+    /// watcher is receiving from, so the channel it waits on can never close on
+    /// its own. A set dropped without this call keeps its watcher — and the
+    /// store, node service, and embedding processor it pins — alive for the rest
+    /// of the process's life, invisible to the registry that no longer lists it.
+    ///
+    /// Idempotent: calling it twice is a no-op.
+    pub async fn shutdown(&self) {
+        self.local_agent.shutdown().await;
+        // Drop only this database's embedding processor (stops its background
+        // task on drop). The shared model is left untouched.
+        if let Some(ready) = self.embedding_state.write().await.take() {
+            drop(ready.processor);
+        }
+    }
+}
+
 /// Build the process-global services shared across every database (ADR-053):
 /// the PTY manager, daemon settings, and the single embedding model. The model
 /// is loaded once in the background and published over a watch channel so each
@@ -129,6 +164,15 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
     // database's batches take priority on the single shared model (ADR-053).
     let scheduler = Arc::new(EmbeddingScheduler::new());
 
+    // One chat engine and model catalog back every database, for the same
+    // reason the embedding model does: it is a single machine resource.
+    // Resolved through `nodespace_dir` so provider configs follow
+    // NODESPACE_HOME exactly as the database and the registry do — reading the
+    // real home instead let an isolated daemon serving a temp database take its
+    // OpenAI-compat provider configs from (and write probe verdicts into) the
+    // user's own `~/.nodespace`.
+    let local_agent = SharedLocalAgent::new(crate::nodespace_dir()?.join("daemon.toml"));
+
     Ok((
         SharedServices {
             settings,
@@ -138,6 +182,7 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
                 has_model,
                 subtree_gate_factory: Arc::new(OnceLock::new()),
                 scheduler,
+                local_agent,
             },
         },
         model_task,
@@ -217,14 +262,17 @@ pub async fn build_database_services(
         shared.pty_manager.clone(),
         assembler,
         node_service.clone(),
-        capture_config_path.clone(),
+        capture_config_path,
     );
 
     let import = ImportServiceImpl::new(node_service.clone());
+    // The engine and model catalog come from the process-global
+    // `SharedLocalAgent`; what is built here is this database's own turn state
+    // and its ai-chat event watcher, which reacts to *this* node service's bus.
     let local_agent = LocalAgentServiceImpl::new(
+        shared.local_agent.clone(),
         node_service.clone(),
         embedding_svc_state.clone(),
-        capture_config_path,
     );
     local_agent.start_event_watcher();
 

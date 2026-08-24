@@ -26,6 +26,6 @@ pub use database_manager::{
 pub use database_service::DatabaseServiceImpl;
 pub use embeddings_service::{EmbeddingReady, EmbeddingsServiceImpl};
 pub use import_service::ImportServiceImpl;
-pub use local_agent_service::LocalAgentServiceImpl;
+pub use local_agent_service::{LocalAgentServiceImpl, SharedLocalAgent};
 pub use node_service::NodeServiceImpl;
 pub use settings_service::SettingsServiceImpl;

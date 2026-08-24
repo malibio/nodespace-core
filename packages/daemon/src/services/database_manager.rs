@@ -831,7 +831,7 @@ impl DatabaseManager {
     /// registered. Concurrent first-opens of the same id converge on a single
     /// cached handle: the assembly runs outside the `open` lock (so opens of
     /// distinct databases don't serialize), then a re-check under the write
-    /// lock keeps whichever handle landed first.
+    /// lock keeps whichever handle landed first and shuts the other one down.
     pub async fn get_or_open(&self, id: &DatabaseId) -> Result<Arc<DatabaseServices>> {
         // Fast path: already open.
         if let Some(services) = self.open.read().await.get(id).cloned() {
@@ -851,22 +851,44 @@ impl DatabaseManager {
         let (services, _embed_task) = build_database_services(&path, &self.context, id.as_str())
             .await
             .with_context(|| format!("opening database {id}"))?;
-        let services = Arc::new(services);
 
-        // Cache under the write lock; if a concurrent caller opened it first,
-        // drop ours and reuse theirs so every request shares one open handle.
+        Ok(self.cache_or_discard(id, Arc::new(services)).await)
+    }
+
+    /// Publish `services` as the open handle for `id` — or, when a concurrent
+    /// open already cached one, shut ours down and return theirs, so every
+    /// request shares a single open handle.
+    ///
+    /// The shutdown is the whole point of this being one function rather than
+    /// an inline re-check. `build_database_services` starts the set's background
+    /// work (ai-chat event watcher, embedding wiring) *before* it returns, and
+    /// letting the loser's `Arc` fall out of scope stops none of it: the watcher
+    /// task holds a clone of the very `NodeService` that owns the event sender
+    /// it is waiting on, so its channel can never close and it runs — pinning a
+    /// second store, node service, and processor — for the rest of the process's
+    /// life, unreachable from `close`/`close_all` because the registry never
+    /// listed it. Retiring it through the same
+    /// [`DatabaseServices::shutdown`] the deliberate-close path uses is what
+    /// makes "converge on one handle" true of the side effects and not just the
+    /// map entry.
+    async fn cache_or_discard(
+        &self,
+        id: &DatabaseId,
+        services: Arc<DatabaseServices>,
+    ) -> Arc<DatabaseServices> {
         let mut open = self.open.write().await;
         if let Some(existing) = open.get(id).cloned() {
             drop(open);
+            services.shutdown().await;
             self.touch(id).await;
-            return Ok(existing);
+            return existing;
         }
         open.insert(id.clone(), services.clone());
         drop(open);
         self.touch(id).await;
         // The open set changed: observers showing an open/closed marker need this.
         self.notify_changed();
-        Ok(services)
+        services
     }
 
     /// Record that `id` just served a request, resetting its idle timer
@@ -879,8 +901,9 @@ impl DatabaseManager {
     }
 
     /// Close one open database, dropping only that database's compute — its
-    /// `EmbeddingProcessor` and event watcher (ADR-053: per-database compute
-    /// scoping). Returns `true` if the database was open.
+    /// `EmbeddingProcessor`, event watcher, and any turn still in flight
+    /// (ADR-053: per-database compute scoping). Returns `true` if the database
+    /// was open.
     ///
     /// This never touches the process-global embedding model: the shared NLP
     /// engine and its GPU context stay up for the other databases. Releasing the
@@ -905,13 +928,7 @@ impl DatabaseManager {
         let Some(services) = services else {
             return false;
         };
-        // Stop the per-database ai-chat event watcher.
-        services.local_agent.shutdown();
-        // Drop only this database's embedding processor (stops its background
-        // task on drop). The shared model is left untouched.
-        if let Some(ready) = services.embedding_state.write().await.take() {
-            drop(ready.processor);
-        }
+        services.shutdown().await;
         true
     }
 
@@ -921,10 +938,7 @@ impl DatabaseManager {
     pub async fn shutdown_all(&self) {
         let mut open = self.open.write().await;
         for services in open.values() {
-            services.local_agent.shutdown();
-            if let Some(ready) = services.embedding_state.write().await.take() {
-                drop(ready.processor);
-            }
+            services.shutdown().await;
         }
         open.clear();
         self.last_activity.write().await.clear();
@@ -953,8 +967,18 @@ impl DatabaseManager {
     }
 
     /// Evict every open database that has been idle longer than `window` and is
-    /// neither the default, the active database, nor mid-drain on embeddings
-    /// (ADR-053: per-database compute scoping).
+    /// neither the default, the active database, mid-drain on embeddings, nor
+    /// mid-turn on ai-chat (ADR-053: per-database compute scoping).
+    ///
+    /// "Idle" here is purely RPC-driven: `last_activity` only advances when a
+    /// request routes through the manager, and a running ai-chat turn never
+    /// does — it works entirely through handles it cloned when the database was
+    /// opened. A turn is also not protected by the active-database check, since
+    /// that follows the app's foreground `WatchNodes` stream and moves the
+    /// moment the user switches databases. Left to the activity clock alone, a
+    /// long turn on a backgrounded database would therefore look exactly like an
+    /// abandoned one; the explicit in-flight check below is what tells them
+    /// apart.
     pub async fn evict_idle_databases(&self, window: Duration) {
         let default_id = self.registry.read().await.default_database.clone();
         let active_id = self.context.scheduler.active_id();
@@ -983,6 +1007,15 @@ impl DatabaseManager {
         };
 
         for (id, services) in candidates {
+            // Never evict a database with an ai-chat turn in flight. Closing
+            // under a running turn does not stop it reaching the store — it
+            // holds its own handles — so the turn would keep writing to a
+            // database the manager has forgotten, and the next request would
+            // reopen it, find the chat node still `processing`, and recover it
+            // into a second concurrent run of the same turn.
+            if services.local_agent.has_active_turns().await {
+                continue;
+            }
             // Never evict a database with embedding work still queued — its
             // processor is mid-drain.
             if has_pending_embeddings(&services).await {
@@ -1102,6 +1135,11 @@ mod tests {
             has_model: false,
             scheduler: Arc::new(EmbeddingScheduler::new()),
             subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
+            local_agent: crate::SharedLocalAgent::new(
+                crate::nodespace_dir()
+                    .expect("nodespace dir")
+                    .join("daemon.toml"),
+            ),
         }
     }
 
@@ -1780,6 +1818,123 @@ mod tests {
             .get_or_open(&DatabaseId::from("ZZZ-NOT-REGISTERED".to_string()))
             .await
             .is_err());
+    }
+
+    /// The loser of a concurrent-open race is torn down, not merely dropped.
+    ///
+    /// `build_database_services` starts the set's background work before it
+    /// returns — the ai-chat event watcher, and a turn is free to start on it
+    /// immediately. The watcher task holds a clone of the very `NodeService`
+    /// that owns the event sender it waits on, so dropping the `Arc` can never
+    /// stop it: it would run for the rest of the process, pinning a second
+    /// store and node service, unreachable from `close`/`shutdown_all` because
+    /// the registry never listed it. Worse, its own recovery scan can start a
+    /// turn the winner is also running, so the same stuck turn executes twice.
+    ///
+    /// Drives the race deterministically through `cache_or_discard` — the
+    /// winner is already cached, so the set handed in is by construction the
+    /// loser — and asserts on the two things a torn-down set must be true of:
+    /// the turn it had in flight is cancelled, and it accepts no new ones.
+    #[tokio::test]
+    async fn a_lost_open_race_shuts_the_discarded_service_set_down() {
+        let (mgr, dir, _registry_path) = temp_manager().await;
+        let id = mgr
+            .ensure_default_registered("Default".into(), dir.path().join("default.db"))
+            .await
+            .unwrap();
+
+        // The winner: cached under `id` by an ordinary open.
+        let winner = mgr.get_or_open(&id).await.unwrap();
+
+        // The loser: a second, independently assembled set for the same
+        // database — exactly what a concurrent caller builds outside the lock.
+        let (loser, _embed_task) =
+            build_database_services(&dir.path().join("default.db"), &mgr.context, id.as_str())
+                .await
+                .unwrap();
+        let loser = Arc::new(loser);
+        let leaked_turn = loser
+            .local_agent
+            .begin_turn("chat-node")
+            .await
+            .expect("a freshly built service set must accept a turn");
+
+        let kept = mgr.cache_or_discard(&id, loser.clone()).await;
+
+        assert!(
+            Arc::ptr_eq(&kept, &winner),
+            "the already-cached handle must win, so every request shares one open database"
+        );
+        assert!(
+            leaked_turn.is_cancelled(),
+            "the discarded set's in-flight turn must be cancelled — left running it would keep \
+             writing to the database through its own handles and leave the chat node in \
+             `processing` for the next open's recovery scan to run a second time"
+        );
+        assert!(
+            loser.local_agent.begin_turn("another-node").await.is_none(),
+            "the discarded set must refuse further turns; still accepting them means its \
+             shutdown token was never cancelled, so its event watcher is still running too"
+        );
+        assert!(
+            mgr.open.read().await.len() == 1,
+            "the open set must still hold exactly one handle for the database"
+        );
+    }
+
+    /// The idle reaper must not evict a database with an ai-chat turn in
+    /// flight.
+    ///
+    /// A turn records no activity while it runs (it works through handles it
+    /// cloned at open time, never routing back through the manager) and loses
+    /// the active-database protection the moment the app's foreground stream
+    /// moves elsewhere — so on the activity clock alone a long turn is
+    /// indistinguishable from an abandoned database. Evicting it does not stop
+    /// the turn, it only detaches it: the next request reopens the database,
+    /// finds the chat node still `processing`, and recovers it into a second
+    /// concurrent run of the same turn.
+    #[tokio::test]
+    async fn an_in_flight_turn_defers_idle_eviction() {
+        let (mgr, dir, _registry_path) = temp_manager().await;
+        mgr.ensure_default_registered("Default".into(), dir.path().join("default.db"))
+            .await
+            .unwrap();
+        let second = mgr
+            .create("Second".into(), Some(dir.path().join("second.db")))
+            .await
+            .unwrap();
+
+        let services = mgr.get_or_open(&second.id).await.unwrap();
+        let turn = services
+            .local_agent
+            .begin_turn("chat-node")
+            .await
+            .expect("turn claim");
+
+        // Age past the window so the only thing standing between this database
+        // and eviction is the turn.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        mgr.evict_idle_databases(Duration::from_millis(1)).await;
+
+        assert!(
+            mgr.open.read().await.contains_key(&second.id),
+            "a database with a turn in flight must not be evicted, however idle its RPC clock \
+             looks"
+        );
+        assert!(
+            !turn.is_cancelled(),
+            "deferring eviction must leave the turn running, not cancel it"
+        );
+
+        // Once the turn settles, the ordinary idle rule applies again.
+        services.local_agent.end_turn("chat-node").await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        mgr.evict_idle_databases(Duration::from_millis(1)).await;
+
+        assert!(
+            !mgr.open.read().await.contains_key(&second.id),
+            "with no turn in flight the database must be evicted as usual"
+        );
     }
 
     /// Empirically proves `mutate_and_save` is cancellation-safe: drops the

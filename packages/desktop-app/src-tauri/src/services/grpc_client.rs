@@ -117,19 +117,22 @@ pub type ImportClient = ImportServiceClient<Intercepted>;
 pub type EmbeddingsClient = EmbeddingsServiceClient<Intercepted>;
 /// `AgentSessionService` client bound to the active database.
 pub type AgentSessionClient = AgentSessionServiceClient<Intercepted>;
+/// `LocalAgentService` client bound to the active database (ADR-053).
+pub type LocalAgentClient = LocalAgentServiceClient<Intercepted>;
 
 struct GrpcClientInner {
     // Routed data-plane clients — rebuilt with a fresh interceptor whenever the
     // active database changes so their requests carry the routing header. The
-    // daemon routes node/import/embeddings/agent_session by `x-ns-database-id`.
+    // daemon routes node/import/embeddings/agent_session/local_agent by
+    // `x-ns-database-id`.
     node: NodeClient,
     import: ImportClient,
     embeddings: EmbeddingsClient,
     agent_session: AgentSessionClient,
+    local_agent: LocalAgentClient,
     // Unrouted clients — registry-global (database_service) or daemon-global
-    // (settings, local_agent); they never carry the routing header.
+    // (settings); they never carry the routing header.
     settings: SettingsServiceClient<Channel>,
-    local_agent: LocalAgentServiceClient<Channel>,
     database_service: DatabaseServiceClient<Channel>,
     /// The desktop-local "which database am I viewing" selection. `None` = the
     /// daemon's default database. Distinct from the daemon-wide default set via
@@ -216,10 +219,10 @@ impl GrpcClient {
             ),
             agent_session: AgentSessionServiceClient::with_interceptor(
                 channel.clone(),
-                interceptor,
+                interceptor.clone(),
             ),
+            local_agent: LocalAgentServiceClient::with_interceptor(channel.clone(), interceptor),
             settings: SettingsServiceClient::new(channel.clone()),
-            local_agent: LocalAgentServiceClient::new(channel.clone()),
             database_service: DatabaseServiceClient::new(channel.clone()),
             active_database_id: None,
             client_id,
@@ -286,9 +289,17 @@ impl GrpcClient {
         self.inner.read().await.agent_session.clone()
     }
 
-    /// Borrow a clone of the `LocalAgentServiceClient`. The local inference
-    /// model is a daemon-global resource and is never routed by database.
-    pub async fn local_agent_client(&self) -> LocalAgentServiceClient<Channel> {
+    /// Borrow a clone of the routed `LocalAgentService` client (carries the
+    /// active database header).
+    ///
+    /// The loaded inference model itself is daemon-global, but a chat turn is
+    /// not: the turn's cancellation token, its live token stream, and its
+    /// busy/idle status all belong to the database whose ai-chat node is being
+    /// generated into. Without the header those calls reach whichever database
+    /// the daemon happened to boot with, so on any other database cancelling
+    /// silently does nothing, no tokens ever arrive, and status reports the
+    /// wrong database's activity.
+    pub async fn local_agent_client(&self) -> LocalAgentClient {
         self.inner.read().await.local_agent.clone()
     }
 
@@ -300,13 +311,13 @@ impl GrpcClient {
 
     /// Select which local database the routed data-plane clients target
     /// (ADR-053). `Some(id)` stamps `x-ns-database-id: <id>` on every
-    /// node/import/embeddings/agent_session request; `None` clears the header
-    /// so requests route to the daemon's default database.
+    /// node/import/embeddings/agent_session/local_agent request; `None` clears
+    /// the header so requests route to the daemon's default database.
     ///
     /// Only the routed clients are rebuilt — over the SAME channel, so no
-    /// reconnection happens. `settings`/`local_agent`/`database_service` stay
-    /// unrouted. Bumps a generation counter so the node-event watcher re-opens
-    /// its `WatchNodes` stream against the newly-active database.
+    /// reconnection happens. `settings`/`database_service` stay unrouted. Bumps
+    /// a generation counter so the node-event watcher re-opens its `WatchNodes`
+    /// stream against the newly-active database.
     pub async fn set_active_database(&self, id: Option<String>) {
         {
             let mut inner = self.inner.write().await;
@@ -320,7 +331,9 @@ impl GrpcClient {
                 ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone());
             inner.embeddings =
                 EmbeddingsServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.agent_session = AgentSessionServiceClient::with_interceptor(channel, interceptor);
+            inner.agent_session =
+                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.local_agent = LocalAgentServiceClient::with_interceptor(channel, interceptor);
             inner.active_database_id = id;
         }
         // Signal the watcher (outside the lock) to re-subscribe to the new
@@ -389,9 +402,10 @@ impl GrpcClient {
             inner.embeddings =
                 EmbeddingsServiceClient::with_interceptor(channel.clone(), interceptor.clone());
             inner.agent_session =
-                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor);
+                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor.clone());
+            inner.local_agent =
+                LocalAgentServiceClient::with_interceptor(channel.clone(), interceptor);
             inner.settings = SettingsServiceClient::new(channel.clone());
-            inner.local_agent = LocalAgentServiceClient::new(channel.clone());
             inner.database_service = DatabaseServiceClient::new(channel.clone());
             inner.channel = channel;
         }
