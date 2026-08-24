@@ -101,7 +101,7 @@ const MODEL_SPEC_SNAPSHOT_TIMEOUT: std::time::Duration = std::time::Duration::fr
 const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// TTL for the OpenAI-compat discovery cache (see
-/// `LocalAgentServiceInner::openai_compat_discovery_cache`).
+/// `SharedLocalAgent::openai_compat_discovery_cache`).
 ///
 /// Short by design: long enough that the model selector's three call sites
 /// (`model-store`, `agent-store`, `ai-chat-model-selector`) mounting in quick
@@ -111,14 +111,13 @@ const ROUTING_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// sooner has the explicit "Refresh remote models" button, which sets
 /// `ListModelsRequest::force_refresh` to bypass this TTL entirely.
 ///
-/// No event-driven invalidation: `SettingsServiceImpl` (process-global) and
-/// `LocalAgentServiceImpl` (built per-database, potentially many instances
-/// under ADR-053) share no state today, and this cache's only writer —
-/// Settings' config add/edit/delete — already calls `refreshRemoteModels`
-/// with `force_refresh: true` on the frontend right after saving, which gets
-/// the same "list reflects a config change immediately" behavior with none
-/// of the cross-service wiring. Deferred as YAGNI, not ruled out — revisit if
-/// a second config writer appears that can't reach for the same frontend hook.
+/// No event-driven invalidation: `SettingsServiceImpl` and `SharedLocalAgent`
+/// share no state today, and this cache's only writer — Settings' config
+/// add/edit/delete — already calls `refreshRemoteModels` with
+/// `force_refresh: true` on the frontend right after saving, which gets the
+/// same "list reflects a config change immediately" behavior with none of the
+/// cross-service wiring. Deferred as YAGNI, not ruled out — revisit if a second
+/// config writer appears that can't reach for the same frontend hook.
 const OPENAI_COMPAT_DISCOVERY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Attempts for an ai-chat read-modify-write before giving up. These writes
@@ -126,26 +125,44 @@ const OPENAI_COMPAT_DISCOVERY_CACHE_TTL: std::time::Duration = std::time::Durati
 /// conflict is expected; the retry re-reads the winning version and reapplies.
 const MAX_WRITE_ATTEMPTS: usize = 5;
 
-/// gRPC error message for local-GGUF-model-management calls reaching a
-/// database whose `GgufModelManager::new()` failed at construction (see
-/// `LocalAgentServiceImpl::new`). Chat turns and OpenAI-compatible models are
+/// gRPC error message for local-GGUF-model-management calls made on a daemon
+/// whose `GgufModelManager::new()` failed at construction (see
+/// `SharedLocalAgent::new`). Chat turns and OpenAI-compatible models are
 /// unaffected — only local GGUF model management (list/download/delete/load/
-/// unload/cancel/recommended) is degraded for this database.
+/// unload/cancel/recommended) is degraded.
 const MODEL_MANAGER_UNAVAILABLE: &str =
-    "local GGUF model manager is unavailable for this database (see daemon logs for the \
-     initialization error); chat turns and OpenAI-compatible models are unaffected";
+    "local GGUF model manager is unavailable (see daemon logs for the initialization error); \
+     chat turns and OpenAI-compatible models are unaffected";
 
-struct LocalAgentServiceInner {
-    service: RwLock<AgentService>,
+/// Process-global local-inference state (ADR-053: one daemon, many databases).
+///
+/// The loaded chat model is a machine resource, not a per-database one: it is
+/// gigabytes of weights on one GPU/CPU, and the desktop app exposes a single
+/// model selector for the whole daemon. Building one engine per open database
+/// would load N copies of the same file and re-pay a multi-second load on every
+/// database switch, so the engine — and the model catalog, discovery cache, and
+/// "which model is active" bookkeeping that describes it — lives here, once,
+/// behind an `Arc` handed to every database's [`LocalAgentServiceImpl`] through
+/// [`crate::SharedContext`].
+///
+/// What stays per-database is everything bound to one graph: the tool executor
+/// and prompt assembler (they read that database's nodes), the in-flight turn
+/// map, the token broadcast, and the ai-chat event watcher. Those live on
+/// [`LocalAgentServiceInner`] and are reached by routing a request to the right
+/// database's service set.
+pub struct SharedLocalAgent {
+    /// The chat engine every database runs its turns through. Swapped by a
+    /// model load; a turn already running keeps the engine it started with,
+    /// since it holds its own `Arc`.
+    engine: RwLock<Arc<dyn ChatInferenceEngine>>,
     /// `None` when `GgufModelManager::new()` failed at construction (e.g.
     /// `$HOME` unset, an unwritable/occupied models directory) — a recoverable
-    /// environmental condition, not a programming error. This database still
-    /// opens; local GGUF model management (list/download/delete/load/unload/
+    /// environmental condition, not a programming error. The daemon still
+    /// starts; local GGUF model management (list/download/delete/load/unload/
     /// cancel/recommended) reports `UNAVAILABLE` instead, while everything
     /// else (ai-chat turns, OpenAI-compatible models, status) is unaffected.
-    /// See `LocalAgentServiceImpl::new` and `LocalAgentServiceImpl::model_manager`.
+    /// See [`SharedLocalAgent::new`] and [`SharedLocalAgent::model_manager`].
     model_manager: Option<Arc<GgufModelManager>>,
-    node_service: Arc<NodeService>,
     active_model_id: Mutex<Option<String>>,
     /// Whether Stage-2 candidate injection is disabled for the currently
     /// active model, from a cached routing-probe verdict (see
@@ -182,16 +199,6 @@ struct LocalAgentServiceInner {
     /// constant so tests can drive the timeout path without paying it in
     /// wall-clock time.
     model_spec_snapshot_timeout: std::time::Duration,
-    embedding_service: SharedEmbeddingService,
-    /// Broadcast channel for streaming tokens → all SubscribeTokenStream clients.
-    token_tx: broadcast::Sender<AgentChunk>,
-    /// Cancellation tokens keyed by node_id.
-    turn_tokens: TurnTokens,
-    /// Cancels this database's background event watcher when the database is
-    /// closed (ADR-053: per-database compute scoping). Shared across the cheap
-    /// `Arc` clones tonic hands to request handlers, so a single `shutdown()`
-    /// stops the watcher spawned from any clone.
-    shutdown_token: CancellationToken,
     /// Path to `~/.nodespace/daemon.toml`, read to resolve OpenAI-compatible
     /// provider configs by UUID when loading an `openai-compat:<uuid>` model.
     daemon_config_path: std::path::PathBuf,
@@ -207,6 +214,174 @@ struct LocalAgentServiceInner {
     >,
 }
 
+impl SharedLocalAgent {
+    /// Build the process-global inference state. Called once, from
+    /// [`crate::build_shared_services`].
+    pub fn new(daemon_config_path: std::path::PathBuf) -> Arc<Self> {
+        // A failed model-manager init is a recoverable environmental condition
+        // (`$HOME` unset, an unwritable/occupied models directory), not a
+        // programming error: degrade the local-GGUF RPCs to `UNAVAILABLE` the
+        // same way a missing NLP model disables only the embedding wiring,
+        // rather than failing daemon startup outright.
+        let model_manager = match GgufModelManager::new() {
+            Ok(m) => Some(Arc::new(m)),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "GgufModelManager initialization failed — local GGUF model management \
+                     disabled (chat turns and OpenAI-compatible models are unaffected)"
+                );
+                None
+            }
+        };
+        Self::from_model_manager(
+            daemon_config_path,
+            model_manager,
+            MODEL_SPEC_SNAPSHOT_TIMEOUT,
+        )
+    }
+
+    /// Shared construction path for [`Self::new`] and for tests, which use it to
+    /// cover the degraded shape a failed `GgufModelManager::new()` produces
+    /// (`model_manager: None`) without breaking `$HOME` or the real models
+    /// directory, and to shorten `model_spec_snapshot_timeout` so the
+    /// stalled-`model_info` path is exercised without paying the production
+    /// bound in wall-clock time.
+    fn from_model_manager(
+        daemon_config_path: std::path::PathBuf,
+        model_manager: Option<Arc<GgufModelManager>>,
+        model_spec_snapshot_timeout: std::time::Duration,
+    ) -> Arc<Self> {
+        let noop: Arc<dyn ChatInferenceEngine> = Arc::new(NoOpInferenceEngine);
+        Arc::new(Self {
+            engine: RwLock::new(noop),
+            model_manager,
+            active_model_id: Mutex::new(None),
+            active_model_routing_disabled: Mutex::new(false),
+            active_model_routing_key: Mutex::new(None),
+            loaded_model_spec: Mutex::new(None),
+            model_spec_snapshot_timeout,
+            daemon_config_path,
+            openai_compat_discovery_cache: Mutex::new(None),
+        })
+    }
+
+    /// The engine a turn starting now should run against.
+    async fn engine(&self) -> Arc<dyn ChatInferenceEngine> {
+        self.engine.read().await.clone()
+    }
+
+    /// The GGUF model manager, or `None` when `GgufModelManager::new()` failed
+    /// at construction (see the field's doc comment). Every gRPC handler that
+    /// manages local GGUF models (list/download/delete/load/unload/cancel/
+    /// recommended) routes through this instead of unwrapping the field
+    /// directly, pairing it with `MODEL_MANAGER_UNAVAILABLE` via
+    /// `.ok_or_else(...)?` so a failed init degrades those RPCs one at a time
+    /// rather than being able to panic anywhere the field is read.
+    ///
+    /// Returns `Option`, not a `Result<_, Status>`, so this helper's own
+    /// return type does not trip `clippy::result_large_err` — `Status` is
+    /// ~176 bytes, and unlike the gRPC handlers themselves (whose `Ok` side,
+    /// `Response<T>`, is comparably large), the natural `Ok` side here is a
+    /// single pointer.
+    fn model_manager(&self) -> Option<&Arc<GgufModelManager>> {
+        self.model_manager.as_ref()
+    }
+
+    /// Publish `engine` as the daemon's loaded model. Every open database picks
+    /// it up on its next turn, which reads this slot when it wires the engine to
+    /// that database's tools.
+    async fn set_engine(&self, engine: Arc<dyn ChatInferenceEngine>) {
+        // Snapshot the model geometry here, the one place an engine can change.
+        // Safe to query now: a swap happens between turns, so the engine mutex
+        // this reaches is uncontended, unlike the same call from `get_status`.
+        //
+        // Bounded because this is not always a local read: a remote engine
+        // answers `model_info` with an HTTP round-trip on a client with no
+        // default timeout, so an endpoint that accepts the connection and then
+        // stalls would hang the model-load RPC that awaits this. Losing the
+        // geometry only costs a degraded status report; blocking the swap
+        // would cost the load itself.
+        let spec = match tokio::time::timeout(self.model_spec_snapshot_timeout, engine.model_info())
+            .await
+        {
+            Ok(Ok(spec)) => spec,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = %e,
+                    "model_info failed during engine swap; status will report no model loaded"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout = ?self.model_spec_snapshot_timeout,
+                    "model_info timed out during engine swap; status will report no model loaded"
+                );
+                None
+            }
+        };
+
+        *self.engine.write().await = engine;
+        // The engine lock is released before taking `loaded_model_spec`: no
+        // site holds two of these locks at once, which is what keeps the
+        // ordering acyclic.
+        *self.loaded_model_spec.lock().await = spec;
+    }
+
+    /// Swap in `engine` unless `model_id` is already the active model. Returns
+    /// whether a swap happened.
+    async fn set_engine_if_changed(
+        &self,
+        model_id: &str,
+        engine: Arc<dyn ChatInferenceEngine>,
+    ) -> bool {
+        {
+            let active = self.active_model_id.lock().await;
+            if active.as_deref() == Some(model_id) {
+                return false;
+            }
+        }
+        self.set_engine(engine).await;
+        *self.active_model_id.lock().await = Some(model_id.to_string());
+        true
+    }
+
+    /// Drop back to the no-op engine, clearing every fact that described the
+    /// model that was loaded.
+    pub async fn reset_to_noop_engine(&self) {
+        self.set_engine(Arc::new(NoOpInferenceEngine)).await;
+        // `set_engine` already re-snapshots the geometry (the no-op engine
+        // reports none), but the rest of the description is cleared here — and
+        // `loaded_model_spec` with it, so this reads as one complete reset
+        // rather than depending on what the no-op engine happens to answer.
+        *self.active_model_id.lock().await = None;
+        *self.active_model_routing_disabled.lock().await = false;
+        *self.active_model_routing_key.lock().await = None;
+        *self.loaded_model_spec.lock().await = None;
+        tracing::debug!("SharedLocalAgent: inference engine reset to NoOp");
+    }
+}
+
+/// The per-database half of the local agent: everything bound to one graph.
+/// The engine and model catalog it runs against live on the process-global
+/// [`SharedLocalAgent`].
+struct LocalAgentServiceInner {
+    /// Process-global inference state — the loaded engine and model catalog.
+    shared: Arc<SharedLocalAgent>,
+    node_service: Arc<NodeService>,
+    embedding_service: SharedEmbeddingService,
+    /// Broadcast channel for streaming tokens → all SubscribeTokenStream clients.
+    token_tx: broadcast::Sender<AgentChunk>,
+    /// Cancellation tokens keyed by node_id.
+    turn_tokens: TurnTokens,
+    /// Cancels this database's background event watcher, and gates new turns,
+    /// once the database is closed (ADR-053: per-database compute scoping).
+    /// Shared across the cheap `Arc` clones tonic hands to request handlers, so
+    /// a single `shutdown()` stops the watcher spawned from any clone.
+    shutdown_token: CancellationToken,
+}
+
 /// tonic-compatible handle. `Clone` (cheap Arc clone) so tonic can hand
 /// copies to concurrent request handlers.
 #[derive(Clone)]
@@ -215,124 +390,92 @@ pub struct LocalAgentServiceImpl {
 }
 
 impl LocalAgentServiceImpl {
+    /// Build the local-agent service for one database, running against the
+    /// process-global engine in `shared`.
     pub fn new(
+        shared: Arc<SharedLocalAgent>,
         node_service: Arc<NodeService>,
         embedding_service: SharedEmbeddingService,
-        daemon_config_path: std::path::PathBuf,
-    ) -> Self {
-        // `build_database_services` runs on every per-database open (ADR-053: one
-        // daemon, many databases opened lazily on demand), not once at daemon
-        // startup — an `expect` here used to panic the whole process on a single
-        // failing open, taking every other already-open database, the sync
-        // service, and the gRPC server down with it. Degrade instead, the same
-        // way a missing NLP model disables only the embedding wiring
-        // (`SharedContext::has_model`) rather than failing the database open:
-        // this database still opens, with local GGUF model management
-        // unavailable until this constructor runs again in an environment where
-        // `GgufModelManager::new()` succeeds — a daemon restart, or (ADR-053)
-        // this database simply being reopened after the idle reaper evicts it,
-        // both of which re-run `build_database_services`.
-        let model_manager = match GgufModelManager::new() {
-            Ok(m) => Some(Arc::new(m)),
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    "GgufModelManager initialization failed — local GGUF model management \
-                     disabled for this database (chat turns and OpenAI-compatible models are \
-                     unaffected)"
-                );
-                None
-            }
-        };
-
-        Self::from_model_manager(
-            node_service,
-            embedding_service,
-            daemon_config_path,
-            model_manager,
-        )
-    }
-
-    /// Shared construction path for `new` and (via `model_manager: None`) tests
-    /// that regression-cover the degraded shape a failed `GgufModelManager::new()`
-    /// produces, without needing to actually break `$HOME` or the real models
-    /// directory to trigger it.
-    fn from_model_manager(
-        node_service: Arc<NodeService>,
-        embedding_service: SharedEmbeddingService,
-        daemon_config_path: std::path::PathBuf,
-        model_manager: Option<Arc<GgufModelManager>>,
     ) -> Self {
         // Channel capacity: enough headroom for burst token output (~256 tokens per broadcast).
         let (token_tx, _) = broadcast::channel(512);
 
         Self {
             inner: Arc::new(LocalAgentServiceInner {
-                service: RwLock::new(Arc::new(Self::build_noop_service(
-                    node_service.clone(),
-                    embedding_service.clone(),
-                ))),
-                model_manager,
+                shared,
                 node_service,
-                active_model_id: Mutex::new(None),
-                active_model_routing_disabled: Mutex::new(false),
-                active_model_routing_key: Mutex::new(None),
-                loaded_model_spec: Mutex::new(None),
-                model_spec_snapshot_timeout: MODEL_SPEC_SNAPSHOT_TIMEOUT,
                 embedding_service,
                 token_tx,
                 turn_tokens: Arc::new(Mutex::new(HashMap::new())),
                 shutdown_token: CancellationToken::new(),
-                daemon_config_path,
-                openai_compat_discovery_cache: Mutex::new(None),
             }),
         }
     }
 
-    /// Stop this database's background event watcher (ADR-053: per-database
-    /// compute scoping). Called when the owning database is closed or evicted so
-    /// its watcher does not keep subscribing to a now-detached event bus.
-    /// Idempotent and cheap — cancelling an already-cancelled token is a no-op.
-    pub fn shutdown(&self) {
-        self.inner.shutdown_token.cancel();
-    }
-
-    fn build_noop_service(
-        node_service: Arc<NodeService>,
-        embedding_service: SharedEmbeddingService,
-    ) -> LocalAgentService<dyn ChatInferenceEngine, dyn AgentToolExecutor> {
-        let engine: Arc<dyn ChatInferenceEngine> = Arc::new(NoOpInferenceEngine);
-        let executor: Arc<dyn AgentToolExecutor> = Arc::new(GraphToolExecutor {
-            node_service: Some(node_service),
-            embedding_service,
-            inference_engine: Some(engine.clone()),
-        });
-        LocalAgentService::new(engine, executor)
-    }
-
-    async fn get_service(&self) -> AgentService {
-        self.inner.service.read().await.clone()
-    }
-
-    /// The GGUF model manager, or `None` when `GgufModelManager::new()` failed
-    /// at construction (see the field's doc comment on
-    /// `LocalAgentServiceInner`). Every gRPC handler that manages local GGUF
-    /// models (list/download/delete/load/unload/cancel/recommended) routes
-    /// through this instead of unwrapping the field directly, pairing it with
-    /// `MODEL_MANAGER_UNAVAILABLE` via `.ok_or_else(...)?` so a failed init
-    /// degrades those RPCs one at a time rather than being able to panic
-    /// anywhere the field is read.
+    /// Tear down this database's local-agent compute (ADR-053: per-database
+    /// compute scoping). Called from [`crate::DatabaseServices::shutdown`] on
+    /// every path that retires a service set — deliberate close, idle eviction,
+    /// daemon shutdown, and a lost open race.
     ///
-    /// Returns `Option`, not a `Result<_, Status>`, so this helper's own
-    /// return type does not trip `clippy::result_large_err` — `Status` is
-    /// ~176 bytes, and unlike the gRPC handlers themselves (whose `Ok` side,
-    /// `Response<T>`, is comparably large), the natural `Ok` side here is a
-    /// single pointer.
-    fn model_manager(&self) -> Option<&Arc<GgufModelManager>> {
-        self.inner.model_manager.as_ref()
+    /// Stops the event watcher, refuses any further turns, and cancels the ones
+    /// already running. Cancelling matters as much as stopping the watcher: a
+    /// turn is a separately spawned task holding its own clones of this
+    /// database's handles, so it would otherwise keep generating (and writing)
+    /// against a database the manager no longer considers open — and leave the
+    /// chat node in `processing`, which the next open's recovery scan would pick
+    /// up and run a *second* time. Cancelled turns instead settle the node back
+    /// to `idle`, so there is nothing for recovery to re-run.
+    ///
+    /// Idempotent and cheap — cancelling an already-cancelled token is a no-op.
+    pub async fn shutdown(&self) {
+        self.inner.shutdown_token.cancel();
+        for token in self.inner.turn_tokens.lock().await.values() {
+            token.cancel();
+        }
     }
 
-    async fn replace_engine(&self, engine: Arc<dyn ChatInferenceEngine>) {
+    /// Whether this database has an ai-chat turn in flight. Read by the idle
+    /// reaper, which must not evict a database mid-turn.
+    pub async fn has_active_turns(&self) -> bool {
+        !self.inner.turn_tokens.lock().await.is_empty()
+    }
+
+    /// Claim `node_id` for a turn, returning the cancellation token to run it
+    /// under — or `None` when a turn is already in flight for that node, or this
+    /// database has been shut down.
+    ///
+    /// The check-and-insert is atomic so `NodeCreated`/`NodeUpdated` arriving in
+    /// close succession, or the recovery scan racing a live event, cannot both
+    /// start the same turn.
+    pub(crate) async fn begin_turn(&self, node_id: &str) -> Option<CancellationToken> {
+        if self.inner.shutdown_token.is_cancelled() {
+            return None;
+        }
+        let mut tokens = self.inner.turn_tokens.lock().await;
+        if tokens.contains_key(node_id) {
+            return None;
+        }
+        let cancel = CancellationToken::new();
+        tokens.insert(node_id.to_string(), cancel.clone());
+        Some(cancel)
+    }
+
+    /// Release the claim [`Self::begin_turn`] took, once the turn has settled.
+    pub(crate) async fn end_turn(&self, node_id: &str) {
+        self.inner.turn_tokens.lock().await.remove(node_id);
+    }
+
+    /// This database's agent service for a turn starting now: the daemon's
+    /// currently-loaded engine wired to *this* database's tools and prompt
+    /// assembler.
+    ///
+    /// Built per turn rather than cached. Construction is a handful of `Arc`
+    /// moves and two empty maps, and the sessions it holds are created and
+    /// ended within the turn, so a cache would buy nothing — while keeping a
+    /// stale one alive would pin the previously-loaded model's weights in a
+    /// database that simply hasn't been chatted with since the swap.
+    async fn get_service(&self) -> AgentService {
+        let engine = self.inner.shared.engine().await;
         // Hand the executor the *shared* embedding handle, not a snapshot. The
         // executor reads the current value per call, so search_semantic and
         // skill retrieval work as soon as the embedding model finishes loading
@@ -340,10 +483,10 @@ impl LocalAgentServiceImpl {
         // site can wire a stale or `None` service.
         //
         // `inference_engine` is different: it's not a shared handle updated in
-        // place, just the plain engine this rebuilt executor should use for
-        // `resolve_query`'s nested decomposition call. Every engine swap already
-        // rebuilds the whole executor here, so there is no separate "wire once,
-        // update later" path to support for it.
+        // place, just the plain engine this executor should use for
+        // `resolve_query`'s nested decomposition call. The whole service is
+        // rebuilt per turn, so there is no separate "wire once, update later"
+        // path to support for it.
         let executor: Arc<dyn AgentToolExecutor> = Arc::new(GraphToolExecutor {
             node_service: Some(self.inner.node_service.clone()),
             embedding_service: self.inner.embedding_service.clone(),
@@ -356,51 +499,44 @@ impl LocalAgentServiceImpl {
             ),
         ));
 
-        let new_service = Arc::new(LocalAgentService::new_with_assembler(
+        Arc::new(LocalAgentService::new_with_assembler(
             engine,
             executor,
             prompt_assembler,
-        ));
+        ))
+    }
 
-        // Snapshot the model geometry here, the one place an engine can change.
-        // Safe to query now: a swap happens between turns, so the engine mutex
-        // this reaches is uncontended, unlike the same call from `get_status`.
-        //
-        // Bounded because this is not always a local read: a remote engine
-        // answers `model_info` with an HTTP round-trip on a client with no
-        // default timeout, so an endpoint that accepts the connection and then
-        // stalls would hang the model-load RPC that awaits this. Losing the
-        // geometry only costs a degraded status report; blocking the swap
-        // would cost the load itself.
-        let spec = match tokio::time::timeout(
-            self.inner.model_spec_snapshot_timeout,
-            new_service.model_spec(),
-        )
-        .await
-        {
-            Ok(Ok(spec)) => spec,
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    error = %e,
-                    "model_spec failed during engine swap; status will report no model loaded"
-                );
-                None
-            }
-            Err(_) => {
-                tracing::warn!(
-                    timeout = ?self.inner.model_spec_snapshot_timeout,
-                    "model_spec timed out during engine swap; status will report no model loaded"
-                );
-                None
-            }
-        };
+    /// Resolve which database this request targets (ADR-053) and return that
+    /// database's local-agent service. The routing contract lives in
+    /// [`crate::db_routing::routed_database_services`]: a header selects a
+    /// registered database, header-less requests hit the default, and with no
+    /// routing middleware installed a header-less request falls back to `self`
+    /// while a header-carrying one is rejected.
+    ///
+    /// Only the handlers that read or write per-database turn state route —
+    /// `SubscribeTokenStream`, `CancelTurn`, `GetStatus`. Model management
+    /// (list/download/delete/load/unload/cancel/ensure-ready/recommended/RAM)
+    /// acts on the process-global [`SharedLocalAgent`], so it reaches the same
+    /// engine and catalog regardless of which database a caller names — routing
+    /// it would be a no-op that only obscured that fact.
+    async fn route<T>(&self, request: &Request<T>) -> Result<LocalAgentServiceImpl, Status> {
+        match crate::db_routing::routed_database_services(request).await? {
+            Some(services) => Ok(services.local_agent.clone()),
+            None => Ok(self.clone()),
+        }
+    }
 
-        let mut guard = self.inner.service.write().await;
-        *guard = new_service;
-        // Released before taking `loaded_model_spec`: no site holds two of
-        // these locks at once, which is what keeps the ordering acyclic.
-        drop(guard);
-        *self.inner.loaded_model_spec.lock().await = spec;
+    /// The process-global GGUF model manager. See
+    /// [`SharedLocalAgent::model_manager`] for why this is an `Option` and how
+    /// handlers pair it with `MODEL_MANAGER_UNAVAILABLE`.
+    fn model_manager(&self) -> Option<&Arc<GgufModelManager>> {
+        self.inner.shared.model_manager()
+    }
+
+    /// Swap the daemon's loaded engine. Every open database's next turn runs
+    /// against it.
+    async fn replace_engine(&self, engine: Arc<dyn ChatInferenceEngine>) {
+        self.inner.shared.set_engine(engine).await;
     }
 
     async fn replace_engine_if_changed(
@@ -408,29 +544,10 @@ impl LocalAgentServiceImpl {
         model_id: &str,
         engine: Arc<dyn ChatInferenceEngine>,
     ) -> bool {
-        {
-            let active = self.inner.active_model_id.lock().await;
-            if active.as_deref() == Some(model_id) {
-                return false;
-            }
-        }
-        self.replace_engine(engine).await;
-        *self.inner.active_model_id.lock().await = Some(model_id.to_string());
-        true
-    }
-
-    pub async fn reset_to_noop_engine(&self) {
-        let mut guard = self.inner.service.write().await;
-        *guard = Arc::new(Self::build_noop_service(
-            self.inner.node_service.clone(),
-            self.inner.embedding_service.clone(),
-        ));
-        drop(guard);
-        *self.inner.active_model_id.lock().await = None;
-        *self.inner.active_model_routing_disabled.lock().await = false;
-        *self.inner.active_model_routing_key.lock().await = None;
-        *self.inner.loaded_model_spec.lock().await = None;
-        tracing::debug!("LocalAgentServiceImpl: inference engine reset to NoOp");
+        self.inner
+            .shared
+            .set_engine_if_changed(model_id, engine)
+            .await
     }
 
     // ---------------------------------------------------------------------------
@@ -531,16 +648,8 @@ impl LocalAgentServiceImpl {
             _ => return,
         }
 
-        // Atomically check-and-insert the cancellation token to prevent duplicate
-        // turns when NodeCreated and NodeUpdated arrive in close succession.
-        let cancel = {
-            let mut tokens = self.inner.turn_tokens.lock().await;
-            if tokens.contains_key(node_id) {
-                return;
-            }
-            let cancel = CancellationToken::new();
-            tokens.insert(node_id.to_string(), cancel.clone());
-            cancel
+        let Some(cancel) = self.begin_turn(node_id).await else {
+            return;
         };
 
         tracing::info!(node_id, "ai-chat turn triggered");
@@ -564,7 +673,7 @@ impl LocalAgentServiceImpl {
             if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
                 tracing::warn!(node_id, error = %e, "failed to reset ai-chat status to idle");
             }
-            self.inner.turn_tokens.lock().await.remove(&node_id);
+            self.end_turn(&node_id).await;
             return;
         }
 
@@ -576,7 +685,7 @@ impl LocalAgentServiceImpl {
                 if let Err(e) = self.write_ai_chat_status(&node_id, "idle", None).await {
                     tracing::warn!(node_id, error = %e, "failed to reset ai-chat status to idle");
                 }
-                self.inner.turn_tokens.lock().await.remove(&node_id);
+                self.end_turn(&node_id).await;
                 return;
             }
         };
@@ -605,7 +714,7 @@ impl LocalAgentServiceImpl {
         // Carry the currently active model's cached routing-probe verdict
         // onto this session (see `load_model_and_collect_events`'s OpenAI-compat
         // branch, where the probe runs and this flag is set).
-        if *self.inner.active_model_routing_disabled.lock().await {
+        if *self.inner.shared.active_model_routing_disabled.lock().await {
             service
                 .set_session_routing_disabled(&session_id, true)
                 .await;
@@ -786,7 +895,7 @@ impl LocalAgentServiceImpl {
             }
         }
 
-        self.inner.turn_tokens.lock().await.remove(&node_id);
+        self.end_turn(&node_id).await;
         tracing::info!(node_id, "ai-chat turn complete");
     }
 
@@ -821,14 +930,8 @@ impl LocalAgentServiceImpl {
 
             if is_trailing_user {
                 tracing::info!(node_id = %node_id, "recovering stuck ai-chat turn");
-                let cancel = {
-                    let mut tokens = self.inner.turn_tokens.lock().await;
-                    if tokens.contains_key(&node_id) {
-                        continue;
-                    }
-                    let cancel = CancellationToken::new();
-                    tokens.insert(node_id.clone(), cancel.clone());
-                    cancel
+                let Some(cancel) = self.begin_turn(&node_id).await else {
+                    continue;
                 };
                 let this = self.clone();
                 tokio::spawn(async move {
@@ -1007,10 +1110,11 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
 
     async fn subscribe_token_stream(
         &self,
-        _request: Request<SubscribeTokenStreamRequest>,
+        request: Request<SubscribeTokenStreamRequest>,
     ) -> Result<Response<Self::SubscribeTokenStreamStream>, Status> {
+        let this = self.route(&request).await?;
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentChunk, Status>>(128);
-        let mut broadcast_rx = self.inner.token_tx.subscribe();
+        let mut broadcast_rx = this.inner.token_tx.subscribe();
 
         tokio::spawn(async move {
             loop {
@@ -1036,8 +1140,9 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         &self,
         request: Request<CancelTurnRequest>,
     ) -> Result<Response<CancelTurnResponse>, Status> {
+        let this = self.route(&request).await?;
         let node_id = request.into_inner().node_id;
-        let tokens = self.inner.turn_tokens.lock().await;
+        let tokens = this.inner.turn_tokens.lock().await;
         if let Some(token) = tokens.get(&node_id) {
             token.cancel();
             tracing::info!(node_id, "ai-chat turn cancelled");
@@ -1047,13 +1152,23 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
 
     async fn get_status(
         &self,
-        _request: Request<GetLocalStatusRequest>,
+        request: Request<GetLocalStatusRequest>,
     ) -> Result<Response<LocalAgentStatusResponse>, Status> {
-        let tokens = self.inner.turn_tokens.lock().await;
-        let status = if tokens.is_empty() {
-            LocalAgentStatus::Idle
-        } else {
-            LocalAgentStatus::Streaming
+        // Routed: idle-vs-streaming is a fact about the targeted database's
+        // turns. The model identity and window below come from the
+        // process-global engine and read the same from any database.
+        let this = self.route(&request).await?;
+        // Scoped so the turn map is not held across the reads below: they are
+        // process-global state this database's turns never touch, and holding
+        // its map meanwhile would block that database starting or finishing a
+        // turn for the length of a status poll.
+        let status = {
+            let tokens = this.inner.turn_tokens.lock().await;
+            if tokens.is_empty() {
+                LocalAgentStatus::Idle
+            } else {
+                LocalAgentStatus::Streaming
+            }
         };
         let status_json = serde_json::to_string(&status)
             .map_err(|e| Status::internal(format!("Failed to serialize status: {e}")))?;
@@ -1063,11 +1178,11 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // live: `model_spec()` reaches a `std::sync::Mutex` held for the whole
         // of a generation, so a live call would block a tokio worker for the
         // length of a turn — the exact hang a status poller would trip over.
-        let spec = self.inner.loaded_model_spec.lock().await.clone();
+        let spec = self.inner.shared.loaded_model_spec.lock().await.clone();
         // Report the catalog id the model was loaded BY, not the resolved GGUF
         // path the engine reports. Callers compare this against the id they
         // asked for ("gemma-4-e4b-q4km"), which no path substring matches.
-        let active_model_id = self.inner.active_model_id.lock().await.clone();
+        let active_model_id = self.inner.shared.active_model_id.lock().await.clone();
         // The id and the window degrade independently. A snapshot that failed
         // or timed out costs the window, not the identity: `active_model_id` is
         // set by the same swap and is still authoritative, so a loaded model
@@ -1344,7 +1459,7 @@ impl LocalAgentServiceImpl {
         force_refresh: bool,
     ) -> Vec<nodespace_agent::agent_types::ModelInfo> {
         {
-            let cache = self.inner.openai_compat_discovery_cache.lock().await;
+            let cache = self.inner.shared.openai_compat_discovery_cache.lock().await;
             if let Some((fetched_at, models)) = cache.as_ref() {
                 if !force_refresh && fetched_at.elapsed() < OPENAI_COMPAT_DISCOVERY_CACHE_TTL {
                     return models.clone();
@@ -1354,7 +1469,7 @@ impl LocalAgentServiceImpl {
 
         let discovered = self.discover_openai_compat_models_uncached().await;
 
-        let mut cache = self.inner.openai_compat_discovery_cache.lock().await;
+        let mut cache = self.inner.shared.openai_compat_discovery_cache.lock().await;
         *cache = Some((std::time::Instant::now(), discovered.clone()));
         discovered
     }
@@ -1368,7 +1483,7 @@ impl LocalAgentServiceImpl {
         };
 
         let configs = match crate::services::settings_service::load_openai_compat_configs(
-            &self.inner.daemon_config_path,
+            &self.inner.shared.daemon_config_path,
         )
         .await
         {
@@ -1448,7 +1563,7 @@ impl LocalAgentServiceImpl {
             });
 
             let config = match crate::services::settings_service::find_openai_compat_config(
-                &self.inner.daemon_config_path,
+                &self.inner.shared.daemon_config_path,
                 config_id,
             )
             .await
@@ -1518,7 +1633,7 @@ impl LocalAgentServiceImpl {
             // last probed."
             let this_key = (config.base_url.clone(), model.clone());
             let cached_key_matches =
-                *self.inner.active_model_routing_key.lock().await == Some(this_key.clone());
+                *self.inner.shared.active_model_routing_key.lock().await == Some(this_key.clone());
             // `None` here means "the probe did not run / could not complete
             // this load" — distinct from a `Some(false)` verdict. Only a
             // `Some` result updates `active_model_routing_key`, so an errored
@@ -1528,7 +1643,7 @@ impl LocalAgentServiceImpl {
                 // Same engine AND the same (base_url, model) already probed
                 // this load — the cached verdict on `self.inner` still
                 // describes this model; no need to touch disk or re-probe.
-                let disabled = *self.inner.active_model_routing_disabled.lock().await;
+                let disabled = *self.inner.shared.active_model_routing_disabled.lock().await;
                 Some(!disabled)
             } else if let Some(cached) = config.routing_ok.get(&model).copied() {
                 // Keyed by the served model, not the config as a whole — one
@@ -1562,7 +1677,7 @@ impl LocalAgentServiceImpl {
                         }
                         if let Err(e) =
                             crate::services::settings_service::record_routing_probe_verdict(
-                                &self.inner.daemon_config_path,
+                                &self.inner.shared.daemon_config_path,
                                 config_id,
                                 &config.base_url,
                                 &model,
@@ -1594,8 +1709,9 @@ impl LocalAgentServiceImpl {
                 }
             };
             let routing_disabled = !verdict.unwrap_or(true);
-            *self.inner.active_model_routing_disabled.lock().await = routing_disabled;
-            *self.inner.active_model_routing_key.lock().await = verdict.map(|_| this_key.clone());
+            *self.inner.shared.active_model_routing_disabled.lock().await = routing_disabled;
+            *self.inner.shared.active_model_routing_key.lock().await =
+                verdict.map(|_| this_key.clone());
 
             emit!(ModelLoadProgressEvent {
                 event_type: "ready".to_string(),
@@ -1648,7 +1764,7 @@ impl LocalAgentServiceImpl {
         };
 
         {
-            let active = self.inner.active_model_id.lock().await;
+            let active = self.inner.shared.active_model_id.lock().await;
             if active.as_deref() == Some(model_id) {
                 emit!(ModelLoadProgressEvent {
                     event_type: "ready".to_string(),
@@ -1792,12 +1908,12 @@ impl LocalAgentServiceImpl {
         }
 
         self.replace_engine(Arc::new(engine)).await;
-        *self.inner.active_model_id.lock().await = Some(model_id.to_string());
+        *self.inner.shared.active_model_id.lock().await = Some(model_id.to_string());
         // Native/GGUF path: never probed here (see the field's doc comment),
         // and a previous session's OpenAI-compat probe verdict must not leak
         // onto this model.
-        *self.inner.active_model_routing_disabled.lock().await = false;
-        *self.inner.active_model_routing_key.lock().await = None;
+        *self.inner.shared.active_model_routing_disabled.lock().await = false;
+        *self.inner.shared.active_model_routing_key.lock().await = None;
 
         emit!(ModelLoadProgressEvent {
             event_type: "ready".to_string(),
@@ -2428,48 +2544,66 @@ mod tests {
         node_history_from_messages(load_chat_messages(node_service, node_id).await)
     }
 
-    /// Build a `LocalAgentServiceImpl` backed by a temp-dir SqliteStore.
-    /// Returns the `TempDir` so it outlives the test body.
+    /// Build a `LocalAgentServiceImpl` backed by a temp-dir SqliteStore, over
+    /// its own process-global inference state. Returns the `TempDir` so it
+    /// outlives the test body.
     async fn test_service() -> (LocalAgentServiceImpl, Arc<NodeService>, tempfile::TempDir) {
-        let tempdir = tempfile::TempDir::new().expect("tempdir");
-        let mut store = Arc::new(
-            SqliteStore::new(tempdir.path().join("daemon-db"))
-                .await
-                .expect("SqliteStore"),
-        );
-        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
-        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
-        let daemon_config_path = tempdir.path().join("daemon.toml");
-        let svc = LocalAgentServiceImpl::new(node_service.clone(), embedding, daemon_config_path);
+        let (svc, node_service, _shared, tempdir) =
+            test_service_with(true, MODEL_SPEC_SNAPSHOT_TIMEOUT).await;
         (svc, node_service, tempdir)
     }
 
     /// Like `test_service`, but with the GGUF model manager forced absent —
-    /// the shape `LocalAgentServiceImpl::new` produces when
-    /// `GgufModelManager::new()` fails (unwritable models directory, `$HOME`
-    /// unset). Regression coverage for that failure staying a per-database
-    /// degradation rather than the panic it used to be, which — because
-    /// `build_database_services` runs on every per-database open under
-    /// ADR-053, not just once at startup — would otherwise take down the
-    /// whole daemon process and every other open database with it.
+    /// the shape `SharedLocalAgent::new` produces when `GgufModelManager::new()`
+    /// fails (unwritable models directory, `$HOME` unset). Regression coverage
+    /// for that failure staying a degradation of the local-GGUF RPCs rather
+    /// than the panic it used to be, which — because it ran on every
+    /// per-database open under ADR-053, not just once at startup — would
+    /// otherwise take down the whole daemon process and every other open
+    /// database with it.
     async fn test_service_without_model_manager(
     ) -> (LocalAgentServiceImpl, Arc<NodeService>, tempfile::TempDir) {
-        let tempdir = tempfile::TempDir::new().expect("tempdir");
-        let mut store = Arc::new(
-            SqliteStore::new(tempdir.path().join("daemon-db"))
-                .await
-                .expect("SqliteStore"),
-        );
-        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
-        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
-        let daemon_config_path = tempdir.path().join("daemon.toml");
-        let svc = LocalAgentServiceImpl::from_model_manager(
-            node_service.clone(),
-            embedding,
-            daemon_config_path,
-            None,
-        );
+        let (svc, node_service, _shared, tempdir) =
+            test_service_with(false, MODEL_SPEC_SNAPSHOT_TIMEOUT).await;
         (svc, node_service, tempdir)
+    }
+
+    /// The construction all the `test_service*` helpers share. `model_manager`
+    /// selects between a real `GgufModelManager` and the degraded `None` shape;
+    /// `spec_timeout` bounds the engine-swap geometry snapshot, so a test can
+    /// drive the stalled-`model_info` path without paying the production bound
+    /// in wall-clock time. Also hands back the `SharedLocalAgent` for tests that
+    /// need to reach the process-global engine or model state directly.
+    async fn test_service_with(
+        model_manager: bool,
+        spec_timeout: std::time::Duration,
+    ) -> (
+        LocalAgentServiceImpl,
+        Arc<NodeService>,
+        Arc<SharedLocalAgent>,
+        tempfile::TempDir,
+    ) {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let node_service = test_node_service(tempdir.path().join("daemon-db")).await;
+        let daemon_config_path = tempdir.path().join("daemon.toml");
+        let shared = if model_manager {
+            SharedLocalAgent::from_model_manager(
+                daemon_config_path,
+                GgufModelManager::new().ok().map(Arc::new),
+                spec_timeout,
+            )
+        } else {
+            SharedLocalAgent::from_model_manager(daemon_config_path, None, spec_timeout)
+        };
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let svc = LocalAgentServiceImpl::new(shared.clone(), node_service.clone(), embedding);
+        (svc, node_service, shared, tempdir)
+    }
+
+    /// A `NodeService` over a fresh SqliteStore at `path`.
+    async fn test_node_service(path: std::path::PathBuf) -> Arc<NodeService> {
+        let mut store = Arc::new(SqliteStore::new(path).await.expect("SqliteStore"));
+        Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"))
     }
 
     async fn create_ai_chat_node(node_service: &Arc<NodeService>) -> String {
@@ -2748,7 +2882,7 @@ mod tests {
             }),
         )
         .await;
-        svc.reset_to_noop_engine().await;
+        svc.inner.shared.reset_to_noop_engine().await;
 
         let status = svc
             .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
@@ -2789,13 +2923,10 @@ mod tests {
     /// block the model-load RPC that awaits `replace_engine`.
     #[tokio::test]
     async fn engine_swap_completes_when_model_info_hangs() {
-        let (mut svc, _node_service, _tempdir) = test_service().await;
         // Drive the timeout path without paying the production bound in
         // wall-clock time on every run.
         let short = std::time::Duration::from_millis(50);
-        Arc::get_mut(&mut svc.inner)
-            .expect("sole owner before any clone")
-            .model_spec_snapshot_timeout = short;
+        let (svc, _node_service, _shared, _tempdir) = test_service_with(true, short).await;
 
         // Both calls run on a runtime of their own, on a dedicated OS thread,
         // and the test waits on a channel. Neither may share a runtime with
@@ -2937,6 +3068,238 @@ mod tests {
         assert!(
             svc.inner.turn_tokens.lock().await.get(&node_id).is_none(),
             "no lingering turn token after completion"
+        );
+    }
+
+    // -- ADR-053: per-database routing over a daemon-global engine ----------
+
+    /// A two-database manager whose service sets share one process-global
+    /// `SharedLocalAgent`, assembled exactly the way the daemon assembles them.
+    /// The model manager is forced absent so the test never touches the real
+    /// models directory; nothing here reaches a GGUF RPC.
+    async fn routed_manager() -> (
+        Arc<crate::DatabaseManager>,
+        crate::services::DatabaseId,
+        crate::services::DatabaseId,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let (_tx, model) = tokio::sync::watch::channel::<
+            Option<Arc<nodespace_nlp_engine::EmbeddingService>>,
+        >(None);
+        let context = crate::SharedContext {
+            pty_manager: Arc::new(nodespace_agent::pty::PtySessionManager::new()),
+            model,
+            has_model: false,
+            scheduler: Arc::new(nodespace_core::services::EmbeddingScheduler::new()),
+            subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
+            local_agent: SharedLocalAgent::from_model_manager(
+                dir.path().join("daemon.toml"),
+                None,
+                MODEL_SPEC_SNAPSHOT_TIMEOUT,
+            ),
+        };
+        let manager = Arc::new(
+            crate::DatabaseManager::load(dir.path().join("databases.toml"), context)
+                .await
+                .expect("manager"),
+        );
+        let default_id = manager
+            .ensure_default_registered("Default".into(), dir.path().join("default.db"))
+            .await
+            .expect("default database");
+        let second = manager
+            .create("Second".into(), Some(dir.path().join("second.db")))
+            .await
+            .expect("second database");
+        (manager, default_id, second.id, dir)
+    }
+
+    /// Poll until the node leaves `processing`. A turn is driven by whichever
+    /// of the explicit trigger and the database's own event watcher claims it
+    /// first — they dedup on the same claim — so tests wait for the node to
+    /// settle rather than assuming which one got there.
+    async fn await_settled_ai_chat(node_service: &Arc<NodeService>, node_id: &str) -> AiChatNode {
+        for _ in 0..200 {
+            let chat = get_ai_chat(node_service, node_id).await;
+            if chat.status != "processing" {
+                return chat;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("ai-chat node never left `processing`");
+    }
+
+    /// Turn-state RPCs act on the database the request names, not on whichever
+    /// one the daemon booted with.
+    ///
+    /// The router registers a single `LocalAgentServiceServer`, built from the
+    /// boot-time default database's service set. Turn state, though, is
+    /// per-database: the cancellation tokens and the busy/idle answer belong to
+    /// the database whose ai-chat node is being generated into. Unrouted, every
+    /// such call lands on the default's instance — so on any other database
+    /// `CancelTurn` silently no-ops and `GetStatus` reports the wrong
+    /// database's activity.
+    #[tokio::test]
+    async fn turn_state_rpcs_route_to_the_targeted_database() {
+        let (manager, default_id, second_id, _dir) = routed_manager().await;
+
+        // The impl the router holds is the default database's, exactly as the
+        // serve loops wire it into `BaseServices`.
+        let registered = manager
+            .get_or_open(&default_id)
+            .await
+            .unwrap()
+            .local_agent
+            .clone();
+        let second = manager
+            .get_or_open(&second_id)
+            .await
+            .unwrap()
+            .local_agent
+            .clone();
+
+        let turn = second
+            .begin_turn("chat-node")
+            .await
+            .expect("second database accepts a turn");
+
+        let idle_json = serde_json::to_string(&LocalAgentStatus::Idle).unwrap();
+        let streaming_json = serde_json::to_string(&LocalAgentStatus::Streaming).unwrap();
+
+        let mut header_less = Request::new(GetLocalStatusRequest { session_id: None });
+        header_less.extensions_mut().insert(manager.clone());
+        let status = registered
+            .get_status(header_less)
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            status.status_json, idle_json,
+            "the default database has no turn running, so a header-less status must read idle"
+        );
+
+        let mut targeted = Request::new(GetLocalStatusRequest { session_id: None });
+        targeted.extensions_mut().insert(manager.clone());
+        targeted.metadata_mut().insert(
+            crate::db_routing::DATABASE_ID_HEADER,
+            second_id.as_str().parse().unwrap(),
+        );
+        let status = registered.get_status(targeted).await.unwrap().into_inner();
+        assert_eq!(
+            status.status_json, streaming_json,
+            "status must report the named database's activity; reading the default's instead \
+             shows Idle while another database is mid-turn"
+        );
+
+        let mut cancel = Request::new(CancelTurnRequest {
+            node_id: "chat-node".to_string(),
+        });
+        cancel.extensions_mut().insert(manager.clone());
+        cancel.metadata_mut().insert(
+            crate::db_routing::DATABASE_ID_HEADER,
+            second_id.as_str().parse().unwrap(),
+        );
+        registered.cancel_turn(cancel).await.unwrap();
+
+        assert!(
+            turn.is_cancelled(),
+            "cancel must reach the database actually running the turn — looked up in the \
+             default's token map it matches nothing and silently no-ops"
+        );
+    }
+
+    /// A live token stream follows the database the subscriber named.
+    ///
+    /// Each database broadcasts its turn's tokens on its own channel, so a
+    /// subscription bound to the default database sees nothing at all while
+    /// another database is generating.
+    #[tokio::test]
+    async fn token_stream_subscribes_to_the_targeted_database() {
+        use tokio_stream::StreamExt;
+
+        let (manager, default_id, second_id, _dir) = routed_manager().await;
+        let registered = manager
+            .get_or_open(&default_id)
+            .await
+            .unwrap()
+            .local_agent
+            .clone();
+        let second = manager
+            .get_or_open(&second_id)
+            .await
+            .unwrap()
+            .local_agent
+            .clone();
+
+        let mut subscribe = Request::new(SubscribeTokenStreamRequest {});
+        subscribe.extensions_mut().insert(manager.clone());
+        subscribe.metadata_mut().insert(
+            crate::db_routing::DATABASE_ID_HEADER,
+            second_id.as_str().parse().unwrap(),
+        );
+        let mut stream = registered
+            .subscribe_token_stream(subscribe)
+            .await
+            .unwrap()
+            .into_inner();
+
+        // What a turn running on the second database emits.
+        second
+            .inner
+            .token_tx
+            .send(AgentChunk {
+                chunk_type: "token".to_string(),
+                token_text: Some("hi".to_string()),
+                node_id: Some("chat-node".to_string()),
+                ..Default::default()
+            })
+            .expect("the routed subscriber is listening on this channel");
+
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+            .await
+            .expect("a routed subscription must receive the targeted database's tokens")
+            .expect("stream is open")
+            .expect("chunk is not an error");
+        assert_eq!(chunk.node_id.as_deref(), Some("chat-node"));
+        assert_eq!(chunk.token_text.as_deref(), Some("hi"));
+    }
+
+    /// A model loaded once is the daemon's model, not one database's.
+    ///
+    /// The engine is a single machine resource behind `SharedLocalAgent`, so a
+    /// turn on a database the user never happened to load the model "on" runs
+    /// against it normally. Per-database engines instead left every database
+    /// but the boot-time default holding a no-op engine, failing each turn with
+    /// `NoModelLoaded` and appending a visible error message.
+    #[tokio::test]
+    async fn a_model_loaded_once_serves_every_database() {
+        let (manager, default_id, second_id, _dir) = routed_manager().await;
+        let first = manager.get_or_open(&default_id).await.unwrap();
+        let second = manager.get_or_open(&second_id).await.unwrap();
+
+        // Load through whichever database the app happened to be showing.
+        first
+            .local_agent
+            .replace_engine_if_changed("stub-model", Arc::new(StubEngine::new("Hello back!")))
+            .await;
+
+        // Then chat on the other one.
+        let node_service = second.node_service_grpc.node_service();
+        let node_id = create_processing_node_with_user_message(&node_service, "Hi there").await;
+        second.local_agent.maybe_handle_ai_chat_node(&node_id).await;
+
+        let ai_chat = await_settled_ai_chat(&node_service, &node_id).await;
+        assert_eq!(ai_chat.status, "idle", "turn must terminate, never stuck");
+        let assistant = ai_chat
+            .messages
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant reply appended");
+        assert_eq!(
+            assistant.content, "Hello back!",
+            "the turn must run against the daemon's loaded engine; a per-database engine leaves \
+             this database on the no-op one and records an inference failure instead"
         );
     }
 
@@ -3603,7 +3966,13 @@ model = "model-a"
             "first load should still reach ready even though the probe cannot reach anything: \
              {first:?}"
         );
-        let key_after_first = svc.inner.active_model_routing_key.lock().await.clone();
+        let key_after_first = svc
+            .inner
+            .shared
+            .active_model_routing_key
+            .lock()
+            .await
+            .clone();
         assert_eq!(
             key_after_first, None,
             "an errored probe must not record a routing key, or a later load would treat this \
@@ -3642,7 +4011,13 @@ model = "model-b"
         // neither should have recorded a routing key — proving the second
         // load actually re-evaluated against "model-b" rather than silently
         // reusing whatever verdict (if any) "model-a" had produced.
-        let key_after_second = svc.inner.active_model_routing_key.lock().await.clone();
+        let key_after_second = svc
+            .inner
+            .shared
+            .active_model_routing_key
+            .lock()
+            .await
+            .clone();
         assert_eq!(
             key_after_second, None,
             "an errored re-probe on the edited model must not record a key either — if this were \
@@ -4506,7 +4881,7 @@ model = "model-b"
         fetched_at: std::time::Instant,
         models: Vec<nodespace_agent::agent_types::ModelInfo>,
     ) {
-        let mut cache = svc.inner.openai_compat_discovery_cache.lock().await;
+        let mut cache = svc.inner.shared.openai_compat_discovery_cache.lock().await;
         *cache = Some((fetched_at, models));
     }
 
@@ -4586,6 +4961,7 @@ model = "model-b"
 
         let first_fetched_at = svc
             .inner
+            .shared
             .openai_compat_discovery_cache
             .lock()
             .await
@@ -4602,6 +4978,7 @@ model = "model-b"
         let _ = svc.discover_openai_compat_models(false).await;
         let second_fetched_at = svc
             .inner
+            .shared
             .openai_compat_discovery_cache
             .lock()
             .await
@@ -4640,27 +5017,27 @@ model = "model-b"
         );
     }
 
-    /// Drives `LocalAgentServiceImpl::new` itself — not `from_model_manager`'s
+    /// Drives `SharedLocalAgent::new` itself — not `from_model_manager`'s
     /// injected shortcut — through a real `GgufModelManager::new()` failure, by
     /// pointing `$HOME` at a directory whose `.nodespace/models` path is
     /// occupied by a plain file. This is the one test that actually exercises
     /// the `match GgufModelManager::new() { Ok(..) => Some(..), Err(..) =>
     /// None }` arm that replaced the original `.expect(...)`: the other
-    /// degraded-mode tests construct via `from_model_manager(..., None)`
+    /// degraded-mode tests construct via `from_model_manager(..., None, ..)`
     /// directly and would keep passing even if that match arm regressed back
     /// to a panic.
     ///
     /// Mutating `$HOME` is process-global, so this is deliberately narrow: the
-    /// window is exactly the synchronous `LocalAgentServiceImpl::new` call
-    /// (`new` performs no `.await`, so no other task can interleave before
-    /// `$HOME` is restored), and a repo-wide audit confirms no other test in
-    /// this crate's unit-test binary reads `$HOME` — `SettingsServiceImpl::
+    /// window is exactly the synchronous `SharedLocalAgent::new` call (it
+    /// performs no `.await`, so no other task can interleave before `$HOME` is
+    /// restored), and a repo-wide audit confirms no other test in this crate's
+    /// unit-test binary reads `$HOME` — `SettingsServiceImpl::
     /// with_default_path` and `assembly::build_shared_services`'s
     /// `dirs::home_dir()` calls are only reached from real daemon startup
     /// (`main.rs`) and from separate integration-test *binaries* (their own
     /// OS processes, unaffected by an env mutation in this one).
     #[tokio::test]
-    async fn local_agent_service_new_survives_a_real_model_manager_init_failure() {
+    async fn shared_local_agent_new_survives_a_real_model_manager_init_failure() {
         let fake_home = tempfile::TempDir::new().expect("fake home tempdir");
         let models_path = fake_home.path().join(".nodespace").join("models");
         std::fs::create_dir_all(
@@ -4671,22 +5048,14 @@ model = "model-b"
         .expect("create .nodespace dir");
         std::fs::write(&models_path, b"not a directory").expect("occupy the models path");
 
-        // Build the node service this constructor needs, exactly like
-        // `test_service`, but under a separate tempdir from `fake_home` so the
-        // database and the (broken) models directory don't collide.
-        let db_tempdir = tempfile::TempDir::new().expect("db tempdir");
-        let mut store = Arc::new(
-            SqliteStore::new(db_tempdir.path().join("daemon-db"))
-                .await
-                .expect("SqliteStore"),
-        );
-        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
-        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
-        let daemon_config_path = db_tempdir.path().join("daemon.toml");
+        // Under a separate tempdir from `fake_home` so the config path and the
+        // (broken) models directory don't collide.
+        let config_tempdir = tempfile::TempDir::new().expect("config tempdir");
+        let daemon_config_path = config_tempdir.path().join("daemon.toml");
 
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", fake_home.path());
-        let svc = LocalAgentServiceImpl::new(node_service, embedding, daemon_config_path);
+        let shared = SharedLocalAgent::new(daemon_config_path);
         match original_home {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
@@ -4696,8 +5065,8 @@ model = "model-b"
         // would already be reported as a failure) and must have landed in
         // degraded mode, not silently succeeded with some other directory.
         assert!(
-            svc.inner.model_manager.is_none(),
-            "a real GgufModelManager::new() failure during LocalAgentServiceImpl::new \
+            shared.model_manager.is_none(),
+            "a real GgufModelManager::new() failure during SharedLocalAgent::new \
              must degrade (model_manager: None), not panic or silently recover"
         );
     }

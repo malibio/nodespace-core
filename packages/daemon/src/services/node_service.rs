@@ -2122,6 +2122,11 @@ mod tests {
             has_model: false,
             scheduler: Arc::new(EmbeddingScheduler::new()),
             subtree_gate_factory: Arc::new(std::sync::OnceLock::new()),
+            local_agent: crate::SharedLocalAgent::new(
+                crate::nodespace_dir()
+                    .expect("nodespace dir")
+                    .join("daemon.toml"),
+            ),
         }
     }
 

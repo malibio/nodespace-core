@@ -74,6 +74,6 @@ pub use router::{build_base_router, BaseServices};
 pub use services::{
     build_database_services, build_shared_services, AgentSessionHandler, DatabaseManager,
     DatabaseServiceImpl, DatabaseServices, EmbeddingsServiceImpl, ImportServiceImpl,
-    LocalAgentServiceImpl, NodeServiceImpl, SettingsServiceImpl, SharedContext, SharedServices,
-    SubtreeGateFactory,
+    LocalAgentServiceImpl, NodeServiceImpl, SettingsServiceImpl, SharedContext, SharedLocalAgent,
+    SharedServices, SubtreeGateFactory,
 };
