@@ -565,3 +565,102 @@ describe("clarifyOk", () => {
     expect(v.failure).toContain("could not be captured");
   });
 });
+
+// -- Nested (type-keyed) properties -------------------------------------
+//
+// These assert the SCORING OUTCOME, not that a helper exists: each one is
+// built from a real daemon-shaped payload that scored red before the
+// flattening fix, so a regression re-reds the same scenario rather than
+// merely changing a helper's return value.
+
+describe("type-keyed property flattening", () => {
+  // Exactly the payload scenario 13 produced. It failed 3/3 reps: the write
+  // was correct and `>=2 property value(s)` could not be satisfied because
+  // `populatedCount` saw only the wrapper.
+  const scenario13 = {
+    id: "n1",
+    node_type: "incident_report",
+    content: "search index corruption",
+    properties: {
+      incident_report: {
+        _schema_version: 1,
+        on_call: "rowan",
+        resolved: true,
+      },
+    },
+  };
+
+  test("counts inner fields, so minProperties: 2 is satisfiable", () => {
+    const node = toSnapshotNode(scenario13);
+    expect(node).not.toBeNull();
+    expect(nodeSatisfies(node!, { contentMatches: "search index", minProperties: 2 })).toBe(true);
+  });
+
+  test("excludes _schema_version from the count", () => {
+    // One real field beside the bookkeeping key must NOT pass minProperties: 2,
+    // or the fix would trade a false negative for a false positive.
+    const oneRealField = toSnapshotNode({
+      id: "n2",
+      node_type: "task",
+      content: "Swap the image resizer over to the new pipeline",
+      properties: { task: { _schema_version: 1, due_date: "2026-08-06" } },
+    });
+    expect(nodeSatisfies(oneRealField!, { minProperties: 2 })).toBe(false);
+    expect(nodeSatisfies(oneRealField!, { minProperties: 1 })).toBe(true);
+  });
+
+  test("matches a keyed property lookup (scenario 10b)", () => {
+    const node = toSnapshotNode({
+      id: "n3",
+      node_type: "task",
+      content: "Swap the image resizer over to the new pipeline",
+      properties: { task: { _schema_version: 1, due_date: "2026-08-06", status: "open" } },
+    });
+    expect(nodeSatisfies(node!, { type: "task", properties: { due_date: true } })).toBe(true);
+  });
+
+  test("finds a value by hasPropertyValue (scenario 9)", () => {
+    const node = toSnapshotNode({
+      id: "n4",
+      node_type: "feature_write_up",
+      content: "Offline sync",
+      properties: {
+        feature_write_up: { _schema_version: 1, estimated_days: 8, signed_off: true },
+      },
+    });
+    expect(nodeSatisfies(node!, { contentMatches: "offline sync", hasPropertyValue: 8 })).toBe(true);
+  });
+
+  test("leaves flat properties untouched", () => {
+    const node = toSnapshotNode({
+      id: "n5",
+      node_type: "task",
+      content: "flat",
+      properties: { due_date: "2026-08-06", status: "open" },
+    });
+    expect(nodeSatisfies(node!, { properties: { status: "open" }, minProperties: 2 })).toBe(true);
+  });
+
+  test("keeps siblings that sit beside the wrapper", () => {
+    const node = toSnapshotNode({
+      id: "n6",
+      node_type: "task",
+      content: "mixed",
+      properties: { task: { status: "open" }, extra: "kept" },
+    });
+    expect(nodeSatisfies(node!, { properties: { status: "open", extra: "kept" } })).toBe(true);
+  });
+
+  test("does not unwrap a key that is not the node's own type", () => {
+    // `build_job` here is a property name, not this node's wrapper. Lifting it
+    // would invent fields the daemon never wrote.
+    const node = toSnapshotNode({
+      id: "n7",
+      node_type: "task",
+      content: "not a wrapper",
+      properties: { build_job: { estimated_days: 9 } },
+    });
+    expect(nodeSatisfies(node!, { properties: { estimated_days: 9 } })).toBe(false);
+    expect(nodeSatisfies(node!, { hasPropertyValue: 9 })).toBe(false);
+  });
+});

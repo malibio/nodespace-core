@@ -1406,13 +1406,20 @@ const GROUPS: MatrixScenario[][] = [
     {
       id: "12a",
       scenario: "12a. Comparative setup: type",
-      // Names the estimate field 12d's comparison ranges over, for the same
-      // reason scenario 3 names its downstream fields: a type with nowhere to
-      // put the day count makes every later turn in this group unwinnable, and
-      // the model would degrade honestly and score red for the fixture's
-      // omission (#1846).
+      // Names BOTH fields 12d needs: the estimate its comparison ranges over,
+      // and the sign-off it writes. Same reason scenario 3 names its downstream
+      // fields — a type with nowhere to put a value makes every later turn in
+      // this group unwinnable, and the model degrades honestly and scores red
+      // for the fixture's omission (#1846).
+      //
+      // The sign-off half was missing until a DeepSeek run made the cost
+      // visible: 12d failed while the model reasoned correctly, ranking the
+      // three estimates, naming the right node, then declining to invent a
+      // field the type did not declare ("the Build Job type only tracks
+      // estimated_days — it has no signed off field"). That is the behaviour
+      // this suite wants; the fixture was scoring it red.
       prompt:
-        "I want to track the build jobs we take on and roughly how many days each needs",
+        "I want to track the build jobs we take on, roughly how many days each needs, and whether each one is signed off",
       expect: { kind: "noExtraTypes" },
       end: { createdSchemas: 1 },
       setup: true,

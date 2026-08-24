@@ -122,6 +122,62 @@ function runCli(env: EvalEnv, args: string[]): unknown {
 }
 
 /** Narrow one CLI node object into a SnapshotNode, tolerating absent fields. */
+/**
+ * Bookkeeping keys the daemon writes itself. Excluded from the flattened view
+ * so `minProperties` counts what the MODEL wrote, not what persistence added:
+ * a node whose only real field is `due_date` would otherwise satisfy
+ * `minProperties: 2` purely because `_schema_version` rode along beside it.
+ */
+const PERSISTENCE_KEYS = new Set(["_schema_version"]);
+
+/**
+ * Lift a node's properties out of their type-keyed wrapper.
+ *
+ * The daemon serialises typed properties nested under the node's own type:
+ *
+ *     {"task": {"_schema_version": 1, "due_date": "2026-08-06", "status": "open"}}
+ *
+ * Every consumer here - `nodeSatisfies`, `populatedCount`, and the two failure
+ * renderers - asks questions about the INNER keys (`due_date`, `status`), so
+ * passing the wrapper through means a keyed lookup finds nothing and
+ * `populatedCount` returns 1 (the wrapper) no matter how many fields were
+ * written. That made `minProperties: 2` unsatisfiable by construction and red-
+ * lined correct writes: measured against DeepSeek V4 Pro, scenarios 9, 10b and
+ * 13 each failed 3/3 reps on writes that had persisted exactly what was asked.
+ *
+ * Unwrapping here rather than at each call site keeps the snapshot the single
+ * definition of "this node's properties", so matching, counting and the failure
+ * messages cannot drift apart.
+ *
+ * Only the node's OWN type key is lifted, and only when it holds an object.
+ * A node that stores flat properties, or one carrying a key that merely shares
+ * a name with some other type, is left exactly as it was - the wrapper is
+ * identified by matching `node_type`, not by guessing from shape.
+ */
+export function flattenTypeKeyedProperties(
+  props: Record<string, unknown>,
+  nodeType: string,
+): Record<string, unknown> {
+  const wrapped = props[nodeType];
+  const isWrapper =
+    typeof wrapped === "object" && wrapped !== null && !Array.isArray(wrapped);
+
+  // Keys beside the wrapper are real properties and must survive: the daemon is
+  // not required to put everything inside it, and dropping a sibling here would
+  // trade one silent-miss bug for another.
+  const merged: Record<string, unknown> = isWrapper
+    ? { ...omit(props, nodeType), ...(wrapped as Record<string, unknown>) }
+    : { ...props };
+
+  for (const k of PERSISTENCE_KEYS) delete merged[k];
+  return merged;
+}
+
+function omit(o: Record<string, unknown>, key: string): Record<string, unknown> {
+  const { [key]: _dropped, ...rest } = o;
+  return rest;
+}
+
 export function toSnapshotNode(raw: unknown): SnapshotNode | null {
   if (typeof raw !== "object" || raw === null) return null;
   const o = raw as Record<string, unknown>;
@@ -129,12 +185,13 @@ export function toSnapshotNode(raw: unknown): SnapshotNode | null {
   // `properties` inlines as nested JSON (output.rs::node_to_json), but degrades
   // to a raw string if the daemon's encoding ever breaks. Treat a non-object as
   // "no properties" rather than crashing the snapshot.
-  const props =
+  const rawProps =
     typeof o.properties === "object" &&
     o.properties !== null &&
     !Array.isArray(o.properties)
       ? (o.properties as Record<string, unknown>)
       : {};
+  const props = flattenTypeKeyedProperties(rawProps, o.node_type);
   return {
     id: o.id,
     node_type: o.node_type,

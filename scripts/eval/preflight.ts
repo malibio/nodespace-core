@@ -268,16 +268,64 @@ export function seededSkillCount(
 }
 
 /**
- * Number of seeded skill nodes that are semantically retrievable right now.
+ * Number of seeded skill nodes that carry an embedding right now.
  *
- * Counts via a semantic `--type skill` search rather than a plain node count:
- * the question is not whether the rows exist (they are inserted synchronously
- * at startup) but whether they carry EMBEDDINGS, which is what skill retrieval
- * actually queries. A type-only enumeration returns every skill the instant the
- * daemon boots and would wave through exactly the broken state this detects.
+ * Counts embedded rows in SQL rather than issuing a semantic search, because
+ * no CLI query can answer this question. `search --type skill` with a real
+ * query is filtered by the default Knowledge scope (text/header/code-block/
+ * schema/table), which does not include `skill`, and the CLI exposes no
+ * `--scope` flag to widen it (`packages/cli/src/commands/search.rs`). The
+ * scope filter is bypassed only for an ENUMERATE query, so the two obvious
+ * probes sit on opposite sides of `should_skip_scope_filter`
+ * (`packages/core/src/ops/search_ops.rs`):
+ *
+ *   search "update an existing node" --type skill  -> always 0 (scope-filtered)
+ *   search ""                        --type skill  -> 8       (bypass applies)
+ *
+ * The previous implementation used the first as its numerator and the second
+ * as its denominator, so the gate compared 8 against a structurally-zero count
+ * and could never pass — it blocked every run of the matrix, for every model,
+ * until its 120s timeout expired.
+ *
+ * Switching the numerator to the enumerate form is NOT the fix: `enumerate_nodes`
+ * queries rows by type and never consults embeddings, so it returns every skill
+ * the instant the daemon boots and would wave through exactly the cold-index
+ * state this gate exists to catch.
+ *
+ * Reading the embedding table directly is the only probe that asserts the real
+ * property. The path comes from the daemon's own `database list`, so it cannot
+ * drift onto a different database than the one being scored.
  */
-function retrievableSkillCount(env: EvalEnv, limit: number): number {
-  return skillSearchCount(env, "update an existing node", limit) ?? 0;
+function retrievableSkillCount(env: EvalEnv, _limit: number): number {
+  return embeddedSkillCount(readServedDatabasePath(env));
+}
+
+/**
+ * Skill rows carrying an embedding, read from the served database.
+ *
+ * Returns 0 — never a fallback count — when the query cannot be run at all, so
+ * an unreadable database keeps the gate waiting rather than waving it through.
+ * `sqlite3` is already required by the harness's own diagnostics.
+ */
+export function embeddedSkillCount(
+  dbPath: string,
+  run: (db: string) => { exitCode: number | null; stdout: string } = (db) => {
+    const r = Bun.spawnSync(
+      [
+        "sqlite3",
+        db,
+        "SELECT COUNT(DISTINCT e.node_id) FROM node n " +
+          "JOIN embedding e ON e.node_id = n.id WHERE n.node_type = 'skill'",
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: SKILL_PROBE_TIMEOUT_MS },
+    );
+    return { exitCode: r.exitCode, stdout: r.stdout.toString() };
+  },
+): number {
+  if (!dbPath) return 0;
+  const r = run(dbPath);
+  if (r.exitCode !== 0) return 0;
+  return Number.parseInt(r.stdout.trim(), 10) || 0;
 }
 
 /**
