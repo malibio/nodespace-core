@@ -41,8 +41,8 @@ impl SqliteStore {
         // `vec_embeddings` vec0 mirror. vec0 is keyed by embedding_id, so the leading
         // DELETE must clear the node's existing vec rows via its current embedding ids
         // BEFORE the rows disappear from `embedding`.
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin upsert_embeddings transaction")?;
@@ -220,7 +220,8 @@ impl SqliteStore {
     /// mirror a node's vectors into Supabase pgvector.
     pub async fn get_embeddings(&self, node_id: &str) -> Result<Vec<crate::models::Embedding>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT id, node_id, vector, dimension, model_name, chunk_index, chunk_start, \
                  chunk_end, total_chunks, content_hash, token_count, stale, error_count, \
@@ -259,7 +260,8 @@ impl SqliteStore {
         since: DateTime<Utc>,
     ) -> Result<Vec<crate::models::Embedding>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT id, node_id, vector, dimension, model_name, chunk_index, chunk_start, \
                  chunk_end, total_chunks, content_hash, token_count, stale, error_count, \
@@ -280,8 +282,8 @@ impl SqliteStore {
 
     pub async fn mark_root_embedding_stale(&self, node_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin mark-stale transaction")?;
@@ -328,7 +330,8 @@ impl SqliteStore {
         };
 
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(&sql, libsql::params![max_retries_i, cutoff_str])
             .await
             .context("Failed to get stale embedding root IDs")?;
@@ -349,7 +352,7 @@ impl SqliteStore {
         let cutoff_str = cutoff.to_rfc3339();
         let max_retries_i = max_retries as i64;
 
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT COUNT(*) FROM embedding WHERE stale = 1 AND error_count < ?1 AND modified_at >= ?2",
             libsql::params![max_retries_i, cutoff_str],
         ).await.context("Failed to check for pending stale embeddings")?;
@@ -364,7 +367,8 @@ impl SqliteStore {
 
     pub async fn has_embeddings(&self, node_id: &str) -> Result<bool> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT COUNT(*) FROM embedding WHERE node_id = ?1",
                 libsql::params![node_id.to_string()],
@@ -381,8 +385,8 @@ impl SqliteStore {
     }
 
     pub async fn delete_embeddings(&self, node_id: &str) -> Result<()> {
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin delete_embeddings transaction")?;
@@ -418,7 +422,7 @@ impl SqliteStore {
         let max_retries_i = max_retries as i64;
 
         // Increment error_count, set last_error, clear stale if error_count reaches max_retries
-        self.db.execute(
+        self.write().await.execute(
             "UPDATE embedding SET error_count = error_count + 1, last_error = ?1, modified_at = ?2, stale = CASE WHEN error_count + 1 >= ?3 THEN 0 ELSE stale END WHERE node_id = ?4",
             libsql::params![error.to_string(), now, max_retries_i, node_id.to_string()],
         ).await.context("Failed to record embedding error")?;
@@ -446,7 +450,8 @@ impl SqliteStore {
         let k = (limit * EMBEDDING_KNN_OVERFETCH).max(limit);
 
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT e.node_id, e.total_chunks, v.distance \
                  FROM vec_embeddings v JOIN embedding e ON e.id = v.embedding_id \
@@ -520,7 +525,8 @@ impl SqliteStore {
         let k = (limit * EMBEDDING_KNN_OVERFETCH * 5).max(limit);
 
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT e.node_id, e.total_chunks, v.distance \
              FROM vec_embeddings v \
@@ -624,7 +630,8 @@ impl SqliteStore {
         );
 
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(&sql, libsql::params![fts_query])
             .await
             .context("Failed to execute BM25 search")?;
@@ -692,7 +699,8 @@ impl SqliteStore {
                 .collect();
 
             let mut rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to resolve BM25 roots")?;
@@ -726,7 +734,7 @@ impl SqliteStore {
         let mut vector_bytes = vec![0u8; 768 * 4];
         vector_bytes[0..4].copy_from_slice(&1.0f32.to_le_bytes());
 
-        self.db.execute(
+        self.write().await.execute(
             "INSERT OR IGNORE INTO embedding (id, node_id, vector, dimension, model_name, chunk_index, chunk_start, chunk_end, total_chunks, content_hash, token_count, stale, error_count, last_error, created_at, modified_at) VALUES (?1, ?2, ?3, 768, 'nomic-embed-text-v1.5', 0, 0, NULL, 1, NULL, NULL, 1, 0, NULL, ?4, ?5)",
             libsql::params![id, node_id.to_string(), vector_bytes, now.clone(), now],
         ).await.context("Failed to create stale embedding marker")?;
@@ -745,8 +753,8 @@ impl SqliteStore {
         let mut vector_bytes = vec![0u8; 768 * 4];
         vector_bytes[0..4].copy_from_slice(&1.0f32.to_le_bytes());
 
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin markers transaction")?;

@@ -122,21 +122,125 @@ pub async fn ensure_sqlite_vec_registered() {
         .await;
 }
 
+/// Exclusive access to the store's single writer connection.
+///
+/// Held for the whole span of a mutating operation — including any reads that
+/// operation's writes are computed from — so the operation is atomic with
+/// respect to every other writer. Deref gives the underlying connection, so a
+/// guard is used exactly like a connection.
+pub(crate) type WriteGuard<'a> = tokio::sync::MutexGuard<'a, libsql::Connection>;
+
+/// Idle reader connections beyond this count are closed instead of pooled.
+/// The pool grows to the peak number of *simultaneously in-flight* reads and
+/// then settles back to this many idle handles.
+const MAX_IDLE_READERS: usize = 8;
+
+/// A reader connection checked out of the store's pool, returned by
+/// [`SqliteStore::read`]. Goes back to the pool when dropped.
+///
+/// It deliberately exposes `query` and nothing else. That is the whole point:
+/// a mutating statement can only be reached through [`SqliteStore::write`], so
+/// "this write forgot to take the writer lock" is a compile error rather than a
+/// race nobody notices until data goes missing.
+pub(crate) struct ReadConn {
+    /// `Some` until `Drop` hands the connection back.
+    conn: Option<libsql::Connection>,
+    pool: Arc<std::sync::Mutex<Vec<libsql::Connection>>>,
+}
+
+impl ReadConn {
+    /// Run a query, consuming the checkout: the resulting [`ReadRows`] owns this
+    /// connection and only releases it once the cursor is dropped.
+    ///
+    /// That ownership is not ceremony. A SQLite connection with a partially
+    /// consumed statement is inside an implicit read transaction, and every
+    /// other statement on that same connection is pinned to its snapshot until
+    /// it finishes. Since these cursors are drained across `await` points,
+    /// sharing one reader connection would let one task's in-flight cursor make
+    /// another task's read arbitrarily stale — including a read of a row that
+    /// task had itself just committed.
+    pub(crate) async fn query(
+        self,
+        sql: &str,
+        params: impl libsql::params::IntoParams,
+    ) -> libsql::Result<ReadRows> {
+        let rows = self
+            .conn
+            .as_ref()
+            .expect("connection is taken only in Drop")
+            .query(sql, params)
+            .await?;
+        Ok(ReadRows { rows, _conn: self })
+    }
+}
+
+impl Drop for ReadConn {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            if let Ok(mut pool) = self.pool.lock() {
+                if pool.len() < MAX_IDLE_READERS {
+                    pool.push(conn);
+                }
+            }
+        }
+    }
+}
+
+/// A result cursor that holds its reader connection for as long as it lives.
+///
+/// Field order matters: `rows` is declared first so it drops first, finalizing
+/// the statement and ending the implicit read transaction *before* the
+/// connection is returned to the pool. A connection therefore never re-enters
+/// the pool pinned to a stale snapshot.
+pub(crate) struct ReadRows {
+    rows: libsql::Rows,
+    _conn: ReadConn,
+}
+
+impl ReadRows {
+    pub(crate) async fn next(&mut self) -> libsql::Result<Option<libsql::Row>> {
+        self.rows.next().await
+    }
+}
+
 pub struct SqliteStore {
-    db: Arc<libsql::Connection>,
+    /// Mints reader connections for the pool.
+    database: libsql::Database,
+    /// Idle reader connections. Each is `PRAGMA query_only`, and no transaction
+    /// is ever opened on one, so a read sees a consistent COMMITTED snapshot —
+    /// never another task's half-written transaction, and never swept into one.
+    /// Under WAL, readers neither block nor are blocked by the writer.
+    ///
+    /// A checkout is exclusive for the life of its cursor, which is what keeps
+    /// reads *fresh* as well as clean (see [`ReadConn::query`]).
+    ///
+    /// `query_only` is load-bearing, not decorative: it turns "a mutating
+    /// statement was sent down the read path" from a silent correctness hole
+    /// (an unserialized write outside the writer lock) into an immediate, loud
+    /// `SQLITE_READONLY` error.
+    readers: Arc<std::sync::Mutex<Vec<libsql::Connection>>>,
+    /// The store's only writable connection, reachable exclusively through
+    /// [`SqliteStore::write`]. Every mutating statement in the store — whether
+    /// it opens a transaction or is a lone `execute` — goes through this mutex.
+    ///
+    /// This is required for correctness, not merely for tidiness. libsql's
+    /// local `transaction()` is a bare `BEGIN DEFERRED` on the connection with
+    /// `Drop = ROLLBACK`; it carries no per-task context. So on a shared
+    /// connection, an unsynchronized `execute` from another task lands *inside*
+    /// whatever transaction happens to be open — to be committed or rolled back
+    /// with it — and a second `transaction()` fails outright with "cannot start
+    /// a transaction within a transaction" instead of waiting. Serializing here
+    /// makes both impossible.
+    ///
+    /// Serializing writers costs no real concurrency: SQLite permits exactly
+    /// one writer at a time regardless, so the alternative is not parallel
+    /// writes but `SQLITE_BUSY` after `busy_timeout`. This mutex converts that
+    /// failure into a queue. Reads are unaffected — they run on their own
+    /// connections.
+    writer: tokio::sync::Mutex<libsql::Connection>,
     event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
     valid_node_types: HashSet<String>,
     notifier: Option<StoreNotifier>,
-    /// Serializes `move_node`'s sibling-order read → fractional-key compute →
-    /// write-back. That sequence spans several `await`s on the single shared
-    /// `db` connection, so two concurrent moves would otherwise interleave and
-    /// compute new order keys against the same stale sibling snapshot, corrupting
-    /// the final order. A DB `BEGIN IMMEDIATE` can't serialize them here — every
-    /// task shares one connection, so the second would hit "cannot start a
-    /// transaction within a transaction" rather than waiting — so we serialize at
-    /// the application level. Reorders are infrequent (user-driven), so the
-    /// contention cost is negligible.
-    reorder_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SqliteStore {
@@ -166,14 +270,80 @@ impl SqliteStore {
         Self::initialize_schema(&conn).await?;
 
         let valid_node_types = Self::build_schema_caches(&conn).await?;
+
+        // Seed the read pool with one connection. Opened after migrations so it
+        // never races schema creation; the pool grows on demand from here.
+        let reader = Self::open_reader(&database).await?;
+
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
         Ok(Self {
-            db: Arc::new(conn),
+            database,
+            readers: Arc::new(std::sync::Mutex::new(vec![reader])),
+            writer: tokio::sync::Mutex::new(conn),
             event_tx,
             valid_node_types,
             notifier: None,
-            reorder_lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    /// Open and configure one read-only connection.
+    ///
+    /// Deliberately narrower than `apply_connection_pragmas`: `journal_mode` is
+    /// a durable property of the database file (already WAL, set by the writer)
+    /// and re-asserting it costs a lock on every pool miss, while `synchronous`
+    /// and `foreign_keys` only govern writes this connection cannot perform.
+    /// `busy_timeout` still matters — a reader can contend on WAL recovery.
+    async fn open_reader(database: &libsql::Database) -> Result<libsql::Connection> {
+        let conn = database
+            .connect()
+            .context("Failed to open read connection to libsql database")?;
+        conn.query("PRAGMA busy_timeout = 5000", ())
+            .await
+            .context("Failed to set busy_timeout on read connection")?;
+        conn.query("PRAGMA query_only = ON", ())
+            .await
+            .context("Failed to mark read connection query-only")?;
+        Ok(conn)
+    }
+
+    /// Acquire exclusive use of the writer connection.
+    ///
+    /// Every mutating statement in the store must go through a guard from this
+    /// method, and the guard must stay alive for the whole span the operation
+    /// needs to be atomic — a multi-statement transaction, and any read whose
+    /// result the subsequent write depends on (sibling-order reads, `SELECT
+    /// changes()` OCC probes, …).
+    ///
+    /// The guard is **not** re-entrant. A method holding one must not call
+    /// another store method that also takes one; pass the guard down to a
+    /// helper (`&libsql::Connection`) or drop it first. Read-path methods take
+    /// no guard, so calling one while holding a write guard is safe — but it
+    /// reads through a pooled reader connection, so it will NOT see the guard
+    /// holder's uncommitted writes.
+    pub(crate) async fn write(&self) -> WriteGuard<'_> {
+        self.writer.lock().await
+    }
+
+    /// Check out a reader connection. Takes no write lock, so reads never queue
+    /// behind a long write (a bulk import, a subtree delete) and never block
+    /// one — WAL gives each read a committed snapshot of its own.
+    ///
+    /// Reuses a pooled connection when one is idle and opens a new one
+    /// otherwise, so two reads that overlap in time never share a connection.
+    pub(crate) async fn read(&self) -> Result<ReadConn> {
+        let pooled = self
+            .readers
+            .lock()
+            .map_err(|_| anyhow::anyhow!("reader pool mutex poisoned"))?
+            .pop();
+        let conn = match pooled {
+            Some(conn) => conn,
+            None => Self::open_reader(&self.database).await?,
+        };
+        Ok(ReadConn {
+            conn: Some(conn),
+            pool: self.readers.clone(),
         })
     }
 
@@ -377,7 +547,8 @@ impl SqliteStore {
         params: impl libsql::params::IntoParams,
     ) -> Result<Vec<Node>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(sql, params)
             .await
             .context("Failed to query nodes")?;
@@ -458,7 +629,7 @@ mod tests {
             "opening a pre-migration db must leave a backup snapshot"
         );
 
-        let mut rows = store.db.query("PRAGMA user_version", ()).await?;
+        let mut rows = store.read().await?.query("PRAGMA user_version", ()).await?;
         let version: i64 = rows.next().await?.unwrap().get(0)?;
         assert_eq!(
             version, LATEST_VERSION,
@@ -947,7 +1118,8 @@ mod tests {
         // Simulate a pre-FTS node: drop it from the external-content index.
         let rowid: i64 = {
             let mut r = store
-                .db
+                .read()
+                .await?
                 .query(
                     "SELECT rowid FROM node WHERE id = ?1",
                     libsql::params![nid.clone()],
@@ -956,7 +1128,8 @@ mod tests {
             r.next().await?.unwrap().get(0)?
         };
         store
-            .db
+            .write()
+            .await
             .execute(
                 "INSERT INTO node_fts(node_fts, rowid, id, content) VALUES('delete', ?1, ?2, ?3)",
                 libsql::params![rowid, nid.clone(), "alpha uniquetoken9173"],
@@ -965,7 +1138,8 @@ mod tests {
 
         let matches = |store: Arc<SqliteStore>| async move {
             let mut r = store
-                .db
+                .read()
+                .await?
                 .query(
                     "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'uniquetoken9173'",
                     (),
@@ -979,7 +1153,7 @@ mod tests {
             "node should be missing from the index"
         );
 
-        SqliteStore::backfill_fts_if_stale(&store.db).await?;
+        SqliteStore::backfill_fts_if_stale(&store.write().await.clone()).await?;
 
         assert_eq!(
             matches(store.clone()).await?,
@@ -1006,7 +1180,8 @@ mod tests {
         store.add_to_collection(&mid, &cid).await?; // member_of: in_node=member, out_node=collection
 
         store
-            .db
+            .write()
+            .await
             .execute(
                 "UPDATE relationship SET properties = json_set(properties, '$.order', -1.0) \
                  WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of'",
@@ -1101,7 +1276,7 @@ mod tests {
             .iter()
             .map(|id| libsql::Value::Text(id.clone()))
             .collect();
-        store.db.execute(&sql, params).await?;
+        store.write().await.execute(&sql, params).await?;
 
         let deleted = store.bulk_delete(&ids, None).await?;
         assert_eq!(deleted.len(), 1_000, "every seeded node reported deleted");
@@ -1183,7 +1358,8 @@ mod tests {
 
     async fn vec_row_count(store: &SqliteStore) -> Result<i64> {
         let mut rows = store
-            .db
+            .read()
+            .await?
             .query("SELECT COUNT(*) FROM vec_embeddings", ())
             .await?;
         Ok(rows.next().await?.unwrap().get(0)?)
@@ -1250,7 +1426,8 @@ mod tests {
         // (review concern): assert the query plan uses the index and the
         // ORDER BY is index-covered.
         let mut plan = store
-            .db
+            .read()
+            .await?
             .query(
                 "EXPLAIN QUERY PLAN SELECT id FROM embedding WHERE origin = 'local' AND modified_at >= ?1 \
                  ORDER BY modified_at, node_id, chunk_index",
@@ -1444,7 +1621,8 @@ mod tests {
         assert_eq!(created, node_ids.len());
 
         let mut rows = store
-            .db
+            .read()
+            .await?
             .query("SELECT COUNT(*) FROM embedding WHERE stale = 1", ())
             .await?;
         let count: i64 = rows.next().await?.unwrap().get(0)?;
@@ -1603,7 +1781,8 @@ mod tests {
         store.move_node(&child_id, Some(&parent_b_id), None).await?;
 
         let mut rows = store
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'",
                 libsql::params![child_id.clone()],
@@ -1738,7 +1917,8 @@ mod tests {
         // Every sibling order key is distinct — no collision with the existing
         // children (the old code produced 1.0, 1.0, 2.0, 2.0 here).
         let mut rows = store
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT json_extract(properties, '$.order') FROM relationship \
                  WHERE in_node = ?1 AND relationship_type = 'has_child'",
@@ -1788,8 +1968,11 @@ mod tests {
         let store_a = SqliteStore::new(db_path.clone()).await?;
         let store_b = SqliteStore::new(db_path.clone()).await?;
 
-        // Hold store_a's write lock open in a background task.
-        let conn_a = store_a.db.clone();
+        // Hold store_a's write lock open in a background task. Cloning the
+        // connection out of the guard is deliberate: this test drives raw
+        // BEGIN IMMEDIATE / COMMIT to hold a real SQLite write lock, which is
+        // exactly the cross-store contention the store-wide guard cannot cover.
+        let conn_a = store_a.write().await.clone();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
         let (locked_tx, locked_rx) = tokio::sync::oneshot::channel::<()>();
         let hold_task = tokio::spawn(async move {
@@ -1837,10 +2020,10 @@ mod tests {
 
     /// Regression for the concurrent-reorder race (#1561): many sibling reorders
     /// running at once must all succeed and leave the parent with exactly N
-    /// children carrying N distinct fractional-order keys. Before `reorder_lock`,
-    /// the read → compute → write-back interleaved across the shared connection,
-    /// so concurrent moves computed order keys against the same stale snapshot —
-    /// producing errored moves and/or colliding order values.
+    /// children carrying N distinct fractional-order keys. Without the store's
+    /// write guard, the read → compute → write-back interleaves, so concurrent
+    /// moves compute order keys against the same stale snapshot — producing
+    /// errored moves and/or colliding order values.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_reorders_keep_all_children_with_distinct_order() -> Result<()> {
         let (store, _t) = create_test_store().await?;
@@ -1888,7 +2071,8 @@ mod tests {
 
         // Every sibling still has a distinct order key (no colliding writes).
         let mut rows = store
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT json_extract(properties, '$.order') FROM relationship \
                  WHERE in_node = ?1 AND relationship_type = 'has_child'",
@@ -1907,6 +2091,233 @@ mod tests {
                 "colliding sibling order keys after concurrent reorders: {orders:?}"
             );
         }
+
+        Ok(())
+    }
+
+    /// The read path must be physically incapable of writing. `ReadConn` gives
+    /// compile-time enforcement; `PRAGMA query_only` is the runtime backstop for
+    /// anything that reaches the reader connection another way.
+    #[tokio::test]
+    async fn read_connection_is_query_only() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        let mut rows = store.read().await?.query("PRAGMA query_only", ()).await?;
+        let flag: i64 = rows
+            .next()
+            .await?
+            .expect("query_only returns a row")
+            .get(0)?;
+        assert_eq!(flag, 1, "read connection must be query_only");
+
+        // And the writer must NOT be, or every write would fail.
+        let mut rows = store.write().await.query("PRAGMA query_only", ()).await?;
+        let flag: i64 = rows
+            .next()
+            .await?
+            .expect("query_only returns a row")
+            .get(0)?;
+        assert_eq!(flag, 0, "writer connection must stay writable");
+
+        Ok(())
+    }
+
+    /// A cursor left open by one task must not pin another task's reads to a
+    /// stale snapshot.
+    ///
+    /// A SQLite connection with a partially consumed statement sits in an
+    /// implicit read transaction, and every later statement on that same
+    /// connection is stuck on its snapshot until it finishes. Because these
+    /// cursors are drained across `await` points, a single shared reader
+    /// connection makes this trivially reachable — including "read the row I
+    /// just committed" returning nothing. Each in-flight read therefore gets a
+    /// connection of its own.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_open_cursor_does_not_make_other_reads_stale() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        // Seed a row so the cursor below actually opens a read transaction.
+        store
+            .create_node(
+                Node::new("text".to_string(), "seed".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+
+        // Hold a partially consumed cursor open for the rest of the test.
+        let mut held = store.read().await?.query("SELECT id FROM node", ()).await?;
+        assert!(held.next().await?.is_some(), "expected at least one row");
+
+        // Commit a new node while that cursor is open…
+        let fresh = Node::new("text".to_string(), "fresh".to_string(), json!({}));
+        let fresh_id = fresh.id.clone();
+        store.create_node(fresh, None, None).await?;
+
+        // …and a read must still see it.
+        assert!(
+            store.get_node(&fresh_id).await?.is_some(),
+            "a read was pinned to a stale snapshot by another task's open cursor"
+        );
+
+        drop(held);
+        Ok(())
+    }
+
+    /// A read issued while another task has a transaction open must see the
+    /// database as it was BEFORE that transaction — not its uncommitted rows.
+    ///
+    /// Sharing one connection with the writer fails this: SQLite shows a connection its
+    /// own uncommitted writes, so the reader observes a row that is about to be
+    /// rolled back.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn read_does_not_observe_an_open_transaction() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        let ghost_id = uuid::Uuid::new_v4().to_string();
+
+        let db = store.write().await;
+        let tx = db.transaction().await?;
+        tx.execute(
+            "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) \
+             VALUES (?1, 'text', 'uncommitted', '{}', NULL, 'active', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            libsql::params![ghost_id.clone()],
+        )
+        .await?;
+
+        // Read from another task. `timeout` so that a read path which wrongly
+        // waits on the write lock fails the test instead of hanging it.
+        let reader = {
+            let store = store.clone();
+            let id = ghost_id.clone();
+            tokio::spawn(async move { store.get_node(&id).await })
+        };
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(5), reader)
+            .await
+            .context("a concurrent read blocked on the open transaction")???;
+        assert!(
+            seen.is_none(),
+            "read observed a row from another task's uncommitted transaction"
+        );
+
+        // Rolling back must leave nothing behind either.
+        tx.rollback().await?;
+        drop(db);
+        assert!(store.get_node(&ghost_id).await?.is_none());
+
+        Ok(())
+    }
+
+    /// The data-loss scenario: an acknowledged single-statement write must not
+    /// be absorbed into — and rolled back with — another task's transaction.
+    ///
+    /// Sharing one connection with the writer, the update below runs INSIDE the open
+    /// transaction, reports success to its caller, and then vanishes when that
+    /// transaction rolls back.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_write_is_not_absorbed_by_another_tasks_transaction() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        let keeper = Node::new("text".to_string(), "before".to_string(), json!({}));
+        let keeper_id = keeper.id.clone();
+        store.create_node(keeper, None, None).await?;
+
+        // Open a transaction and leave it open, as a long import would.
+        let db = store.write().await;
+        let tx = db.transaction().await?;
+        tx.execute(
+            "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) \
+             VALUES ('doomed-import-row', 'text', 'x', '{}', NULL, 'active', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            (),
+        )
+        .await?;
+
+        // An unrelated edit lands concurrently.
+        let editor = {
+            let store = store.clone();
+            let id = keeper_id.clone();
+            tokio::spawn(async move {
+                store
+                    .update_node(
+                        &id,
+                        NodeUpdate {
+                            content: Some("after".to_string()),
+                            ..Default::default()
+                        },
+                        None,
+                    )
+                    .await
+            })
+        };
+
+        // It must be waiting, not executing on our connection.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        assert!(
+            !editor.is_finished(),
+            "a concurrent write completed while another task held an open transaction — \
+             it ran inside that transaction"
+        );
+
+        // The import fails and rolls back.
+        tx.rollback().await?;
+        drop(db);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), editor)
+            .await
+            .context("the queued write never completed after the transaction ended")???;
+
+        assert!(
+            store.get_node("doomed-import-row").await?.is_none(),
+            "the rolled-back import row must be gone"
+        );
+        assert_eq!(
+            store.get_node(&keeper_id).await?.expect("keeper").content,
+            "after",
+            "the acknowledged edit was rolled back with an unrelated transaction"
+        );
+
+        Ok(())
+    }
+
+    /// A second transaction must queue behind the first, not fail with
+    /// "cannot start a transaction within a transaction".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_second_transaction_queues_instead_of_erroring() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        let parent = Node::new("text".to_string(), "parent".to_string(), json!({}));
+        let parent_id = parent.id.clone();
+        store.create_node(parent, None, None).await?;
+
+        let db = store.write().await;
+        let tx = db.transaction().await?;
+
+        let second = {
+            let store = store.clone();
+            let parent_id = parent_id.clone();
+            tokio::spawn(async move {
+                store
+                    .create_child_node_atomic(&parent_id, "text", "child", json!({}), None)
+                    .await
+            })
+        };
+
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        assert!(
+            !second.is_finished(),
+            "a second transaction started while the first was still open"
+        );
+
+        tx.rollback().await?;
+        drop(db);
+
+        let child = tokio::time::timeout(std::time::Duration::from_secs(5), second)
+            .await
+            .context("the queued transaction never completed")??
+            .context("second transaction failed instead of queueing")?;
+
+        assert_eq!(store.get_children(&parent_id).await?.len(), 1);
+        assert_eq!(child.content, "child");
 
         Ok(())
     }

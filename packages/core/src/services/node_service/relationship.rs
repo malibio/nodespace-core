@@ -655,7 +655,7 @@ impl NodeService {
         // fractional key MUST be read and written as one atomic unit, or a
         // concurrent reorder can interleave between the read and the write and
         // collide the order key. The store method does the read → compute →
-        // write under `reorder_lock`. (member_of auto-order is likewise handled
+        // write under the store's write guard. (member_of auto-order is likewise handled
         // atomically above via add_to_collection.) Explicit-order has_child and
         // the unordered builtins fall through to the generic path below.
         if relationship_name == "has_child" && edge_data.get("order").is_none() {

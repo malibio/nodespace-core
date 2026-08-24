@@ -30,7 +30,10 @@ pub struct SchemaDeclarationChanges {
 
 impl SqliteStore {
     pub async fn create_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
-        let mut rows = self.db.query(
+        // Guard spans the existence check and the insert: without it two
+        // concurrent calls both see "no mention" and both insert.
+        let db = self.write().await;
+        let mut rows = db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
             libsql::params![source_id.to_string(), target_id.to_string()],
         ).await.context("Failed to check for existing mention")?;
@@ -41,7 +44,7 @@ impl SqliteStore {
 
         let rel_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        self.db.execute(
+        db.execute(
             "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'mentions', '{}', 1, ?4, ?5)",
             libsql::params![rel_id.clone(), source_id.to_string(), target_id.to_string(), now.clone(), now],
         ).await.context("Failed to create mention")?;
@@ -50,7 +53,10 @@ impl SqliteStore {
     }
 
     pub async fn delete_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
-        let mut rows = self.db.query(
+        // Guard spans the id lookup and the delete, so the id reported as
+        // deleted is the row this call actually removed.
+        let db = self.write().await;
+        let mut rows = db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
             libsql::params![source_id.to_string(), target_id.to_string()],
         ).await.context("Failed to get mention id")?;
@@ -61,7 +67,7 @@ impl SqliteStore {
             None
         };
 
-        self.db.execute(
+        db.execute(
             "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'mentions'",
             libsql::params![source_id.to_string(), target_id.to_string()],
         ).await.context("Failed to delete mention")?;
@@ -70,7 +76,7 @@ impl SqliteStore {
     }
 
     pub async fn get_outgoing_mentions(&self, node_id: &str) -> Result<Vec<String>> {
-        let mut rows = match self.db.query(
+        let mut rows = match self.read().await?.query(
             "SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'mentions'",
             libsql::params![node_id.to_string()],
         ).await {
@@ -89,7 +95,7 @@ impl SqliteStore {
     }
 
     pub async fn get_incoming_mentions(&self, node_id: &str) -> Result<Vec<String>> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'mentions'",
             libsql::params![node_id.to_string()],
         ).await.context("Failed to get incoming mentions")?;
@@ -108,7 +114,7 @@ impl SqliteStore {
         let start = std::time::Instant::now();
 
         // Get all nodes that mention this node
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'mentions'",
             libsql::params![node_id.to_string()],
         ).await.context("Failed to get mentioning sources")?;
@@ -131,7 +137,7 @@ impl SqliteStore {
                 container_ids.insert(source_id.clone());
             } else {
                 // Walk up to root using recursive CTE
-                let mut root_rows = self.db.query(
+                let mut root_rows = self.read().await?.query(
                     r#"WITH RECURSIVE ancestors(node_id, depth) AS (
                         SELECT in_node, 1 FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'
                         UNION ALL
@@ -173,7 +179,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
             let mut container_rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to fetch containers")?;
@@ -214,7 +221,8 @@ impl SqliteStore {
         );
 
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 &sql,
                 libsql::params![node_id.to_string(), relationship_type.to_string()],
@@ -240,21 +248,22 @@ impl SqliteStore {
 
     /// Append a `has_child` edge from `parent_id` to `child_id`, assigning the
     /// next fractional sibling order — reading the current max order, computing
-    /// the next key, and inserting the edge as ONE atomic unit under
-    /// `reorder_lock`. The ordered `has_child` analogue of `add_to_collection`'s
+    /// the next key, and inserting the edge as ONE atomic unit under the store's
+    /// write guard. The ordered `has_child` analogue of `add_to_collection`'s
     /// `member_of` path.
     ///
     /// Splitting the read from the write (a separate "get next order" call
     /// followed by a generic relationship insert) let a concurrent reorder
     /// interleave between them, so two appends computed the same order key
-    /// against a now-stale max and collided. Holding `reorder_lock` across the
+    /// against a now-stale max and collided. Holding the guard across the
     /// read → compute → write serializes this against `move_node`,
     /// `create_child_node_atomic`, and `move_children_to_parent`, matching their
-    /// discipline. The lock scopes exactly the order read/compute/write — no
+    /// discipline. The guard scopes exactly the order read/compute/write — no
     /// unrelated async work runs under it.
     ///
-    /// No re-entrancy: `get_next_order_for_relationship` and the raw INSERT take
-    /// no lock, so nothing re-acquires `reorder_lock`. See `reorder_lock`.
+    /// No re-entrancy: `get_next_order_for_relationship` reads through the
+    /// read-only connection and the raw INSERT uses this guard, so nothing
+    /// re-acquires it.
     ///
     /// Uses `INSERT OR IGNORE` (matching `create_generic_relationship`) so a
     /// duplicate edge — already guarded by the caller's existence check — is a
@@ -265,7 +274,7 @@ impl SqliteStore {
         parent_id: &str,
         child_id: &str,
     ) -> Result<(f64, String)> {
-        let _reorder_guard = self.reorder_lock.lock().await;
+        let db = self.write().await;
 
         let new_order = self
             .get_next_order_for_relationship(parent_id, "has_child", false)
@@ -274,7 +283,7 @@ impl SqliteStore {
         let rel_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let props = serde_json::json!({ "order": new_order }).to_string();
-        self.db.execute(
+        db.execute(
             "INSERT OR IGNORE INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
             libsql::params![rel_id.clone(), parent_id.to_string(), child_id.to_string(), props, now.clone(), now],
         ).await.context("Failed to insert has_child edge")?;
@@ -316,7 +325,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.to_string()))
                 .collect();
             let mut rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to validate root-only membership")?;
@@ -354,8 +364,8 @@ impl SqliteStore {
                 .await?;
         }
 
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin add_to_collection transaction")?;
@@ -411,7 +421,10 @@ impl SqliteStore {
         member_id: &str,
         collection_id: &str,
     ) -> Result<Option<String>> {
-        let mut rows = self.db.query(
+        // Guard spans the id lookup and the delete, so the id reported as
+        // removed is the row this call actually removed.
+        let db = self.write().await;
+        let mut rows = db.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of'",
             libsql::params![member_id.to_string(), collection_id.to_string()],
         ).await.context("Failed to get membership ID")?;
@@ -422,7 +435,7 @@ impl SqliteStore {
             None
         };
 
-        self.db.execute(
+        db.execute(
             "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = 'member_of'",
             libsql::params![member_id.to_string(), collection_id.to_string()],
         ).await.context("Failed to remove from collection")?;
@@ -431,7 +444,7 @@ impl SqliteStore {
     }
 
     pub async fn get_node_memberships(&self, node_id: &str) -> Result<Vec<String>> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'member_of'",
             libsql::params![node_id.to_string()],
         ).await.context("Failed to get node memberships")?;
@@ -458,7 +471,8 @@ impl SqliteStore {
     /// waste round-trips. Content and nested-collection memberships are kept.
     pub async fn get_multi_membership_edges(&self) -> Result<Vec<(String, String)>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT r.in_node, r.out_node FROM relationship r \
                  JOIN node n ON n.id = r.in_node \
@@ -486,7 +500,7 @@ impl SqliteStore {
     pub async fn get_collection_members(&self, collection_id: &str) -> Result<Vec<Node>> {
         let start = std::time::Instant::now();
 
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT n.* FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = 'member_of' ORDER BY json_extract(r.properties, '$.order') ASC",
             libsql::params![collection_id.to_string()],
         ).await.context("Failed to get collection members")?;
@@ -516,7 +530,8 @@ impl SqliteStore {
         let normalized = name.to_lowercase();
 
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 \
                  AND lifecycle_status = 'active' LIMIT 1",
@@ -553,7 +568,8 @@ impl SqliteStore {
             .map(|n| libsql::Value::Text(n.clone()))
             .collect();
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(&sql, params)
             .await
             .context("Failed to batch search collections by names")?;
@@ -587,7 +603,8 @@ impl SqliteStore {
         // collection children (a content member isn't a sub-collection). A depth
         // cap bounds traversal in case a cycle slips in.
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 r#"WITH RECURSIVE coll_subtree(node_id, depth) AS (
                 SELECT ?1, 0
@@ -617,7 +634,8 @@ impl SqliteStore {
 
     pub async fn get_all_collection_names(&self) -> Result<Vec<String>> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT content FROM node WHERE node_type = 'collection' ORDER BY content ASC",
                 (),
@@ -653,7 +671,8 @@ impl SqliteStore {
         // itself, and `horizontal-line` is a decorative divider. Keep the two lists
         // in sync.
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT r.out_node, COUNT(*) \
              FROM relationship r \
@@ -675,7 +694,7 @@ impl SqliteStore {
         }
 
         // Get collection-to-collection hierarchy edges
-        let mut rows2 = self.db.query(
+        let mut rows2 = self.read().await?.query(
             "SELECT r.in_node, r.out_node FROM relationship r JOIN node n1 ON n1.id = r.in_node JOIN node n2 ON n2.id = r.out_node WHERE r.relationship_type = 'member_of' AND n1.node_type = 'collection' AND n2.node_type = 'collection'",
             (),
         ).await.context("Failed to get collection hierarchy")?;
@@ -727,14 +746,14 @@ impl SqliteStore {
 
         // ADR-059 §2 (reparent side): this cold-sweep attach path must not give a
         // `has_child` parent to a node that holds a `member_of` edge — symmetric
-        // with the forward guard on `bulk_add_to_collections`. Run before the tx
-        // (the store shares one connection). See `assert_may_gain_parent`.
+        // with the forward guard on `bulk_add_to_collections`. Run before the
+        // write guard is taken, since it only reads. See `assert_may_gain_parent`.
         let child_ids: Vec<&str> = edges.iter().map(|(_, child, _)| child.as_str()).collect();
         self.assert_may_gain_parent(&child_ids).await?;
 
         let now = Utc::now().to_rfc3339();
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin bulk has_child transaction")?;
@@ -800,7 +819,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.to_string()))
                 .collect();
             let mut rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to fetch collection-typed members")?;
@@ -875,6 +895,10 @@ impl SqliteStore {
                 .push(node_id.as_str());
         }
 
+        // Guard taken before the base-order reads, not just before the
+        // transaction: the orders written below are computed from them.
+        let db = self.write().await;
+
         let mut ordered: Vec<(String, String, f64)> = Vec::with_capacity(memberships.len());
         for (collection_id, node_ids) in &by_collection {
             let base_order = self.get_next_member_order(collection_id).await?;
@@ -888,8 +912,7 @@ impl SqliteStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self
-            .db
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin bulk add transaction")?;
@@ -983,7 +1006,8 @@ impl SqliteStore {
                 .map(|id| libsql::Value::Text(id.clone()))
                 .collect();
             let mut rows = self
-                .db
+                .read()
+                .await?
                 .query(&sql, params)
                 .await
                 .context("Failed to check mention endpoints")?;
@@ -1010,8 +1034,8 @@ impl SqliteStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin bulk mentions transaction")?;
@@ -1049,7 +1073,7 @@ impl SqliteStore {
     }
 
     pub async fn check_relationship_exists(&self, source_id: &str, rel_type: &str) -> Result<i64> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT COUNT(*) as cnt FROM relationship WHERE in_node = ?1 AND relationship_type = ?2",
             libsql::params![source_id.to_string(), rel_type.to_string()],
         ).await.context("Failed to check relationship existence")?;
@@ -1067,7 +1091,7 @@ impl SqliteStore {
         target_id: &str,
         rel_type: &str,
     ) -> Result<bool> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT 1 FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
             libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
         ).await.context("Failed to check relationship existence")?;
@@ -1093,7 +1117,7 @@ impl SqliteStore {
         let now = chrono::Utc::now().to_rfc3339();
         let rel_id = uuid::Uuid::new_v4().to_string();
         let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
-        self.db.execute(
+        self.write().await.execute(
             "INSERT OR IGNORE INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
             libsql::params![rel_id.clone(), source_id.to_string(), target_id.to_string(), rel_type.to_string(), props_json, now.clone(), now],
         ).await.context("Failed to create generic relationship")?;
@@ -1106,7 +1130,7 @@ impl SqliteStore {
         target_id: &str,
         rel_type: &str,
     ) -> Result<Option<String>> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT id FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
             libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
         ).await.context("Failed to get relationship ID")?;
@@ -1128,7 +1152,7 @@ impl SqliteStore {
         target_id: &str,
         rel_type: &str,
     ) -> Result<Option<RelationshipRecord>> {
-        let mut rows = self.db.query(
+        let mut rows = self.read().await?.query(
             "SELECT id, in_node, out_node, relationship_type, properties FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3 LIMIT 1",
             libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
         ).await.context("Failed to get relationship record")?;
@@ -1145,7 +1169,7 @@ impl SqliteStore {
         target_id: &str,
         rel_type: &str,
     ) -> Result<()> {
-        self.db.execute(
+        self.write().await.execute(
             "DELETE FROM relationship WHERE in_node = ?1 AND out_node = ?2 AND relationship_type = ?3",
             libsql::params![source_id.to_string(), target_id.to_string(), rel_type.to_string()],
         ).await.context("Failed to delete relationship")?;
@@ -1177,7 +1201,8 @@ impl SqliteStore {
         };
         let now = chrono::Utc::now().to_rfc3339();
         let props_json = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
-        self.db
+        self.write()
+            .await
             .execute(
                 "UPDATE relationship SET properties = ?1, version = version + 1, modified_at = ?2 WHERE id = ?3",
                 libsql::params![props_json, now, rel_id.clone()],
@@ -1199,7 +1224,8 @@ impl SqliteStore {
             _ => return Err(anyhow::anyhow!("Invalid direction: {}", direction)),
         };
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 sql,
                 libsql::params![node_id.to_string(), rel_type.to_string()],
@@ -1235,7 +1261,8 @@ impl SqliteStore {
             _ => return Err(anyhow::anyhow!("Invalid direction: {}", direction)),
         };
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 sql,
                 libsql::params![node_id.to_string(), rel_type.to_string()],
@@ -1269,7 +1296,8 @@ impl SqliteStore {
             filter_col
         );
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 &sql,
                 libsql::params![node_id.to_string(), rel_type.to_string()],
@@ -1300,7 +1328,8 @@ impl SqliteStore {
             filter_col
         );
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 &sql,
                 libsql::params![node_id.to_string(), rel_type.to_string()],
@@ -1359,7 +1388,8 @@ impl SqliteStore {
             builtin_exclusion_sql("relationship_type")
         );
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(&sql, libsql::params![schema_id.to_string()])
             .await
             .context("Failed to query schema relationship declarations")?;
@@ -1390,7 +1420,8 @@ impl SqliteStore {
             builtin_exclusion_sql("r.relationship_type")
         );
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(&sql, ())
             .await
             .context("Failed to query all schema relationship declarations")?;
@@ -1441,8 +1472,8 @@ impl SqliteStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        let tx = self
-            .db
+        let db = self.write().await;
+        let tx = db
             .transaction()
             .await
             .context("Failed to begin schema declaration transaction")?;
@@ -1541,7 +1572,8 @@ impl SqliteStore {
         relationship_name: &str,
     ) -> Result<i64> {
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(
                 "SELECT COUNT(*) FROM relationship r \
                  JOIN node s ON s.id = r.in_node \
@@ -1593,7 +1625,8 @@ impl SqliteStore {
             builtin_exclusion_sql("r.relationship_type")
         );
         let mut rows = self
-            .db
+            .read()
+            .await?
             .query(&sql, libsql::params![schema_id.to_string()])
             .await
             .context("Failed to count schema declaration edges")?;
