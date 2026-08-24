@@ -98,6 +98,8 @@ fn graph_editing_guidance() -> String {
     format!(
         r#"# Graph Editing Guidance
 
+EXISTING RECORD OR A NEW ONE? This skill also carries create_node, and the two are not interchangeable. If the thing the user describes already exists — it was returned by an earlier tool call, or they are marking, correcting, or setting a value on it — call update_node with its id. If it does not exist yet — they are recording, logging, or adding something for the first time — call create_node instead: update_node needs an id, and inventing one writes to a record that is not theirs or fails outright.
+
 When updating an existing node:
 
 CALL update_node NOW: your next action is the tool call, not planning text.
@@ -162,6 +164,8 @@ SUCCESS: {success_no_reverify}"#,
 fn node_deletion_guidance() -> String {
     format!(
         r#"# Node Deletion Guidance
+
+WRONG SKILL? This skill only takes content OUT of the graph. If the user is recording something, updating or marking a value, setting a field, or looking something up, say so and do not call delete_node — deleting a node the user meant to update is the one error here that cannot be undone. (This scoping rule lives here rather than in the skill's description because the description is embedded for retrieval, and an embedding cannot represent "not".)
 
 When deleting a node:
 
@@ -282,13 +286,47 @@ STRUCTURED PROPERTY QUERIES: To filter by property values (status, due_date, etc
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Create new nodes, records, entries, or instances of any type — tasks, text notes, or custom types like Spec, ADR, Ticket. Use when user wants to add, create, or insert a new item, record, entry, or example of an existing type.",
-                "tool_whitelist": ["create_node", "search_semantic", "search_nodes", "get_node"],
+                // `update_node` is whitelisted here as well as on Graph
+                // Editing — deliberately, to remove a single point of failure
+                // rather than because this skill is about editing.
+                //
+                // Every write tool in this seed set except `create_relationship`
+                // was reachable from exactly ONE skill, while read tools sat in
+                // six or seven. With RETRIEVAL_TOP_K = 3, that makes a write
+                // tool's availability a lottery: if its sole owner misses the
+                // window, the tool does not exist for that turn and the model
+                // cannot call it however well it reasons.
+                //
+                // Measured on the locked model, 6 reps of the same seeded chain
+                // on a warm index: the write turn failed 3 times, every failure
+                // being a turn where Graph Editing placed 4th or worse and no
+                // other candidate carried `update_node`. The two outcomes were
+                // exactly:
+                //   pass: Node Creation, Node Deletion, Graph Editing
+                //   fail: Schema Creation, Node Deletion, Research & Search
+                // Node Creation is present on the passing shape and is the
+                // nearest neighbour of an update request in embedding space
+                // ("add a record" and "change that record" are one user intent
+                // expressed two ways), so it is the natural second home.
+                //
+                // Blast radius is UNCHANGED, not merely bounded: this skill
+                // already whitelisted `create_node`, so `skill_is_mutating` was
+                // already true for it and `score_bar_for` already returned
+                // MUTATING. Adding another mutating tool moves nothing. The
+                // destructive rung is untouched either way —
+                // `stage2_permitted_names` admits destructive tools only from
+                // the retrieval winner, and neither added tool is destructive.
+                "tool_whitelist": ["create_node", "update_node", "update_task_status", "search_semantic", "search_nodes", "get_node"],
                 "max_iterations": 3,
             }),
             child_node_type: None,
             child_properties: None,
             tier: SeedTier::System,
             markdown_content: r#"# Node Creation Guidance
+
+NEW RECORD OR EXISTING ONE? If the user is changing something that already exists — marking it done or signed off, correcting a value, setting a field on a record already in this conversation — call update_node with that record's id, NOT create_node. Creating a second copy leaves the original unchanged and silently duplicates the user's data. If they are adding something that does not exist yet, create_node is right and the rest of this guidance applies.
+
+CHANGING A TASK'S STATUS: use update_task_status with the task id and the new status string (open, in_progress, done, cancelled), not update_node — status is not a field_values key on a task.
 
 CALL create_node NOW: your next action is the tool call, not planning text.
 
@@ -320,7 +358,13 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
                 "description": "Modify existing nodes in the knowledge graph - update content, properties, titles, and metadata. For tasks, use update_task_status to change status.",
-                "tool_whitelist": ["update_node", "update_task_status", "get_node", "search_nodes", "search_semantic", "resolve_query", "route_clarify"],
+                // `create_node` is whitelisted here as the mirror of
+                // `update_node` on Node Creation: "record this" and "change
+                // that" are the same user intent inflected two ways, and either
+                // skill can win retrieval on either phrasing. Pairing them means
+                // whichever one places, the turn can still write. See
+                // `no_write_tool_is_reachable_from_only_one_skill`.
+                "tool_whitelist": ["update_node", "update_task_status", "create_node", "get_node", "search_nodes", "search_semantic", "resolve_query", "route_clarify"],
                 "max_iterations": 3,
             }),
             child_node_type: None,
@@ -347,19 +391,36 @@ SUCCESS: After create_node returns a node ID, confirm to the user what was creat
             content: None,
             root_node_type: "skill".to_string(),
             root_properties: serde_json::json!({
-                // Leads with the destructive verbs and stops there. The
-                // earlier wording ended "...remove, delete, or trash a node or
-                // record", and that trailing generic noun made this skill an
-                // attractor for anything node-shaped: it was retrieved as a
-                // candidate on turns that recorded a decision, marked a status,
-                // set a due date, and asked a plain question — none of which
-                // asked to remove anything. Every one of those prompts is
-                // *about* a node or record; only the verb distinguishes them,
-                // so a description whose tail is the shared noun buries the one
-                // signal that separates deletion from everything else. Keep the
-                // discriminating verbs; do not reintroduce a generic noun tail
-                // for readability.
-                "description": "Delete, remove, discard, or trash something the user no longer wants kept. Use ONLY when the user is asking for existing content to be taken out of the knowledge graph — not to record, update, mark, or look something up.",
+                // Destructive verbs ONLY. Two rules, both learned from
+                // measurement, and both about what an embedding encodes.
+                //
+                // 1. No generic noun tail. An earlier wording ended "...remove,
+                //    delete, or trash a node or record", and that trailing noun
+                //    made this skill an attractor for anything node-shaped: it
+                //    was retrieved on turns that recorded a decision, marked a
+                //    status, set a due date, and asked a plain question. Every
+                //    one of those prompts is *about* a node or record; only the
+                //    verb distinguishes them.
+                //
+                // 2. NO DISCLAIMER NAMING OTHER OPERATIONS. The fix for (1)
+                //    appended "— not to record, update, mark, or look something
+                //    up", which made things worse in a way prose review cannot
+                //    catch: embeddings have no notion of negation. A sentence
+                //    listing "record, update, mark, look up" embeds NEARER those
+                //    intents, not further from them. The disclaimer meant to
+                //    exclude update requests is what pulled this skill onto them.
+                //
+                //    Measured on the locked model, write turn "The five-day one
+                //    got signed off — mark it that way": this skill was in the
+                //    Stage-2 top-3 on ALL 18 turns of a 6-rep run, including all
+                //    three that then failed for want of `update_node`. The word
+                //    "mark" in the disclaimer is in the user's prompt.
+                //
+                // The rule this encodes: a retrieval description may contain only
+                // words for what the skill DOES. Scoping ("use this only when…")
+                // belongs in the instruction subtree, which the model reads as
+                // text — not in the description, which is what gets embedded.
+                "description": "Delete, remove, erase, purge, discard, trash, drop, or get rid of stored content. Take something out of the knowledge graph permanently.",
                 "tool_whitelist": ["delete_node", "get_node", "search_semantic", "search_nodes"],
                 "max_iterations": 3,
             }),
@@ -833,6 +894,244 @@ mod tests {
                 "skill '{title}' gained or lost the ability to irreversibly remove user data; \
                  whitelist is {tools:?}. This changes its Stage-2 score bar AND whether it may \
                  contribute destructive tools when it is not the retrieved winner."
+            );
+        }
+    }
+
+    /// A skill's description is EMBEDDED for retrieval, and embeddings have no
+    /// notion of negation: a clause saying "not to record, update, or mark"
+    /// lands NEARER those intents, not further from them. A description may
+    /// therefore contain only words for what the skill DOES.
+    ///
+    /// Regression test for a measured defect, not a style rule. `Node Deletion`
+    /// carried exactly that disclaimer and was retrieved into the Stage-2 top-3
+    /// on all 18 turns of a 6-rep run — including every turn that then failed
+    /// for want of `update_node`. The user prompt was "mark it that way"; the
+    /// word "mark" was in the disclaimer.
+    ///
+    /// Scoping rules belong in the instruction subtree (read as text), never in
+    /// the description (embedded).
+    #[test]
+    fn no_seeded_skill_description_names_operations_it_excludes() {
+        // A negation followed, within the same clause, by a verb belonging to a
+        // different operation. Matching the PAIR rather than the negation alone
+        // keeps this on the failure mode that was actually measured.
+        let negations = [
+            "not to ",
+            "not for ",
+            "never ",
+            "rather than ",
+            "instead of ",
+            "do not ",
+            "don't ",
+        ];
+        let rival_verbs = [
+            "record", "update", "mark", "look up", "create", "delete", "remove", "search", "edit",
+            "modify",
+        ];
+
+        for tmpl in seed_skill_nodes() {
+            let desc = tmpl
+                .root_properties
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            for neg in negations {
+                let Some(at) = desc.find(neg) else { continue };
+                let tail = &desc[at..];
+                let clause = tail.split(['.', ';']).next().unwrap_or(tail);
+                for verb in rival_verbs {
+                    assert!(
+                        !clause.contains(verb),
+                        "skill {:?}'s description contains a negated capability clause \
+                         ({neg:?} … {verb:?}): {clause:?}\n\
+                         An embedding cannot represent \"not\" — naming an operation here pulls \
+                         this skill TOWARD requests for it. Put the scoping rule in the skill's \
+                         guidance subtree instead.",
+                        tmpl.title,
+                    );
+                }
+            }
+        }
+    }
+
+    /// The verbs a real deletion request uses must all be present, since the
+    /// description is the entire retrieval signal for this skill. Guards the
+    /// opposite failure from the test above: a description narrowed so far that
+    /// a genuine "get rid of this" no longer matches it.
+    #[test]
+    fn node_deletion_description_carries_the_destructive_verbs() {
+        let desc = seed_skill_nodes()
+            .into_iter()
+            .find(|t| t.title == "Node Deletion")
+            .expect("Node Deletion must be seeded")
+            .root_properties
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_lowercase();
+
+        for verb in [
+            "delete",
+            "remove",
+            "erase",
+            "purge",
+            "discard",
+            "trash",
+            "get rid of",
+        ] {
+            assert!(
+                desc.contains(verb),
+                "Node Deletion's description is missing {verb:?}, a verb a real deletion \
+                 request may use. Description: {desc:?}"
+            );
+        }
+    }
+
+    /// No write tool may be reachable from only one skill.
+    ///
+    /// With `RETRIEVAL_TOP_K = 3`, a single-sourced write tool makes its own
+    /// availability a lottery: if its sole owner misses the window, the tool
+    /// does not exist for that turn and no amount of model reasoning recovers
+    /// it. Measured on the locked model, 6 reps of one seeded chain on a warm
+    /// index: the write turn failed 3 times, each failure a turn where Graph
+    /// Editing placed outside the top 3 and nothing else carried `update_node`.
+    ///
+    /// Read tools already satisfy this naturally (`get_node` is in seven
+    /// skills, `search_nodes` and `search_semantic` in six). This pins the same
+    /// property for writes so a future skill split cannot silently reintroduce
+    /// the single point of failure.
+    ///
+    /// `delete_node` is the deliberate exception: `stage2_permitted_names`
+    /// admits destructive tools ONLY from the retrieval winner, so a second
+    /// owner would widen the surface without widening availability, and
+    /// ADR-038 gates the irreversible error hardest.
+    #[test]
+    fn no_write_tool_is_reachable_from_only_one_skill() {
+        use std::collections::HashMap;
+
+        let mut owners: HashMap<String, Vec<String>> = HashMap::new();
+        for tmpl in seed_skill_nodes() {
+            for tool in tmpl_tool_whitelist(&tmpl) {
+                owners.entry(tool).or_default().push(tmpl.title.clone());
+            }
+        }
+
+        // Tools whose single owner is a deliberate, reasoned exception.
+        //
+        // `delete_node`: `stage2_permitted_names` admits destructive tools ONLY
+        // from the retrieval winner, so a second owner would widen the surface
+        // without widening availability. ADR-038 gates the irreversible error
+        // hardest, and that outranks convenience here.
+        //
+        // `create_schema` / `update_schema`: defining or altering a TYPE is a
+        // genuinely distinct intent from writing an instance of one, and the
+        // guidance for it is long and specific (enum shapes, title templates,
+        // relationship-vs-field). Duplicating that whitelist onto an
+        // instance-writing skill would offer the type-editing tools on ordinary
+        // record writes — the same over-broad-surface failure as a deletion
+        // skill being retrieved for a creation request, in the other direction.
+        // Schema Creation also retrieves reliably on "I want to track X"
+        // phrasing, which is what actually precedes these calls.
+        //
+        // `create_nodes_from_markdown`: Bulk Import's whitelist is exactly this
+        // one tool, and the intent ("import this document") is lexically
+        // unmistakable rather than an inflection of another request.
+        const SINGLE_OWNER_BY_DESIGN: &[&str] = &[
+            "delete_node",
+            "create_schema",
+            "update_schema",
+            "create_nodes_from_markdown",
+        ];
+
+        // Enumerated from the REGISTRY, not from `owners`. Iterating the map
+        // only sees tools some whitelist already mentions, so a write tool
+        // removed from every whitelist has zero entries, never appears, and the
+        // check meant to catch exactly that passes green — the unreachable case
+        // being strictly worse than the single-owner case this test is named
+        // for.
+        let mut offenders: Vec<String> = crate::local_agent::tools::Tool::ALL
+            .iter()
+            .filter(|tool| tool.is_write())
+            .map(|tool| tool.name())
+            .filter(|name| !SINGLE_OWNER_BY_DESIGN.contains(name))
+            .filter_map(|name| {
+                let skills = owners.get(name).map(Vec::as_slice).unwrap_or_default();
+                (skills.len() < 2).then(|| {
+                    if skills.is_empty() {
+                        format!("{name} (reachable from NO skill)")
+                    } else {
+                        format!("{name} (only {skills:?})")
+                    }
+                })
+            })
+            .collect();
+        offenders.sort();
+
+        assert!(
+            offenders.is_empty(),
+            "these write tools are reachable from fewer than two skills: {}\n\
+             With RETRIEVAL_TOP_K = 3 that makes availability a lottery — if the sole owner \
+             misses the window the tool does not exist for that turn, whatever the model does. \
+             A tool reachable from NO skill is unavailable on every turn. \
+             Give each a second plausible owner, or add it to SINGLE_OWNER_BY_DESIGN with the \
+             reason.",
+            offenders.join(", ")
+        );
+    }
+
+    /// Pairing a write tool onto a second skill only removes the single point
+    /// of failure if the skill's GUIDANCE also says when to reach for it.
+    /// Whitelisting alone hands the model two write verbs with no rule for
+    /// choosing, and the wrong choice is not a no-op: `create_node` where
+    /// `update_node` was meant silently duplicates the user's data, and
+    /// `update_node` where `create_node` was meant needs an id that does not
+    /// exist.
+    ///
+    /// Pinned as a property rather than fixed once, because the fix was applied
+    /// asymmetrically the first time — Node Creation got a disambiguation
+    /// clause, Graph Editing got the tool and no clause at all.
+    #[test]
+    fn a_skill_carrying_both_write_verbs_disambiguates_them_in_its_guidance() {
+        for tmpl in seed_skill_nodes() {
+            let tools = tmpl_tool_whitelist(&tmpl);
+            let carries = |name: &str| tools.iter().any(|t| t == name);
+            if !(carries("create_node") && carries("update_node")) {
+                continue;
+            }
+            for tool in ["create_node", "update_node"] {
+                assert!(
+                    tmpl.markdown_content.contains(tool),
+                    "skill {:?} whitelists both create_node and update_node but its guidance \
+                     never names {tool}. A model handed two write verbs with no rule for \
+                     choosing picks one by phrasing, and the wrong pick either duplicates the \
+                     user's record or writes to an id that does not exist.",
+                    tmpl.title,
+                );
+            }
+        }
+    }
+
+    /// `update_task_status` is the dedicated verb for a task's status, and a
+    /// skill offering it alongside `update_node` has to say so — otherwise the
+    /// model reaches for `field_values` and the status silently does not move.
+    #[test]
+    fn a_skill_carrying_update_task_status_names_it_in_its_guidance() {
+        for tmpl in seed_skill_nodes() {
+            if !tmpl_tool_whitelist(&tmpl)
+                .iter()
+                .any(|t| t == "update_task_status")
+            {
+                continue;
+            }
+            assert!(
+                tmpl.markdown_content.contains("update_task_status"),
+                "skill {:?} whitelists update_task_status but never names it in its guidance; \
+                 the model will set status through update_node's field_values instead, which \
+                 does not move a task's status.",
+                tmpl.title,
             );
         }
     }

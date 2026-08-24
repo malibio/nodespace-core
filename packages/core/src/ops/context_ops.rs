@@ -241,6 +241,38 @@ fn parse_and_filter_non_core_schemas(results: Vec<(Node, f64)>) -> Vec<SchemaNod
         .collect()
 }
 
+/// Append any non-core schema the query names outright to the semantically
+/// retrieved set, skipping ones already present.
+///
+/// The lexical backstop for schema retrieval. Split out as a pure function so
+/// the behaviour is testable without a live `NodeService` and embedding
+/// service; see `build_workspace_context` for why it exists.
+///
+/// Append rather than replace: semantic retrieval and naming answer different
+/// questions, and a type named outright is the strongest available evidence
+/// that it is relevant. Order is preserved so semantic relevance still leads.
+fn append_schemas_named_in_query(
+    mut hits: Vec<SchemaNode>,
+    all_schemas: &[SchemaNode],
+    query: &str,
+) -> Vec<SchemaNode> {
+    let q_lower = query.to_lowercase();
+    for s in all_schemas.iter().filter(|s| !s.is_core) {
+        let named = crate::ops::skill_ops::mentions_phrase(&q_lower, &s.id.to_lowercase())
+            || crate::ops::skill_ops::mentions_phrase(&q_lower, &s.content.to_lowercase());
+        if named && !hits.iter().any(|h| h.id == s.id) {
+            tracing::debug!(
+                schema_id = %s.id,
+                query = query,
+                "workspace_context: schema recovered by name (not yet embedded, or below \
+                 the similarity threshold)"
+            );
+            hits.push(s.clone());
+        }
+    }
+    hits
+}
+
 /// Build the embedding query for schema retrieval from conversation context.
 ///
 /// The last [`BLENDED_HISTORY_TURNS`] turns are prepended to `current_message`,
@@ -345,29 +377,79 @@ pub async fn build_workspace_context(
         _ => vec![],
     };
 
+    // Lexical backstop for a schema the semantic index cannot see yet.
+    //
+    // Embeddings are generated on a ~30s debounce (`EmbeddingService`'s
+    // `debounce_duration_secs`), so a type the user just defined is NOT
+    // semantically retrievable for half a minute after `create_schema` returns.
+    // There is no fallback below this point: an empty `retrieved_hits` omits the
+    // EXISTING SCHEMAS block entirely, which tells the model the type does not
+    // exist. It then either invents a `node_type` or re-runs `create_schema`.
+    //
+    // Measured on the locked model, create-then-use inside the window:
+    //     [tool] create_node [ERROR]  Unknown node_type 'feature_writeups'
+    // and in the run that succeeded, the instance was created 1.4s after its
+    // schema's embedding landed — the chain passed on timing alone.
+    //
+    // This is a real user-facing sequence ("track my write-ups" → "add one"),
+    // not only an eval artifact, so the repair belongs here rather than in the
+    // harness. Named types are appended to whatever semantic retrieval found
+    // rather than replacing it: the two signals answer different questions, and
+    // a type named outright in the request is the strongest evidence available
+    // that it is relevant.
+    //
+    // Purely mechanical and already precedented — `skill_ops::schema_named_in_query`
+    // matches non-core schemas against the query the same way, with the same
+    // token-boundary matcher, for the same reason. Core schemas stay excluded
+    // (as they are from the semantic path via `parse_and_filter_non_core_schemas`),
+    // and dedup keeps a hit found by both signals from being injected twice.
+    // The schema corpus, fetched ONCE and shared by both consumers below: the
+    // lexical backstop needs it to match names, and the hydration step needs it
+    // in full anyway (incoming reachability depends on schemas outside the
+    // retrieved set). Two separate `get_all_schemas()` awaits here meant two
+    // full-table reads per turn where one serves.
+    //
+    // Still conditional, though. Neither consumer exists on a turn with no
+    // query and no hits — a resident context build with no message to retrieve
+    // against — and the read before this change was gated on `retrieved_hits`
+    // being non-empty. Fetching unconditionally would add a full-table read to
+    // exactly the turns that previously did none.
+    let lexical_query = query.filter(|q| !q.trim().is_empty());
+    let all_schemas = if lexical_query.is_none() && retrieved_hits.is_empty() {
+        None
+    } else {
+        match node_service.get_all_schemas().await {
+            Ok(schemas) => Some(schemas),
+            Err(e) => {
+                tracing::warn!(error = %e, "workspace_context: fetching the schema corpus failed; the lexical backstop and relationship hydration are both skipped this turn");
+                None
+            }
+        }
+    };
+
+    let retrieved_hits = match (lexical_query, &all_schemas) {
+        (Some(q), Some(schemas)) => append_schemas_named_in_query(retrieved_hits, schemas, q),
+        _ => retrieved_hits,
+    };
+
     // Search results are raw storage nodes, and relationship declarations are
     // relationship-table rows rather than a `properties` key — so the parsed
     // hits carry no relationships. Re-resolve each hit (preserving relevance
-    // order) from the hydrated schema corpus, which the one-hop traversal below
-    // needs in full anyway (incoming reachability depends on schemas outside
-    // the retrieved set).
-    let (relevant_schemas, related_schemas) = if retrieved_hits.is_empty() {
-        (vec![], vec![])
-    } else {
-        match node_service.get_all_schemas().await {
-            Ok(all_schemas) => {
-                let relevant: Vec<SchemaNode> = retrieved_hits
-                    .iter()
-                    .filter_map(|hit| all_schemas.iter().find(|s| s.id == hit.id).cloned())
-                    .collect();
-                let related = related_one_hop_schemas(&relevant, &all_schemas);
-                (relevant, related)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "workspace_context: fetching schema corpus failed; using unhydrated retrieval hits and omitting related schemas");
-                (retrieved_hits, vec![])
-            }
+    // order) from the hydrated schema corpus.
+    let (relevant_schemas, related_schemas) = match (&all_schemas, retrieved_hits.is_empty()) {
+        (_, true) => (vec![], vec![]),
+        (Some(schemas), false) => {
+            let relevant: Vec<SchemaNode> = retrieved_hits
+                .iter()
+                .filter_map(|hit| schemas.iter().find(|s| s.id == hit.id).cloned())
+                .collect();
+            let related = related_one_hop_schemas(&relevant, schemas);
+            (relevant, related)
         }
+        // Corpus unavailable: fall back to the unhydrated retrieval hits rather
+        // than dropping them, and omit related schemas. Same behaviour as
+        // before, now expressed once instead of in a second error arm.
+        (None, false) => (retrieved_hits, vec![]),
     };
 
     Ok(WorkspaceContext {
@@ -608,6 +690,85 @@ mod tests {
         let ids: Vec<&str> = schemas.iter().map(|s| s.id.as_str()).collect();
 
         assert_eq!(ids, vec!["customer"]);
+    }
+
+    // -- lexical backstop for schema retrieval -------------------------------
+
+    fn named_schema(id: &str, display: &str, is_core: bool) -> SchemaNode {
+        SchemaNode::from_node(Node::new_with_id(
+            id.to_string(),
+            "schema".to_string(),
+            display.to_string(),
+            serde_json::json!({ "isCore": is_core, "fields": [] }),
+        ))
+        .expect("valid schema node")
+    }
+
+    /// Embeddings run on a ~30s debounce, so a type the user just defined is
+    /// not semantically retrievable yet. Without this backstop the EXISTING
+    /// SCHEMAS block is omitted entirely and the model is effectively told the
+    /// type does not exist — observed live as
+    /// `create_node [ERROR] Unknown node_type 'feature_writeups'`.
+    #[test]
+    fn schema_named_in_query_is_recovered_when_semantic_retrieval_is_empty() {
+        let all = vec![named_schema("feature_write_up", "feature write-up", false)];
+        let hits = append_schemas_named_in_query(vec![], &all, "Put one down for feature write-up");
+        let ids: Vec<&str> = hits.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["feature_write_up"]);
+    }
+
+    /// Matched by snake_case id as well as by display name — `create_node`
+    /// takes the id, and a user echoing it back is the same evidence.
+    #[test]
+    fn schema_named_by_snake_case_id_is_recovered() {
+        let all = vec![named_schema("release_plan", "Release Plan", false)];
+        let hits = append_schemas_named_in_query(vec![], &all, "add a release_plan for Q3");
+        assert_eq!(hits.len(), 1);
+    }
+
+    /// A hit semantic retrieval already found is not injected twice.
+    #[test]
+    fn a_schema_found_by_both_signals_is_not_duplicated() {
+        let all = vec![named_schema("invoice", "Invoice", false)];
+        let already = vec![named_schema("invoice", "Invoice", false)];
+        let hits = append_schemas_named_in_query(already, &all, "log an invoice");
+        assert_eq!(hits.len(), 1, "duplicate schema injected: {hits:?}");
+    }
+
+    /// Core types stay excluded, exactly as they are from the semantic path.
+    /// Their presence in EXISTING SCHEMAS is what `create_node` guidance reads
+    /// as proof a type is user-defined, so admitting one here would reintroduce
+    /// the ADR-063 violation `parse_and_filter_non_core_schemas` prevents.
+    #[test]
+    fn a_named_core_schema_is_not_recovered() {
+        let all = vec![named_schema("task", "Task", true)];
+        let hits = append_schemas_named_in_query(vec![], &all, "add a task to fix the build");
+        assert!(hits.is_empty(), "core schema leaked into context: {hits:?}");
+    }
+
+    /// Token-boundary matching, inherited from `mentions_phrase`: a query that
+    /// merely contains the id as a substring does not name the type.
+    #[test]
+    fn a_substring_match_does_not_count_as_naming_the_type() {
+        let all = vec![named_schema("adr", "ADR", false)];
+        let hits = append_schemas_named_in_query(vec![], &all, "update the address field");
+        assert!(hits.is_empty(), "substring matched as a name: {hits:?}");
+    }
+
+    /// Semantic relevance still leads; the named type is appended after.
+    #[test]
+    fn semantic_hits_keep_their_order_ahead_of_a_named_recovery() {
+        let all = vec![
+            named_schema("invoice", "Invoice", false),
+            named_schema("venue", "Venue", false),
+        ];
+        let hits = append_schemas_named_in_query(
+            vec![named_schema("invoice", "Invoice", false)],
+            &all,
+            "book the venue for the invoice run",
+        );
+        let ids: Vec<&str> = hits.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["invoice", "venue"]);
     }
 
     fn sample_schema_with_relationships(

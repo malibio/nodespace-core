@@ -44,8 +44,25 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
         return Ok(());
     };
 
+    // An entry that declares nothing at all is dropped rather than reported —
+    // see `drop_empty_field_entries`, which runs after this check for exactly
+    // that reason. Skipping it HERE rather than removing it first is what keeps
+    // the reported positions honest: dropping first renumbers the array, so a
+    // problem in the caller's `fields[1]` would come back named `fields[0]` and
+    // send the caller to edit an entry it never got wrong.
+    //
+    // Unless nothing else declares anything either. An array of only-null
+    // entries is a caller that never expressed a single field, and reporting
+    // that is the whole point: dropping them all would leave `fields: []`,
+    // which `handle_create_schema` reads as a deliberate fieldless schema and
+    // creates one — a silent wrong success in place of a correctable error.
+    let any_informative = fields.iter().any(|f| !is_informationless_field_entry(f));
+
     let mut problems: Vec<String> = Vec::new();
     for (idx, field) in fields.iter().enumerate() {
+        if any_informative && is_informationless_field_entry(field) {
+            continue;
+        }
         let Some(obj) = field.as_object() else {
             problems.push(format!(
                 "{key}[{idx}] is {}, not an object",
@@ -66,8 +83,12 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
         // with a per-entry property name gives one identifier two meanings in a
         // function whose whole job is naming things precisely.
         for required_key in ["name", "type"] {
+            // `null` counts as missing, not as present-with-a-value. Serde's
+            // own message for a null here is `invalid type: null, expected a
+            // string`, which names neither the key nor the entry — the bare,
+            // unlocatable error this function exists to replace.
             let missing = match obj.get(required_key) {
-                None => true,
+                None | Some(Value::Null) => true,
                 Some(Value::String(s)) => s.trim().is_empty(),
                 Some(_) => false,
             };
@@ -88,6 +109,155 @@ fn describe_malformed_fields(params: &Value, key: &str) -> Result<(), MarkdownEr
          e.g. {{\"name\":\"amount\",\"type\":\"number\"}}. Re-send the call with only the \
          listed entries corrected — leave every other field exactly as it was.",
         problems.join("; ")
+    )))
+}
+
+/// Drop entries from a `fields`-shaped array whose every value is null.
+///
+/// An entry like `{"description":null,"name":null}` declares nothing: there is
+/// no field name to store under and no type to store. Rejecting it is
+/// technically correct and practically harmful — it fails a call whose other
+/// entries were complete, and the caller's next attempt mutates the parts that
+/// were already right.
+///
+/// Observed live on the locked model, on the retry that had just correctly
+/// repaired a missing top-level `name`:
+///
+/// ```json
+/// {"fields":[ …status…, …estimated_days…, {"description":null,"name":null}],
+///  "name":"Feature Write-up"}
+/// ```
+///
+/// Both real fields were well-formed and the schema name was right. The call
+/// was rejected for the null entry, and the following attempt added a stray
+/// `field_values` key, then the one after abandoned `create_schema` entirely
+/// and called `create_node` against a type that had never been created. One
+/// informationless entry cost the whole chain.
+///
+/// Deliberately narrow, and NOT a general "ignore bad fields" rule. An entry
+/// with a real `name` but a missing `type` is a genuine mistake the caller must
+/// see and fix — `describe_malformed_fields` still reports it, and still
+/// reports an all-null entry's siblings. This drops only entries that carry no
+/// signal at all, so nothing a caller expressed is silently discarded.
+///
+/// Runs AFTER `describe_malformed_fields`, never before. That check reports
+/// problems by array position, and dropping first renumbers the array — a
+/// problem the caller has at `fields[1]` would be reported as `fields[0]` and
+/// send it to rewrite an entry that was already correct. `describe_malformed_fields`
+/// therefore skips these entries itself, which leaves the positions intact and
+/// makes it the one place the "declares nothing" rule is applied. It also means
+/// an array of ONLY such entries has already been rejected by the time this
+/// runs, so this can never empty a non-empty `fields` array.
+fn drop_empty_field_entries(params: &mut Value, key: &str) {
+    let Some(fields) = params.get_mut(key).and_then(Value::as_array_mut) else {
+        return;
+    };
+    fields.retain(|entry| !is_informationless_field_entry(entry));
+}
+
+/// Whether a `fields`-shaped entry declares nothing at all: an object whose
+/// every value is null, or one with no keys.
+///
+/// A non-object is NOT informationless — it is a caller mistake, and
+/// `describe_malformed_fields` reports it with its position rather than
+/// removing it silently.
+fn is_informationless_field_entry(entry: &Value) -> bool {
+    entry
+        .as_object()
+        .is_some_and(|obj| obj.values().all(Value::is_null))
+}
+
+/// Report a missing REQUIRED TOP-LEVEL key on `create_schema` with an
+/// instruction the caller can act on, before serde reports it as a bare name.
+///
+/// Sibling of [`describe_malformed_fields`], which does the same job one level
+/// down (a malformed entry *inside* the `fields` array). This covers the case
+/// that array-level check cannot see: a payload whose `fields` are all
+/// well-formed but which omits the schema's own `name`.
+///
+/// **Why this is needed rather than left to the grammar.** Tool-call arguments
+/// are NOT constrained to the tool's JSON schema on this stack. llama.cpp emits
+/// `tool-create-schema ::= ("create_schema") gemma4-dict`, where `gemma4-dict`
+/// is any well-formed JSON object — so `required: ["name", "fields"]` is never
+/// enforced during sampling. That is a documented upstream limitation, not a
+/// local defect: a llama.cpp collaborator states "Gemma 4 only forces the
+/// structure, not the arguments", because `json-schema-to-grammar.cpp` "only
+/// produces rules for JSON and not Gemma's fc notation"
+/// (ggml-org/llama.cpp discussion 21839). The PR that would add
+/// schema-constrained decoding for this format has been open and unreviewed for
+/// months, and its own reported blocker is enum constraints on required
+/// properties — exactly the shape `create_schema` has. So the constraint has to
+/// be applied here, at our boundary.
+///
+/// **Why this reports rather than repairs.** The four `repair_*` functions in
+/// `agent_loop` fix malformations that are mechanical and unambiguous — a key
+/// carrying its own quote marks means the same key without them. A missing
+/// schema name is not that: the correct value would have to be inferred from
+/// the user's prose, which is interpretation, and the repair doctrine
+/// deliberately stops short of it. Naming the type wrongly is worse than asking
+/// again, because the id derives from it and every later call must match.
+///
+/// Measured on the locked model: 17 of 17 failing `create_schema` calls in one
+/// run began `{"fields":[…]}` with a correct, complete fields array and no
+/// top-level `name`. Serde's own message for that is `missing field \`name\``,
+/// which carries no repair instruction — and the model re-sent the identical
+/// payload until the duplicate-call guard broke the loop.
+fn describe_missing_top_level_keys(params: &Value) -> Result<(), MarkdownError> {
+    // Only meaningful for an object payload; anything else fails later with a
+    // clearer type error than this function could add.
+    let Some(obj) = params.as_object() else {
+        return Ok(());
+    };
+
+    // What is wrong with `name`, phrased to complete "\"name\" is required and
+    // …". `None` is the measured case; the others reach the same bare serde
+    // error this function exists to replace (`invalid type: null, expected a
+    // string`), which names neither the key nor what to do about it. A model
+    // that appends `"name": null` to a field entry — the shape
+    // `drop_empty_field_entries` exists for — writes it at the top level too.
+    let name_problem: Option<String> = match obj.get("name") {
+        None => Some("was not sent".to_string()),
+        Some(Value::Null) => Some("was sent as null".to_string()),
+        Some(Value::String(s)) if s.trim().is_empty() => Some("was sent empty".to_string()),
+        Some(Value::String(_)) => None,
+        Some(other) => Some(format!("was sent as {}", json_type_name(other))),
+    };
+    let Some(name_problem) = name_problem else {
+        return Ok(());
+    };
+
+    // Reflect back what the call DID carry, so the model can see its fields
+    // survived and that only the one key needs adding. Without this the model
+    // has no signal distinguishing "add a key" from "the whole call was wrong",
+    // and it re-sends the payload rewritten rather than extended.
+    let field_names: Vec<String> = obj
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|f| f.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let kept = if field_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Your \"fields\" are correct and must be re-sent unchanged ({}).",
+            field_names.join(", ")
+        )
+    };
+
+    Err(MarkdownError::invalid_params(format!(
+        // No "Invalid parameters:" prefix — Display for InvalidParams already
+        // writes "invalid params: ".
+        "\"name\" is required and {name_problem}. It must be a non-empty string: the DISPLAY \
+         NAME of the type being created, in the user's own words, singular — e.g. \
+         {{\"name\": \"Ticket\", \"fields\": [...]}}. It is a top-level parameter, NOT an entry \
+         in \"fields\".{kept} Re-send the same call with \"name\" set."
     )))
 }
 
@@ -355,6 +525,18 @@ pub async fn handle_create_schema(
     // leaves an LLM caller unable to repair the call: it re-sends with a
     // different part mutated and degrades the arguments further on each retry.
     describe_malformed_fields(&params, "fields")?;
+    // Runs after the per-entry check so a payload wrong in both places reports
+    // the field problems first: those are what the caller must rebuild, whereas
+    // a missing `name` is a one-key addition to an otherwise-correct call.
+    describe_missing_top_level_keys(&params)?;
+
+    // Runs AFTER both checks, not before: an entry whose every value is null
+    // carries no information to validate, but removing it first renumbers the
+    // array and makes the positions those checks report point at the wrong
+    // entry. `describe_malformed_fields` skips such entries itself and rejects
+    // an array made only of them, so by here at least one real field survives.
+    let mut params = params;
+    drop_empty_field_entries(&mut params, "fields");
 
     let params: CreateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;
@@ -602,6 +784,15 @@ pub async fn handle_update_schema(
     // See `describe_malformed_fields` — locate a bad entry before serde reports
     // only the absent key with no position.
     describe_malformed_fields(&params, "add_fields")?;
+
+    // `add_fields` is `fields` under another name and takes the same treatment:
+    // the model appends an informationless `{"description":null,"name":null}`
+    // here too, and failing an otherwise-correct batch over it drives the same
+    // degrading-retry loop. `describe_malformed_fields` above already skips
+    // these entries, so without this they would reach serde and fail with the
+    // bare error that check exists to replace.
+    let mut params = params;
+    drop_empty_field_entries(&mut params, "add_fields");
 
     let mut params: UpdateSchemaParams = serde_json::from_value(params)
         .map_err(|e| MarkdownError::invalid_params(format!("{e}")))?;

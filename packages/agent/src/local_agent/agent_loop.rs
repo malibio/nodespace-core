@@ -1115,36 +1115,65 @@ fn persisted_field_count(tool: &str, result: &serde_json::Value) -> Option<usize
 /// Last-resort fallback for when the model produced no usable final text
 /// (empty, or a leaked tool call). Repeated calls to the same tool collapse to
 /// one bullet with a retry count so the diagnostic signal — the agent looped on
-/// the same operation — survives. Executions that errored are labelled
-/// "failed" rather than "completed" so a turn that only ever failed is never
-/// summarized as a success (e.g. the looping-`search_nodes` case).
+/// the same operation — survives.
+///
+/// Grouping by tool name is what makes the count possible, and it is also where
+/// a failure can hide: two calls to the same tool can have opposite verdicts,
+/// and a single verb for the pair has to pick one. The rule is the one the
+/// tool-failure-surfacing guard already applies — **the LAST call of a name
+/// decides**, because that is the call the turn ended on:
+///
+/// - every call errored → "failed"
+/// - the last call succeeded → "completed". An earlier error was a retry the
+///   model demonstrably recovered from, and reporting it would describe a
+///   transient the user has no action to take on.
+/// - the last call errored after an earlier one succeeded → BOTH counts are
+///   reported. Collapsing this to "completed" is the exact defect this
+///   summarizer exists to prevent, one layer down: `create_node` for record A
+///   succeeding and `create_node` for record B failing would otherwise render
+///   "• node creation completed (2×)" and the failed write would never be seen.
 fn summarize_executions(executions: &[ToolExecutionRecord]) -> String {
-    // (label, total, errored) preserving first-seen order.
-    let mut counts: Vec<(&'static str, usize, usize)> = Vec::new();
+    /// (label, total, errored, last call errored) preserving first-seen order.
+    type Tally = (&'static str, usize, usize, bool);
+
+    let mut counts: Vec<Tally> = Vec::new();
     for t in executions {
         let label = humanize_tool_name(&t.name);
-        if let Some(entry) = counts.iter_mut().find(|(l, _, _)| *l == label) {
+        if let Some(entry) = counts.iter_mut().find(|(l, ..)| *l == label) {
             entry.1 += 1;
             if t.is_error {
                 entry.2 += 1;
             }
+            entry.3 = t.is_error;
         } else {
-            counts.push((label, 1, usize::from(t.is_error)));
+            counts.push((label, 1, usize::from(t.is_error), t.is_error));
         }
     }
+
+    fn times(n: usize) -> String {
+        if n > 1 {
+            format!(" ({n}×)")
+        } else {
+            String::new()
+        }
+    }
+
     counts
         .into_iter()
-        .map(|(label, count, errored)| {
-            // "failed" if every call to this tool errored; otherwise "completed".
-            let verb = if errored == count {
-                "failed"
+        .map(|(label, count, errored, last_errored)| {
+            if errored == count {
+                format!("• {label} failed{}", times(count))
+            } else if !last_errored {
+                format!("• {label} completed{}", times(count))
             } else {
-                "completed"
-            };
-            if count > 1 {
-                format!("• {label} {verb} ({count}×)")
-            } else {
-                format!("• {label} {verb}")
+                // Mixed, ending on a failure. Both counts, always parenthesized
+                // even at 1 — "completed, failed" without them reads as a
+                // contradiction rather than as two calls with two outcomes.
+                format!(
+                    "• {label} completed ({}×), failed ({}×)",
+                    count - errored,
+                    errored
+                )
             }
         })
         .collect::<Vec<_>>()
@@ -1159,19 +1188,97 @@ fn summarize_executions(executions: &[ToolExecutionRecord]) -> String {
 /// yet the pseudo-code is persisted verbatim as the assistant's answer, so the
 /// user sees a raw code snippet with no indication anything went wrong.
 ///
-/// This is deliberately narrow: it only matches a registered tool name
-/// immediately followed by `(` (allowing whitespace between). Matching a general
+/// This is deliberately narrow: it matches a registered tool name in one of
+/// three call-shaped positions, never a bare mention. Matching a general
 /// `snake_case(` shape would false-positive on legitimate prose that references
 /// functions. Tool names are taken from the registry ([`crate::local_agent::tools::Tool::ALL`])
 /// so the detector stays in sync as tools are added or removed.
+/// Whether `prefix` ends with `marker` standing as its own token.
+///
+/// A bare `ends_with` on a marker that is also a word ending re-admits the
+/// false positives the markers exist to exclude: `"recall:"` ends with
+/// `"call:"`, so "Recall: create_node {content} …" would read as a narrated
+/// call and the model's correct answer would be discarded. Requiring the
+/// character before the marker to be a non-word character (or nothing at all)
+/// keeps the marker a delimiter rather than a suffix.
+fn ends_with_marker(prefix: &str, marker: &str) -> bool {
+    match prefix.strip_suffix(marker) {
+        None => false,
+        Some(head) => head
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_'),
+    }
+}
+
 fn looks_like_narrated_tool_call(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     crate::local_agent::tools::Tool::ALL.iter().any(|tool| {
         let name = tool.name();
         lower.match_indices(name).any(|(idx, _)| {
-            let after = &lower[idx + name.len()..].trim_start();
+            let rest = &lower[idx + name.len()..];
+            let after = rest.trim_start();
             // `create_node(...)` — the tool named as a function.
             if after.starts_with('(') {
+                return true;
+            }
+            let before = &lower[..idx];
+            // `call:create_schema{fields:[...], name:"Ticket"}` — the tool named
+            // with a brace-delimited argument object rather than parens, behind
+            // a call-ish prefix. Observed live on the locked model, reaching the
+            // user verbatim as the assistant's answer:
+            //
+            //     call:create_schema{fields:[{"friendlyName":"Status", …}]}
+            //
+            // A brace alone is NOT enough — "create_node {" appears in ordinary
+            // prose about JSON — so this additionally requires a MARKER prefix:
+            // a delimiter a narrated call carries and prose does not.
+            //
+            // Two earlier admissions were removed after they were shown to fire
+            // on correct answers, which is the expensive error here: a positive
+            // verdict DISCARDS the model's text and substitutes a confirmation
+            // request, so a false positive destroys a good reply.
+            //
+            //   `ends_with("call")` matched "call" as an ordinary English verb —
+            //   "To do this I would call create_node {…}" is a model correctly
+            //   explaining itself, and "Recall create_node {a}" matched too.
+            //
+            //   `is_empty()` fired on any response merely BEGINNING with a tool
+            //   name — "update_node {id, field_values} takes two arguments." is
+            //   documentation, not a call.
+            //
+            // Only the marker forms survive, and each is anchored so it cannot
+            // be reached by a longer word ending in it. `ends_with("call:")` on
+            // its own matches "recall:", which puts the just-removed English
+            // verb straight back one character narrower — "Recall: create_node
+            // {content} is the one you want." is prose, not a call.
+            //
+            // `\n` stays because a narrated call on its own line is a real
+            // observed shape, but ONLY with the brace ADJACENT to the name.
+            // Without that, the own-line branch contradicts the `is_empty()`
+            // removal directly above it: "update_node {id, field_values} takes
+            // two arguments." is declined at index 0 and would be caught by the
+            // identical sentence one line further down, which is the shape a
+            // model listing tools one per line actually produces. A narrated
+            // call writes its arguments flush against the name
+            // (`create_node{"content":…}`); documentation puts a space there.
+            // The same adjacency requirement is what keeps a fenced report of a
+            // completed write declined too — "…the payload was:\n```json\n
+            // create_node {…}\n```\n" has a space before the brace, exactly like
+            // the documentation case.
+            //
+            // The newline test reads `before` UNTRIMMED: `trim_end()` strips the
+            // very character it looks for, so trimming first would make the
+            // own-line case unreachable.
+            let starts_its_own_line =
+                before.ends_with('\n') || before.trim_end_matches([' ', '\t']).ends_with('\n');
+            let prefix = before.trim_end();
+            let marker_prefixed = ["call:", "tool:", ">>>"]
+                .iter()
+                .any(|marker| ends_with_marker(prefix, marker));
+            if after.starts_with('{')
+                && (marker_prefixed || (starts_its_own_line && rest.starts_with('{')))
+            {
                 return true;
             }
             // `{"name": "create_node", "arguments": {...}}` — the tool named as
@@ -1180,8 +1287,7 @@ fn looks_like_narrated_tool_call(text: &str) -> bool {
             // call at all and the turn silently does nothing. The quote before
             // the name distinguishes this from prose that merely mentions the
             // tool.
-            let before = &lower[..idx];
-            let quoted = before.trim_end().ends_with('"') || before.trim_end().ends_with('\'');
+            let quoted = prefix.ends_with('"') || prefix.ends_with('\'');
             quoted && after.starts_with(['"', '\''])
         })
     })
@@ -1831,13 +1937,28 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 // If the model produced no text after tool calls, synthesize a
-                // brief confirmation so the UI always shows something meaningful.
+                // summary so the UI always shows something meaningful.
+                //
+                // Uses `summarize_executions` — the same error-aware summarizer
+                // the other two empty-text exits already use — rather than
+                // formatting the last execution's NAME into a success string.
+                // The three guards above (anti-fabrication, no-op success,
+                // tool-failure surfacing) are each gated on `!normalized
+                // .is_empty()`, so a turn where the model emits no text at all
+                // reaches here with none of them having run. Naming the last
+                // tool and asserting it "completed successfully" then reports a
+                // write that failed as a write that happened:
+                //
+                //     [tool] create_node [ERROR]   (Unknown node_type)
+                //     assistant> Done — node creation completed successfully.
+                //
+                // observed live on a seeded chain where `create_schema` had
+                // failed, so the type `create_node` named did not exist. A
+                // silently-failed write is the failure mode ADR-056 records as
+                // worth taking seriously, and an empty generation is precisely
+                // when the model is least able to report it itself.
                 let final_response = if normalized.is_empty() && !all_tool_executions.is_empty() {
-                    let tool_name = &all_tool_executions.last().unwrap().name;
-                    format!(
-                        "Done — {} completed successfully.",
-                        humanize_tool_name(tool_name)
-                    )
+                    summarize_executions(&all_tool_executions)
                 } else if normalized.is_empty() {
                     // Model returned nothing at all — no tools, no text. This is
                     // an inference bug, not a routing decision: the model should
@@ -2498,10 +2619,17 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     normalized_tail
                 }
             } else {
-                // Inference failed — synthesize from executions
+                // Inference failed — synthesize from executions.
+                //
+                // Same error-aware summarizer as the sibling branch above, for
+                // the same reason: formatting the last execution's NAME into
+                // "completed successfully" reports a failed write as a
+                // successful one. This branch is the worse of the two to get
+                // wrong — inference itself failed here, so the claim is not
+                // even the model's; it is the loop asserting success on its
+                // behalf about a call that may have errored.
                 if !all_tool_executions.is_empty() {
-                    let label = humanize_tool_name(&all_tool_executions.last().unwrap().name);
-                    format!("Done — {} completed successfully.", label)
+                    summarize_executions(&all_tool_executions)
                 } else {
                     String::new()
                 }
@@ -5621,6 +5749,134 @@ mod tests {
         ));
     }
 
+    /// A brace-delimited argument object behind a `call:` prefix — the shape
+    /// that reached the user verbatim on the locked model. Parens were the only
+    /// bracket the detector knew, so this was persisted as the assistant's
+    /// answer while nothing executed.
+    #[test]
+    fn narrated_tool_call_detects_a_brace_delimited_call() {
+        assert!(looks_like_narrated_tool_call(
+            r#"call:create_schema{fields:[{"friendlyName":"Status","name":"status"}], name:"Feature Writeups"}"#
+        ));
+        assert!(looks_like_narrated_tool_call(
+            "tool:update_node{\"id\":\"x\",\"field_values\":{}}"
+        ));
+        assert!(looks_like_narrated_tool_call(
+            ">>>update_node{\"id\":\"x\"}"
+        ));
+    }
+
+    /// A bare `create_node{…}` at the very start of a response, with no marker
+    /// prefix at all, is deliberately NOT detected.
+    ///
+    /// It is not distinguishable from documentation —
+    /// "update_node {id, field_values} takes two arguments." has the identical
+    /// shape — and the two errors are not symmetric. Missing a narrated call
+    /// shows the user pseudo-code, which is bad but visible and recoverable.
+    /// A false positive DISCARDS a correct answer and replaces it with a
+    /// confirmation request, which is a silent regression on a working turn.
+    /// This detector's whole purpose is that a turn must not misreport what
+    /// happened, so it errs toward letting text through.
+    #[test]
+    fn narrated_tool_call_declines_an_unmarked_call_at_text_start() {
+        assert!(!looks_like_narrated_tool_call(
+            r#"create_node{"content":"Review billing docs"}"#
+        ));
+    }
+
+    /// The brace shape must not fire on prose that merely quotes an argument
+    /// object. Without the call-prefix requirement, ordinary explanations of a
+    /// tool's JSON would be suppressed and replaced with a summary.
+    #[test]
+    fn narrated_tool_call_ignores_a_brace_in_explanatory_prose() {
+        assert!(!looks_like_narrated_tool_call(
+            "Pass create_node {\"content\": \"...\"} style arguments when you want a node."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "The create_schema {fields} parameter is required."
+        ));
+    }
+
+    /// The brace branch's prefix test decides whether a CORRECT answer survives:
+    /// a positive verdict discards the model's text and substitutes a
+    /// confirmation request. These are the shapes an earlier version of that
+    /// test admitted — "call" as an ordinary English verb, and a response that
+    /// merely begins with a tool name.
+    #[test]
+    fn narrated_tool_call_ignores_call_as_an_english_verb() {
+        // `ends_with("call")` matched the verb in "I would call create_node {…}",
+        // which is a model correctly explaining what it is about to do.
+        assert!(!looks_like_narrated_tool_call(
+            "To do this I would call create_node {\"content\":\"Buy milk\"} but I need the id first."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "Recall create_node {a} is one option."
+        ));
+    }
+
+    #[test]
+    fn narrated_tool_call_ignores_a_response_that_merely_starts_with_a_tool_name() {
+        // `prefix.is_empty()` fired on any response beginning with the name, so
+        // a sentence documenting a tool's arguments was suppressed outright.
+        assert!(!looks_like_narrated_tool_call(
+            "update_node {id, field_values} takes two arguments."
+        ));
+    }
+
+    /// The own-line branch must not undo the decision the test above records.
+    /// A response documenting the tools one per line puts a tool name straight
+    /// after a newline, so an unqualified "preceded by \n" test caught the
+    /// identical sentence the index-0 case deliberately lets through — and a
+    /// positive verdict discards the whole reply, not just the matched line.
+    ///
+    /// Covers the same defect the fenced-code-block case below does — a tool
+    /// name starting a later line with a SPACE before the brace — with the
+    /// added "tools listed one per line" shape, which is the form the
+    /// adjacency requirement (`rest.starts_with('{')`) exists to distinguish
+    /// from a genuine own-line call (`create_node{"content":…}`, no space).
+    #[test]
+    fn narrated_tool_call_ignores_a_tool_documented_at_the_start_of_a_line() {
+        assert!(!looks_like_narrated_tool_call(
+            "Here are the tools:\nupdate_node {id, field_values} — updates a node.\n\
+             create_node {content} — creates one."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "Two options:\n\ncreate_node {content}\n"
+        ));
+    }
+
+    /// Found in re-review: the reasoning that rejects a tool name at the START
+    /// of the text ("documentation, not a call") does not stop applying at
+    /// line two. Worst real case: a model correctly reporting a completed
+    /// write inside a fenced code block — exactly the honest-report turn this
+    /// PR's sibling no-op-success fix exists to protect.
+    #[test]
+    fn narrated_tool_call_ignores_a_tool_name_starting_a_later_line() {
+        assert!(!looks_like_narrated_tool_call(
+            "I created the task. For reference, the payload was:\n```json\ncreate_node {\"content\":\"Buy milk\"}\n```\nAnything else?"
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "The signature is:\n    create_node {content, node_type}\nand it returns the new id."
+        ));
+    }
+
+    /// `ends_with("call:")` is a suffix test, and "recall:" ends with "call:".
+    /// The marker has to stand as its own token or it re-admits the English
+    /// verb the `ends_with("call")` removal was meant to exclude.
+    #[test]
+    fn narrated_tool_call_ignores_recall_as_a_sentence_opener() {
+        assert!(!looks_like_narrated_tool_call(
+            "Recall: create_node {content} is the one you want."
+        ));
+        assert!(!looks_like_narrated_tool_call(
+            "Recall:create_node{\"content\":\"x\"} was the earlier suggestion."
+        ));
+        // The genuine marker, still detected, with and without a leading word.
+        assert!(looks_like_narrated_tool_call(
+            "I'll run this. call: create_node {\"content\":\"x\"}"
+        ));
+    }
+
     #[test]
     fn narrated_tool_call_ignores_a_tool_merely_mentioned_in_prose() {
         assert!(!looks_like_narrated_tool_call(
@@ -5863,13 +6119,88 @@ mod tests {
     }
 
     #[test]
-    fn summarize_executions_treats_partial_failure_as_completed() {
-        // A tool that succeeded at least once is not reported as outright failed.
+    fn summarize_executions_treats_a_recovered_retry_as_completed() {
+        // Failed, then succeeded: the model reacted to the error and the turn
+        // ended on the success. Reporting the transient would describe
+        // something the user has no action to take on — the same narrowing the
+        // tool-failure-surfacing guard applies.
         let summary = summarize_executions(&[
             exec_record("search_nodes", true),
             exec_record("search_nodes", false),
         ]);
         assert_eq!(summary, "• node search completed (2×)");
+    }
+
+    /// The mirror image of the retry case, and the one that hid a failed write:
+    /// same tool, success FIRST and failure LAST. Grouping by name collapses the
+    /// pair to one bullet, and a single verb chosen by "did any call succeed?"
+    /// reported the whole group as completed — so `create_node` for record A
+    /// succeeding masked `create_node` for record B failing, on exactly the
+    /// empty-generation path this summarizer was newly wired into.
+    #[test]
+    fn summarize_executions_surfaces_a_failure_that_follows_a_success() {
+        let summary = summarize_executions(&[
+            exec_record("create_node", false),
+            exec_record("create_node", true),
+        ]);
+        assert_eq!(summary, "• node creation completed (1×), failed (1×)");
+        assert!(
+            summary.contains("failed"),
+            "a write that failed last must be visible, not collapsed into the \
+             earlier success: {summary}"
+        );
+    }
+
+    /// Order is what decides, not merely the presence of a failure: the same
+    /// two verdicts with more calls on each side still report both counts.
+    #[test]
+    fn summarize_executions_reports_both_counts_when_a_group_ends_on_a_failure() {
+        let summary = summarize_executions(&[
+            exec_record("update_node", false),
+            exec_record("update_node", false),
+            exec_record("update_node", true),
+        ]);
+        assert_eq!(summary, "• node update completed (2×), failed (1×)");
+    }
+
+    /// A failed write reached the user as a success report because the
+    /// empty-generation fallback formatted the LAST execution's name into
+    /// "Done — {} completed successfully." without consulting `is_error`.
+    ///
+    /// Observed live against the locked model on a seeded chain: `create_schema`
+    /// failed, so the `node_type` the following `create_node` named did not
+    /// exist, and the turn rendered
+    ///
+    ///     [tool] create_node [ERROR]
+    ///     assistant> Done — node creation completed successfully.
+    ///
+    /// None of the three response guards can catch this shape: anti-fabrication,
+    /// no-op success, and tool-failure surfacing are each gated on
+    /// `!normalized.is_empty()`, and this is precisely the empty-text path.
+    ///
+    /// Asserted through `summarize_executions` rather than the loop because
+    /// that is the function the fallback now delegates to; the property that
+    /// matters is that a sole errored execution never renders as "completed".
+    #[test]
+    fn sole_failed_write_is_never_summarized_as_success() {
+        let summary = summarize_executions(&[exec_record("create_node", true)]);
+        assert_eq!(summary, "• node creation failed");
+        assert!(
+            !summary.contains("completed"),
+            "a write that only ever errored must not read as completed: {summary}"
+        );
+    }
+
+    /// The same failure mid-chain: an earlier tool succeeded, so the naive
+    /// "last execution" formatting would have reported the FAILED trailing call
+    /// as the turn's success. Each tool keeps its own verdict.
+    #[test]
+    fn failed_trailing_write_keeps_its_own_verdict_after_a_successful_read() {
+        let summary = summarize_executions(&[
+            exec_record("search_nodes", false),
+            exec_record("create_node", true),
+        ]);
+        assert_eq!(summary, "• node search completed\n• node creation failed");
     }
 
     // -- Anti-fabrication guard tests ----------------------------------------
