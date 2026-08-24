@@ -346,7 +346,7 @@ nodespace schema update --params '{"schema_id":"ticket","add_fields":[{"name":"s
 
 `create`/`update` take a single JSON `--params` blob (or `--params-file <path>` for a file) rather than per-field flags — the params shape mirrors `CreateSchemaParams`/`UpdateSchemaParams` in the daemon.
 
-<!-- BEGIN GENERATED: schema-rules (see packages/agent/src/skill_rules.rs, packages/agent/src/bin/gen_skill_md.rs) -->
+<!-- BEGIN GENERATED: schema-rules (see packages/agent/src/skill_rules.rs, packages/cli/examples/gen_skill_md.rs) -->
 **One schema per request.** Create exactly the type asked for, in a single `schema create` call, then stop and report it. Don't proactively create related types the user didn't ask for (e.g. asked for "ADR" — don't also create "Ticket" or "Sprint"), and don't follow up with `schema update` to wire relationships unless explicitly asked. A relationship's `targetType` must already exist (check `nodespace schema list`); if it doesn't, omit the relationship rather than creating the other type as a side effect.
 
 If `create` reports the schema already exists, stop and tell the user — they can create instances with `node create` against the existing type.
@@ -408,6 +408,252 @@ nodespace database remove work
 A database is addressed by **name or id**. When a name is ambiguous (shared by more than one database), select by id instead — `database list --json` shows each id.
 
 **Output:** `list` prints a table (or the full list with `--json`); the other commands print the affected database record (`--json` emits the full `DatabaseInfo`).
+
+### Complete command surface
+
+<!-- BEGIN GENERATED: cli-surface (see packages/cli/src/lib.rs (clap derive), packages/cli/examples/gen_skill_md.rs) -->
+Every command, subcommand, and flag below is generated from the CLI's own definitions, so this list is exhaustive and cannot fall behind the binary.
+
+**Global flags** (accepted on every command):
+
+- `--json` — Emit raw JSON instead of human-readable output
+- `--socket <SOCKET>` — Override the socket path (default: ~/.nodespace/daemon.sock). Honors the `NODESPACED_SOCKET` environment variable when this flag is absent (env: `NODESPACED_SOCKET`)
+- `--database <DATABASE>` — Target a specific local database by name or id (ADR-053). When omitted, requests route to the daemon's default database. Honors the `NODESPACE_DATABASE` environment variable when this flag is absent (env: `NODESPACE_DATABASE`)
+
+### `nodespace node`
+
+Operate on individual nodes (get, create, update, delete, children, query, export, batch-get, batch-update)
+
+**`nodespace node get`** — Retrieve a node by ID
+
+- `<ID>` — Node ID (UUID) (required)
+
+**`nodespace node create`** — Create a new node
+
+- `--type <NODE_TYPE>` — Node type, e.g. `text`, `task`, `date` (required)
+- `--content <CONTENT>` — Content (plain text or markdown) (required)
+- `--parent <PARENT>` — Parent node ID (omit to create a root node)
+
+**`nodespace node update`** — Update an existing node's content and/or properties
+
+- `<ID>` — Node ID to update (required)
+- `--content <CONTENT>` — New content. Omit to leave content unchanged (e.g. when only setting properties)
+- `--property <PROPERTIES>` — Set one or more properties: `--property key=value` (repeatable). Values are parsed as JSON when possible (numbers, booleans, `null`, arrays, objects), otherwise treated as a plain string. Deep-merged into the node's existing properties (unspecified keys are left untouched). Do NOT use this to change a task's status; use `node set-status` instead
+
+**`nodespace node set-status`** — Set a task node's status (dedicated verb — do not use `update` for this)
+
+- `<ID>` — Task node ID (required)
+- `<STATUS>` — New status. Must be one of: open, in_progress, done, cancelled (required)
+
+**`nodespace node delete`** — Delete a node
+
+- `<ID>` — Node ID to delete (required)
+
+**`nodespace node children`** — List the direct children of a node
+
+- `<ID>` — Parent node ID (required)
+
+**`nodespace node query`** — Query nodes with structured filters
+
+- `--id <ID>` — Filter by exact node ID
+- `--mentioned-by <MENTIONED_BY>` — Filter nodes that mention this node ID
+- `--content-contains <CONTENT_CONTAINS>` — Filter by substring in content
+- `--title-contains <TITLE_CONTAINS>` — Filter by substring in title
+- `--type <NODE_TYPE>` — Filter by node type (e.g. `text`, `task`)
+- `--limit <LIMIT>` — Maximum number of results (0 = server default)
+- `--offset <OFFSET>` — Result offset for pagination
+
+**`nodespace node export`** — Export a node and its subtree as markdown
+
+- `<ID>` — Node ID to export (required)
+- `--children <CHILDREN>` — Include children recursively (default: true)
+- `--max-depth <MAX_DEPTH>` — Maximum recursion depth (0 = server default of 20)
+- `--node-ids <NODE_IDS>` — Embed HTML comments with node IDs for OCC (default: true)
+
+**`nodespace node batch-get`** — Fetch multiple nodes in one request
+
+- `--id <IDS>` — Node IDs to fetch (repeatable: --id <id1> --id <id2>) (required)
+
+**`nodespace node batch-update`** — Update multiple nodes in one request (OCC-aware)
+
+- `--updates <UPDATES>` — JSON-encoded array of update objects: [{"node_id":"…","content":"…","version":N}]. Each item may have: node_id (required), version (optional), content, node_type, properties (required)
+
+### `nodespace model`
+
+Manage the local inference model (list, load, recommended)
+
+**`nodespace model list`** — List models in the catalog and their download/load status
+
+**`nodespace model load`** — Load a model (downloading first if needed); streams progress to stdout
+
+- `<MODEL_ID>` — Model id to load, e.g. `gemma-4-e4b-q4km`. Omit to use the recommended model
+
+**`nodespace model recommended`** — Print the recommended model id for this machine's RAM
+
+**`nodespace model status`** — Print the loaded model, the context window granted to it, and host RAM
+
+### `nodespace search`
+
+Semantic search across the knowledge graph
+
+- `<QUERY>` — Free-text query. Pass an empty string or "*" when using --type for type-only listing — both enumerate every node of the type rather than being treated as a literal search term
+- `--type <TYPE>` — Filter results to one or more node types (e.g. `--type task --type text`)
+- `--collection <COLLECTION>` — Filter to a collection by path (mutually exclusive with --collection-id)
+- `--collection-id <COLLECTION_ID>` — Filter to a collection by ID (mutually exclusive with --collection)
+- `--filters <FILTERS>` — JSON-encoded array of {field, operator, value} filter objects
+- `--threshold <THRESHOLD>` — Semantic similarity threshold, 0.0-1.0 (0.0 = server default of 0.7)
+- `--limit <LIMIT>` — Maximum number of results to return (0 = server default, currently 20)
+
+### `nodespace query`
+
+Structured property query with comparison operators (equals/contains/gt/lt/gte/lte/in/exists)
+
+- `--type <TARGET_TYPE>` — Target node type ("task", "text", etc.) or "*" for all types (required)
+- `--filters <FILTERS>` — JSON array of filter conditions, e.g. `[{"type":"property","operator":"equals","property":"status","value":"open"}]`. Supported types: property, content, relationship, metadata. Supported operators: equals, contains, gt, lt, gte, lte, in, exists
+- `--sorting <SORTING>` — JSON array of sort configs, e.g. `[{"field":"due_date","direction":"desc"}]`
+- `--limit <LIMIT>` — Max results to return (0 = server default of 50)
+
+### `nodespace diagnostics`
+
+Developer diagnostics: database path, size, node counts, schema count
+
+### `nodespace import`
+
+Import markdown files into NodeSpace
+
+**`nodespace import file`** — Import a single markdown file
+
+- `<FILE>` — Path to the markdown file (required)
+- `--collection <COLLECTION>` — Collection path to assign the document to (e.g. "docs:rust")
+- `--use-filename-as-title` — Use the filename stem as the document title
+- `--auto-collection-routing` — Route files to collections based on directory structure
+- `--replace` — Refresh an already-imported document in place: replace its child subtree from the fresh parse, keeping the root node so inbound links survive. Without this, an already-imported document is left untouched
+
+**`nodespace import dir`** — Import all markdown files from a directory (recurses into sub-folders by default; see --no-recursive)
+
+- `<DIRECTORY>` — Path to the directory containing markdown files (required)
+- `--collection <COLLECTION>` — Collection path to assign all documents to
+- `--use-filename-as-title` — Use filename stems as document titles
+- `--auto-collection-routing` — Route files to collections based on directory structure
+- `--exclude <EXCLUDE_PATTERNS>` — Directory names to exclude (repeatable, e.g. --exclude node_modules)
+- `--include-agent-files` — Include CLAUDE.md / AGENTS.md files (default: excluded). Matched by basename, case-insensitive, at any depth
+- `--include-hidden` — Include hidden files and folders — any path component starting with '.', e.g. .git/, .claude/, dotfiles (default: skipped)
+- `--no-recursive` — Import only the top-level directory; do not descend into sub-folders (default: recurses into sub-folders)
+- `--replace` — Refresh already-imported documents in place: replace each existing document's child subtree from the fresh parse, keeping its root node so inbound links survive. Without this, already-imported documents are skipped (a plain re-import never duplicates)
+
+### `nodespace mention`
+
+Manage mention relationships between nodes
+
+**`nodespace mention create`** — Create a mention relationship from one node to another
+
+- `--from <FROM>` — The node that contains the mention (source) (required)
+- `--to <TO>` — The node being mentioned (target) (required)
+
+**`nodespace mention delete`** — Delete a mention relationship
+
+- `--from <FROM>` — The node that contains the mention (source) (required)
+- `--to <TO>` — The node being mentioned (target) (required)
+
+**`nodespace mention outgoing`** — List nodes that a given node mentions (outgoing)
+
+- `<ID>` — Node ID to query mentions for (required)
+
+**`nodespace mention incoming`** — List nodes that mention a given node (incoming)
+
+- `<ID>` — Node ID to query mentions for (required)
+
+### `nodespace schema`
+
+Inspect and manage node type schema definitions
+
+**`nodespace schema list`** — List all schema definitions
+
+**`nodespace schema get`** — Get a single schema definition by ID
+
+- `<ID>` — Schema ID (node type identifier, e.g. `task`, `person`) (required)
+
+**`nodespace schema create`** — Create a new schema from a JSON params blob
+
+- `--params <PARAMS>` — JSON params. For `create`: {"name", "description"?, "fields"?, "relationships"?, "title_template"?, ...} — see CreateSchemaParams. For `update`: {"schema_id", "add_fields"?, "remove_fields"?, "rename_fields"?, "add_relationships"?, "remove_relationships"?, ...} — see UpdateSchemaParams. Mutually exclusive with `--params-file`
+- `--params-file <PARAMS_FILE>` — Path to a file containing the JSON params (alternative to inline `--params`)
+
+**`nodespace schema update`** — Update an existing schema from a JSON params blob
+
+- `--params <PARAMS>` — JSON params. For `create`: {"name", "description"?, "fields"?, "relationships"?, "title_template"?, ...} — see CreateSchemaParams. For `update`: {"schema_id", "add_fields"?, "remove_fields"?, "rename_fields"?, "add_relationships"?, "remove_relationships"?, ...} — see UpdateSchemaParams. Mutually exclusive with `--params-file`
+- `--params-file <PARAMS_FILE>` — Path to a file containing the JSON params (alternative to inline `--params`)
+
+### `nodespace relationship`
+
+Manage typed relationship edges between nodes (distinct from mentions)
+
+**`nodespace relationship create`** — Create a typed relationship edge from one node to another
+
+- `--from <FROM>` — Source node ID (required)
+- `--type <RELATIONSHIP_NAME>` — Relationship name (as defined on the source node's schema) (required)
+- `--to <TO>` — Target node ID (required)
+- `--edge-data <EDGE_DATA>` — Optional JSON-encoded edge properties
+
+**`nodespace relationship get`** — List nodes related to a given node via a named relationship
+
+- `<ID>` — Node ID to query relationships for (required)
+- `--type <RELATIONSHIP_NAME>` — Relationship name (as defined on the node's schema) (required)
+- `--direction <DIRECTION>` — Direction to traverse
+
+### `nodespace session`
+
+Manage PTY agent sessions (launch, attach, list, kill)
+
+**`nodespace session launch`** — Launch a new agent session and stream its output to stdout
+
+- `<AGENT>` — Agent to launch: claude-code, codex, gemini, pi, opencode (required)
+- `--prompt <PROMPT>` — Initial prompt passed to the agent at launch time
+- `--cols <COLS>` — Terminal width in columns (defaults to current terminal width)
+- `--rows <ROWS>` — Terminal height in rows (defaults to current terminal height)
+
+**`nodespace session attach`** — Attach to an existing session's output stream
+
+- `<SESSION_ID>` — Session ID to attach to (required)
+
+**`nodespace session list`** — List active agent sessions
+
+**`nodespace session kill`** — Terminate a running session
+
+- `<SESSION_ID>` — Session ID to terminate (required)
+
+### `nodespace database`
+
+Manage the daemon's registry of local databases (list, create, register, remove, rename, use)
+
+**`nodespace database list`** — List every registered database with its status and the default marker
+
+**`nodespace database create`** — Create a brand-new database and register it
+
+- `<NAME>` — Human-facing label for the new database (required)
+- `--path <PATH>` — Explicit path for the new database file. When omitted the daemon places it under its managed database directory
+
+**`nodespace database register`** — Register an existing database file already present on disk
+
+- `<PATH>` — Absolute path to an existing database file to register (required)
+
+**`nodespace database remove`** — Unregister a database (never deletes the underlying file)
+
+- `<DATABASE>` — Database to unregister, by name or id (required)
+
+**`nodespace database rename`** — Rename a registered database's human-facing label
+
+- `<DATABASE>` — Database to rename, by name or id (required)
+- `<NEW_NAME>` — New human-facing label (required)
+
+**`nodespace database use`** — Set the daemon-wide default database (used when no database is selected)
+
+- `<DATABASE>` — Database to make the default, by name or id (required)
+
+### `nodespace uninstall`
+
+Uninstall NodeSpace: stop daemon, remove binaries and service registration
+
+<!-- END GENERATED: cli-surface -->
 
 ## Common Agent Tasks
 
