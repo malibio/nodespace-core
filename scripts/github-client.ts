@@ -48,26 +48,52 @@ export class GitHubClient {
   // Project configuration from docs/architecture/development/process/issue-workflow.md
   private readonly owner = "malibio";
   private readonly repo = "nodespace-core";
-  private readonly projectNumber = 5;
-  private readonly projectId = "PVT_kwHOADHu9M4A_nxN";
-  private readonly statusFieldId = "PVTSSF_lAHOADHu9M4A_nxNzgyq13o";
+  // The ProjectV2 board is owned by the NodeSpaceAI organization, not the
+  // `owner` user login above (that one is only used for REST issue/PR calls
+  // against the repo, which still resolves via GitHub's rename redirect).
+  private readonly projectOwner = "NodeSpaceAI";
+  private readonly projectNumber = 2;
+  private readonly projectId = "PVT_kwDODxjmQM4BUxjb";
+  private readonly statusFieldId = "PVTSSF_lADODxjmQM4BUxjbzhDzQv0";
 
-  // Status option IDs from issue-workflow.md
+  // Status option IDs — verified live against the real "NodeSpace" board
+  // (org NodeSpaceAI, project #2). The previous IDs pointed at a project
+  // node that no longer resolves at all.
   private readonly statusOptions = {
-    "Todo": "f75ad846",
-    "In Progress": "47fc9ee4", 
-    "Waiting for Input": "db18cb7f",
-    "Ready for Review": "b13f9084",
-    "In Review": "bd055968",
-    "Done": "98236657",
-    "Ready to Merge": "414430c1"
+    "Backlog": "230488b9",
+    "Todo": "32c30124",
+    "In Progress": "9f8d4e33",
+    "In Review": "099b7674",
+    "Done": "58fb1205",
+    "Blocked": "f50ca67a"
   } as const;
+
+  // Cached result of getAuthenticatedUser() so repeated "@me" resolutions
+  // within one process don't re-hit the API.
+  private cachedLogin: string | null = null;
 
   constructor(token?: string) {
     const authToken = token || this.getGitHubToken();
     this.octokit = new Octokit({
       auth: authToken,
     });
+  }
+
+  /**
+   * Resolve the actually-authenticated GitHub account (no shell commands —
+   * uses the same Octokit client/token as every other call in this class).
+   *
+   * This exists so "@me" resolves to whoever is really logged in via `gh`,
+   * instead of a hardcoded username.
+   */
+  async getAuthenticatedUser(): Promise<string> {
+    if (this.cachedLogin) {
+      return this.cachedLogin;
+    }
+
+    const { data } = await this.octokit.rest.users.getAuthenticated();
+    this.cachedLogin = data.login;
+    return this.cachedLogin;
   }
 
   /**
@@ -134,7 +160,7 @@ export class GitHubClient {
     while (hasNextPage) {
       const query = `
         query GetProjectItems($owner: String!, $projectNumber: Int!, $cursor: String) {
-          user(login: $owner) {
+          organization(login: $owner) {
             projectV2(number: $projectNumber) {
               items(first: 100, after: $cursor) {
                 pageInfo {
@@ -171,7 +197,7 @@ export class GitHubClient {
       `;
 
       const response = await this.octokit.graphql<{
-        user: {
+        organization: {
           projectV2: {
             items: {
               pageInfo: {
@@ -183,19 +209,19 @@ export class GitHubClient {
           };
         };
       }>(query, {
-        owner: this.owner,
+        owner: this.projectOwner,
         projectNumber: this.projectNumber,
         cursor,
       });
 
-      const items = response.user.projectV2.items.nodes.filter(
+      const items = response.organization.projectV2.items.nodes.filter(
         item => item.content?.number // Only return items that are issues
       );
 
       allItems.push(...items);
 
-      hasNextPage = response.user.projectV2.items.pageInfo.hasNextPage;
-      cursor = response.user.projectV2.items.pageInfo.endCursor;
+      hasNextPage = response.organization.projectV2.items.pageInfo.hasNextPage;
+      cursor = response.organization.projectV2.items.pageInfo.endCursor;
     }
 
     return allItems;
@@ -294,13 +320,28 @@ export class GitHubClient {
           assignees: assignees
         });
 
-        results.push({ issueNumber, success: true });
-        
+        // The GitHub API silently ignores usernames it can't assign (e.g. not
+        // a collaborator) instead of erroring, which is exactly how this got
+        // reported as a false success. Re-query before declaring victory.
+        const issue = await this.getIssue(issueNumber);
+        const landed = new Set(issue.assignees.map(a => a.login.toLowerCase()));
+        const missing = assignees.filter(a => !landed.has(a.toLowerCase()));
+
+        if (missing.length > 0) {
+          results.push({
+            issueNumber,
+            success: false,
+            error: `Assignment did not take effect for: ${missing.join(", ")} (not a valid collaborator?)`
+          });
+        } else {
+          results.push({ issueNumber, success: true });
+        }
+
       } catch (error) {
-        results.push({ 
-          issueNumber, 
-          success: false, 
-          error: error.message 
+        results.push({
+          issueNumber,
+          success: false,
+          error: error.message
         });
       }
     }
@@ -326,13 +367,27 @@ export class GitHubClient {
           assignees: assignees
         });
 
-        results.push({ issueNumber, success: true });
-        
+        // Verify removal actually landed before declaring success — same
+        // rationale as assignIssues above.
+        const issue = await this.getIssue(issueNumber);
+        const stillAssigned = new Set(issue.assignees.map(a => a.login.toLowerCase()));
+        const notRemoved = assignees.filter(a => stillAssigned.has(a.toLowerCase()));
+
+        if (notRemoved.length > 0) {
+          results.push({
+            issueNumber,
+            success: false,
+            error: `Unassignment did not take effect for: ${notRemoved.join(", ")}`
+          });
+        } else {
+          results.push({ issueNumber, success: true });
+        }
+
       } catch (error) {
-        results.push({ 
-          issueNumber, 
-          success: false, 
-          error: error.message 
+        results.push({
+          issueNumber,
+          success: false,
+          error: error.message
         });
       }
     }

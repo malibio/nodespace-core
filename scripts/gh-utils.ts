@@ -18,19 +18,22 @@ import { GitHubClient } from "./github-client.ts";
 class NodeSpaceGitHubManager {
   private client: GitHubClient;
 
-  // Status options from issue-workflow.md
+  // Status options — mirrors GitHubClient.statusOptions (the real
+  // "NodeSpace" board, org NodeSpaceAI, project #2).
   private readonly statusOptions = {
-    "Todo": "f75ad846",
-    "In Progress": "47fc9ee4", 
-    "Waiting for Input": "db18cb7f",
-    "Ready for Review": "b13f9084",
-    "In Review": "bd055968",
-    "Done": "98236657",
-    "Ready to Merge": "414430c1"
+    "Backlog": "230488b9",
+    "Todo": "32c30124",
+    "In Progress": "9f8d4e33",
+    "In Review": "099b7674",
+    "Done": "58fb1205",
+    "Blocked": "f50ca67a"
   } as const;
 
-  constructor() {
-    this.client = new GitHubClient();
+  // Accepts an injected client so tests can stub GitHub API access instead
+  // of hitting the network (and instead of depending on which account is
+  // actually authenticated when the suite runs).
+  constructor(client?: GitHubClient) {
+    this.client = client ?? new GitHubClient();
   }
 
   async updateIssueStatus(issueNumbers: number[], status: keyof typeof this.statusOptions) {
@@ -48,14 +51,16 @@ class NodeSpaceGitHubManager {
   }
 
   async assignIssues(issueNumbers: number[], assignee: string = "@me") {
-    // Convert @me to current user (API requires actual username)
-    const assignees = assignee === "@me" ? ["malibio"] : [assignee.replace("@", "")];
-    
+    // Resolve @me to whoever is actually authenticated (API requires an
+    // actual username) — never a hardcoded literal.
+    const login = assignee === "@me" ? await this.client.getAuthenticatedUser() : assignee.replace("@", "");
+    const assignees = [login];
+
     const results = await this.client.assignIssues(issueNumbers, assignees);
-    
+
     for (const result of results) {
       if (result.success) {
-        console.log(`✅ Issue #${result.issueNumber} assigned to ${assignee}`);
+        console.log(`✅ Issue #${result.issueNumber} assigned to ${login}`);
       } else {
         console.error(`❌ Failed to assign issue #${result.issueNumber}: ${result.error}`);
       }
@@ -65,14 +70,16 @@ class NodeSpaceGitHubManager {
   }
 
   async unassignIssues(issueNumbers: number[], assignee: string = "@me") {
-    // Convert @me to current user (API requires actual username)
-    const assignees = assignee === "@me" ? ["malibio"] : [assignee.replace("@", "")];
-    
+    // Resolve @me to whoever is actually authenticated (API requires an
+    // actual username) — never a hardcoded literal.
+    const login = assignee === "@me" ? await this.client.getAuthenticatedUser() : assignee.replace("@", "");
+    const assignees = [login];
+
     const results = await this.client.unassignIssues(issueNumbers, assignees);
-    
+
     for (const result of results) {
       if (result.success) {
-        console.log(`✅ Issue #${result.issueNumber} unassigned from ${assignee}`);
+        console.log(`✅ Issue #${result.issueNumber} unassigned from ${login}`);
       } else {
         console.error(`❌ Failed to unassign issue #${result.issueNumber}: ${result.error}`);
       }
@@ -274,9 +281,10 @@ class NodeSpaceGitHubManager {
       // Create the PR
       const pr = await this.createPR(prTitle, prBody);
 
-      // Update project status to Ready for Review
-      console.log("\n📊 Updating project status to 'Ready for Review'...");
-      await this.updateIssueStatus([issueNumber], "Ready for Review");
+      // Update project status to In Review (the board has no separate
+      // "Ready for Review" option)
+      console.log("\n📊 Updating project status to 'In Review'...");
+      await this.updateIssueStatus([issueNumber], "In Review");
 
       console.log("\n🎉 PR workflow completed successfully!");
       return pr;
