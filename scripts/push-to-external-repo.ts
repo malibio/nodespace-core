@@ -1,15 +1,21 @@
 #!/usr/bin/env bun
 /**
  * Shared "clone, write, commit, push" mechanics for pushing an automated
- * update to NodeSpaceAI/homebrew-nodespace (the tap repo).
+ * update to a generated-only public repo this org owns.
  *
- * Used by both update-homebrew-cask.ts (Casks/nodespace.rb) and
- * update-homebrew-formula.ts (Formula/nodespace-cli.rb) -- pulled out here
- * so the credential-scrubbing safety net (covering every step, not just the
- * clone -- see pushFilesToTap's inner try/catch) can't drift out of sync
- * between two copies of the same ~35 lines. Both scripts still own their
- * own rendering, digest resolution, and drift-check logic; this file is
- * only the network/git plumbing they share.
+ * Used by update-homebrew-cask.ts (NodeSpaceAI/homebrew-nodespace,
+ * Casks/nodespace.rb), update-homebrew-formula.ts (same repo,
+ * Formula/nodespace-cli.rb), and publish-skill-repo.ts
+ * (NodeSpaceAI/nodespace-skill, skills/nodespace/) -- pulled out here so the
+ * credential-scrubbing safety net (covering every step, not just the clone --
+ * see pushFilesToRepo's inner try/catch) can't drift out of sync between
+ * three copies of the same ~35 lines. Each caller still owns its own
+ * rendering, digest resolution, and drift-check logic; this file is only the
+ * network/git plumbing they share.
+ *
+ * Originally homebrew-tap-push.ts, hardcoded to the tap repo alone -- now
+ * generalized (`repo` is a parameter, not a module constant) now that a
+ * second, unrelated target repo needs the identical mechanics.
  */
 
 import { $ } from "bun";
@@ -17,25 +23,25 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-export const TAP_REPO = "NodeSpaceAI/homebrew-nodespace";
-
-export interface TapFile {
-  /** Path relative to the tap repo root, e.g. "Casks/nodespace.rb" or
-   * "Formula/nodespace-cli.rb". */
+export interface RepoFile {
+  /** Path relative to the target repo root, e.g. "Casks/nodespace.rb" or
+   * "skills/nodespace/SKILL.md". */
   relPath: string;
   content: string;
 }
 
-/** Clones TAP_REPO fresh, writes each of `files`, and pushes a single
- * commit to main if anything actually changed. Returns whether a push
- * happened, so callers can print an accurate "already in sync" vs "pushed"
- * message without a second network round trip to check. */
-export async function pushFilesToTap(
-  files: TapFile[],
+/** Clones `repo` (e.g. "NodeSpaceAI/homebrew-nodespace") fresh, writes each
+ * of `files`, and pushes a single commit to main if anything actually
+ * changed. Returns whether a push happened, so callers can print an
+ * accurate "already in sync" vs "pushed" message without a second network
+ * round trip to check. */
+export async function pushFilesToRepo(
+  repo: string,
+  files: RepoFile[],
   commitMessage: string,
   token: string,
 ): Promise<boolean> {
-  const workDir = mkdtempSync(join(tmpdir(), "homebrew-nodespace-push-"));
+  const workDir = mkdtempSync(join(tmpdir(), "nodespace-external-repo-push-"));
   try {
     // Defense in depth, covering every git/fs step below (not just the
     // clone): git itself redacts credentials from its own stderr on an
@@ -46,7 +52,7 @@ export async function pushFilesToTap(
     // block regardless, in case a wrapper error ever echoes more than
     // expected. This must never surface the raw token.
     try {
-      const authUrl = `https://x-access-token:${token}@github.com/${TAP_REPO}.git`;
+      const authUrl = `https://x-access-token:${token}@github.com/${repo}.git`;
       await $`git clone --depth 1 ${authUrl} ${workDir}`.quiet();
 
       for (const file of files) {
@@ -69,7 +75,7 @@ export async function pushFilesToTap(
         token,
         "***",
       );
-      throw new Error(`push to ${TAP_REPO} failed: ${message}`);
+      throw new Error(`push to ${repo} failed: ${message}`);
     }
   } finally {
     // Also closes the residual window where a temp credential URL sits in
