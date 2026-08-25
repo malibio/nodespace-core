@@ -1,0 +1,5 @@
+# Force LF on checkout regardless of platform or local core.autocrlf, so
+# generated content (e.g. packages/skill/SKILL.md, references/cli.md via
+# `bun run skill:gen`) byte-matches its own freshness check on every OS,
+# including Windows CI runners where core.autocrlf defaults to true.
+* text=auto eol=lf
