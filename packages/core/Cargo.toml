@@ -54,6 +54,25 @@ cel-interpreter = { version = "0.10.0", features = ["json"] }
 cel-parser = "0.10"
 cron = "0.16"
 
+[target.'cfg(windows)'.dependencies]
+# libsql-sys 0.8's default (non-"rusqlite") connection-open path opens the
+# database file via `std::os::unix::ffi::OsStrExt::as_bytes()`, which is
+# Unix-only and doesn't compile on Windows at all (no cfg gate, no
+# Windows-side fallback in that version). The "rusqlite" feature switches
+# libsql-sys onto its other, already-cross-platform connection-open path,
+# which delegates path handling to the `rusqlite` crate instead of doing
+# its own raw-FFI OsStr-to-CString conversion.
+#
+# Upstream fixed the raw-FFI path itself in libsql-sys 0.9+ (added a
+# `#[cfg(not(unix))]` branch using `Path::to_str`), which would be the more
+# direct fix, but bumping libsql/libsql-sys three minor versions is out of
+# scope for a Windows-only compile fix and risks pulling in different
+# transitive deps than the ones the `default-features = false` above (see
+# .cargo/audit.toml) was tuned around. Scoping this to `cfg(windows)` keeps
+# macOS/Linux on the exact dependency graph they already build and test
+# against.
+libsql-sys = { version = "0.8", features = ["rusqlite"] }
+
 [dev-dependencies]
 tokio-test = { workspace = true }
 http-body-util = "0.1"
