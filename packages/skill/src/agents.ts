@@ -95,3 +95,32 @@ export const AGENTS: AgentConfig[] = [
 
 /** The frontmatter block every target installs. Exported for tests. */
 export const SHARED_SKILL_FRONTMATTER = SKILL_FRONTMATTER;
+
+/**
+ * Builds the shared frontmatter block, optionally stamping the optional
+ * `compatibility` field (max 500 chars per the spec) in before the closing
+ * `---`.
+ *
+ * The installer path above never needs this — the app installs whatever
+ * `packages/skill` was built with, and SHARED_SKILL_FRONTMATTER already
+ * covers it — so this stays a separate, additive export rather than a
+ * change to AGENTS. `scripts/publish-skill-repo.ts` is the one caller: it
+ * passes the released NodeSpace app version (from the same release tag
+ * `scripts/update-homebrew-cask.ts` takes, itself derived from the
+ * `tauri.conf.json` canonical version `scripts/check-version-sync.ts`
+ * enforces) so a user importing the published skill can tell which app
+ * version a given revision targets.
+ */
+export function buildSkillFrontmatter(opts: { compatibility?: string } = {}): string {
+  const { compatibility } = opts;
+  if (!compatibility) return SKILL_FRONTMATTER;
+  if (compatibility.length > 500) {
+    throw new Error(
+      `compatibility exceeds the Agent Skills spec's 500-character limit ` +
+        `(${compatibility.length}): ${compatibility}`,
+    );
+  }
+  // Insert as the last field, right before the closing `---`, so every
+  // other field (and its ordering) stays identical to SHARED_SKILL_FRONTMATTER.
+  return SKILL_FRONTMATTER.replace(/\n---\n$/, `\ncompatibility: ${compatibility}\n---\n`);
+}

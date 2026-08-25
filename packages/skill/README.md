@@ -1,30 +1,43 @@
 # @nodespaceai/skill
 
-Install the NodeSpace skill into PTY agents (Claude Code, Codex, Gemini CLI, OpenCode) with a single command.
+Installs the NodeSpace Agent Skill into PTY agents (Claude Code, Codex, Gemini CLI, OpenCode).
 
-## Installation
+**This package is not published to npm.** `@nodespaceai/skill` never existed
+on the npm registry, and it is not going to: the NodeSpace desktop app is the
+one thing that installs this package's output, and it does so by running the
+built installer directly with `bun` (see
+`packages/desktop-app/src-tauri/src/skill_setup.rs`) — never `npx`/`npm`, so
+publishing to npm was never actually required for the app's own install path.
+
+If you're using an external agent harness yourself (not launched via the
+NodeSpace app) and want the skill without installing NodeSpace first, import
+the generated public repo instead:
+**[NodeSpaceAI/nodespace-skill](https://github.com/NodeSpaceAI/nodespace-skill)**.
+It carries a spec-compliant `skills/nodespace/` folder, regenerated and
+pushed by this repo's release pipeline (`scripts/publish-skill-repo.ts`) on
+every release — never hand-edited.
+
+## What's in this package
+
+This package's build output (`dist/`, `shims/`, `SKILL.md`, `references/`) is
+consumed two ways, both inside this monorepo's own tooling:
+
+1. **Bundled into the desktop app.** `scripts/build-skill.ts` stages it into
+   `packages/desktop-app/src-tauri/resources/skill/` as a Tauri resource. On
+   first launch, the app runs `bun dist/install.js install` to detect which
+   agents are present and copy `SKILL.md` (with the right frontmatter
+   prepended) into each one's skills directory.
+2. **Published to `NodeSpaceAI/nodespace-skill`.** The release pipeline runs
+   `scripts/publish-skill-repo.ts`, which renders the same frontmatter this
+   package builds (via `buildSkillFrontmatter` in `src/agents.ts`) plus
+   `SKILL.md`'s body and `references/cli.md`, and pushes them to the public
+   repo — the channel for a harness the app didn't launch.
+
+## Manual usage (from a source checkout)
 
 ```bash
-npx @nodespaceai/skill install
-```
-
-Detects which agents are present on your machine and installs the NodeSpace `SKILL.md` into each agent's skills directory.
-
-## Usage
-
-```bash
-# Install for all detected agents
-npx @nodespaceai/skill install
-
-# Install for a specific agent
-npx @nodespaceai/skill install claude-code
-npx @nodespaceai/skill install codex
-npx @nodespaceai/skill install gemini
-npx @nodespaceai/skill install opencode
-
-# Uninstall
-npx @nodespaceai/skill uninstall
-npx @nodespaceai/skill uninstall claude-code
+bun run --cwd packages/skill build
+bun packages/skill/dist/install.js install
 ```
 
 ## Supported Agents
@@ -43,7 +56,7 @@ The `nodespace` CLI must be on `$PATH`. Install it via the [NodeSpace desktop ap
 ## Programmatic API
 
 ```ts
-import { install, uninstall } from '@nodespaceai/skill';
+import { install, uninstall } from './installer.js';
 
 // Install for all detected agents
 const results = install();

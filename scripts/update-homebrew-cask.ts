@@ -40,7 +40,7 @@
  * the sync job itself was skipped or failed silently.
  *
  * The actual "clone the tap, write the file, commit, push" mechanics live
- * in homebrew-tap-push.ts, shared with update-homebrew-formula.ts (the same
+ * in push-to-external-repo.ts, shared with update-homebrew-formula.ts (the same
  * kind of sync job for the sibling `nodespace-cli` Homebrew formula).
  */
 
@@ -49,10 +49,10 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pushFilesToTap, TAP_REPO } from "./homebrew-tap-push";
+import { pushFilesToRepo } from "./push-to-external-repo";
 
 export const CORE_REPO = "NodeSpaceAI/nodespace-core";
-export { TAP_REPO };
+export const TAP_REPO = "NodeSpaceAI/homebrew-nodespace";
 
 // The .app bundle's CLI binary lives at Contents/MacOS/nodespace in the
 // current Tauri packaging layout (verified by mounting the real v0.2.0 .dmg
@@ -271,7 +271,8 @@ export async function checkTapDrift(): Promise<DriftCheckResult> {
 
 async function pushCaskUpdate(version: string, caskContent: string, token: string): Promise<void> {
   const v = normalizeVersion(version);
-  const pushed = await pushFilesToTap(
+  const pushed = await pushFilesToRepo(
+    TAP_REPO,
     [{ relPath: "Casks/nodespace.rb", content: caskContent }],
     `Update cask to v${v} (automated release sync)`,
     token,
