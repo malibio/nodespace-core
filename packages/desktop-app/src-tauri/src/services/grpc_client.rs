@@ -11,9 +11,9 @@
 use std::sync::Arc;
 
 use nodespace_proto::{
-    AgentSessionServiceClient, DatabaseServiceClient, EmbeddingsServiceClient, ImportServiceClient,
-    LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient, CLIENT_ID_HEADER,
-    DATABASE_ID_HEADER,
+    with_message_limits, AgentSessionServiceClient, DatabaseServiceClient, EmbeddingsServiceClient,
+    ImportServiceClient, LocalAgentServiceClient, NodeServiceClient, SettingsServiceClient,
+    CLIENT_ID_HEADER, DATABASE_ID_HEADER,
 };
 use tokio::sync::{watch, RwLock};
 use tonic::metadata::{Ascii, MetadataValue};
@@ -211,19 +211,28 @@ impl GrpcClient {
         // header is still stamped.
         let interceptor = DatabaseIdInterceptor::none(client_id.clone());
         let inner = GrpcClientInner {
-            node: NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
-            import: ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
-            embeddings: EmbeddingsServiceClient::with_interceptor(
+            node: with_message_limits!(NodeServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            )),
+            import: with_message_limits!(ImportServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            )),
+            embeddings: with_message_limits!(EmbeddingsServiceClient::with_interceptor(
                 channel.clone(),
                 interceptor.clone(),
-            ),
-            agent_session: AgentSessionServiceClient::with_interceptor(
+            )),
+            agent_session: with_message_limits!(AgentSessionServiceClient::with_interceptor(
                 channel.clone(),
                 interceptor.clone(),
-            ),
-            local_agent: LocalAgentServiceClient::with_interceptor(channel.clone(), interceptor),
-            settings: SettingsServiceClient::new(channel.clone()),
-            database_service: DatabaseServiceClient::new(channel.clone()),
+            )),
+            local_agent: with_message_limits!(LocalAgentServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor
+            )),
+            settings: with_message_limits!(SettingsServiceClient::new(channel.clone())),
+            database_service: with_message_limits!(DatabaseServiceClient::new(channel.clone())),
             active_database_id: None,
             client_id,
             channel,
@@ -326,14 +335,25 @@ impl GrpcClient {
             }
             let interceptor = DatabaseIdInterceptor::for_id(id.as_deref(), inner.client_id.clone());
             let channel = inner.channel.clone();
-            inner.node = NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.import =
-                ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.embeddings =
-                EmbeddingsServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.agent_session =
-                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.local_agent = LocalAgentServiceClient::with_interceptor(channel, interceptor);
+            inner.node = with_message_limits!(NodeServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            ));
+            inner.import = with_message_limits!(ImportServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            ));
+            inner.embeddings = with_message_limits!(EmbeddingsServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            ));
+            inner.agent_session = with_message_limits!(
+                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor.clone())
+            );
+            inner.local_agent = with_message_limits!(LocalAgentServiceClient::with_interceptor(
+                channel,
+                interceptor
+            ));
             inner.active_database_id = id;
         }
         // Signal the watcher (outside the lock) to re-subscribe to the new
@@ -396,17 +416,28 @@ impl GrpcClient {
                 inner.active_database_id.as_deref(),
                 inner.client_id.clone(),
             );
-            inner.node = NodeServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.import =
-                ImportServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.embeddings =
-                EmbeddingsServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.agent_session =
-                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor.clone());
-            inner.local_agent =
-                LocalAgentServiceClient::with_interceptor(channel.clone(), interceptor);
-            inner.settings = SettingsServiceClient::new(channel.clone());
-            inner.database_service = DatabaseServiceClient::new(channel.clone());
+            inner.node = with_message_limits!(NodeServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            ));
+            inner.import = with_message_limits!(ImportServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            ));
+            inner.embeddings = with_message_limits!(EmbeddingsServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor.clone()
+            ));
+            inner.agent_session = with_message_limits!(
+                AgentSessionServiceClient::with_interceptor(channel.clone(), interceptor.clone())
+            );
+            inner.local_agent = with_message_limits!(LocalAgentServiceClient::with_interceptor(
+                channel.clone(),
+                interceptor
+            ));
+            inner.settings = with_message_limits!(SettingsServiceClient::new(channel.clone()));
+            inner.database_service =
+                with_message_limits!(DatabaseServiceClient::new(channel.clone()));
             inner.channel = channel;
         }
         self.db_generation.send_modify(|g| *g = g.wrapping_add(1));

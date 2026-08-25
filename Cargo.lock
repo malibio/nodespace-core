@@ -3440,6 +3440,7 @@ dependencies = [
  "nodespace-core",
  "nodespace-daemon",
  "nodespace-nlp-engine",
+ "nodespace-proto",
  "serde_json",
  "tempfile",
  "tokio",

@@ -13,6 +13,7 @@ use nodespace_daemon::{
     AgentSessionServiceClient, DatabaseServiceClient, ImportServiceClient, LocalAgentServiceClient,
     NodeServiceClient,
 };
+use nodespace_proto::with_message_limits;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::service::interceptor::InterceptedService;
 use tonic::service::Interceptor;
@@ -240,7 +241,9 @@ pub async fn connect(
 ) -> Result<NodeClient> {
     uds_channel(sock)
         .await
-        .map(|channel| NodeServiceClient::with_interceptor(channel, interceptor))
+        .map(|channel| {
+            with_message_limits!(NodeServiceClient::with_interceptor(channel, interceptor))
+        })
         .with_context(|| connect_error_context(sock))
 }
 
@@ -252,7 +255,9 @@ pub async fn connect_import(
 ) -> Result<ImportClient> {
     uds_channel(sock)
         .await
-        .map(|channel| ImportServiceClient::with_interceptor(channel, interceptor))
+        .map(|channel| {
+            with_message_limits!(ImportServiceClient::with_interceptor(channel, interceptor))
+        })
         .with_context(|| connect_error_context(sock))
 }
 
@@ -264,7 +269,12 @@ pub async fn connect_session(
 ) -> Result<SessionClient> {
     uds_channel(sock)
         .await
-        .map(|channel| AgentSessionServiceClient::with_interceptor(channel, interceptor))
+        .map(|channel| {
+            with_message_limits!(AgentSessionServiceClient::with_interceptor(
+                channel,
+                interceptor
+            ))
+        })
         .with_context(|| connect_error_context(sock))
 }
 
@@ -276,7 +286,12 @@ pub async fn connect_local_agent(
 ) -> Result<LocalAgentClient> {
     uds_channel(sock)
         .await
-        .map(|channel| LocalAgentServiceClient::with_interceptor(channel, interceptor))
+        .map(|channel| {
+            with_message_limits!(LocalAgentServiceClient::with_interceptor(
+                channel,
+                interceptor
+            ))
+        })
         .with_context(|| connect_error_context(sock))
 }
 
@@ -287,7 +302,7 @@ pub async fn connect_local_agent(
 pub async fn connect_database(sock: &std::path::Path) -> Result<DatabaseServiceClient<Channel>> {
     uds_channel(sock)
         .await
-        .map(DatabaseServiceClient::new)
+        .map(|channel| with_message_limits!(DatabaseServiceClient::new(channel)))
         .with_context(|| connect_error_context(sock))
 }
 
