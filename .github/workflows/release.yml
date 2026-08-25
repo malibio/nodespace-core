@@ -2,7 +2,30 @@ name: Release
 
 on:
   release:
-    types: [created]
+    # `published`, NOT `created`. GitHub defines `created` as "a draft was
+    # saved, or a release or pre-release was published without previously
+    # being saved as a draft", and Actions additionally never runs workflows
+    # for the `created` activity type on draft releases. The combination
+    # means a release that is saved as a draft first and published later
+    # NEVER fires `created` -- not on the draft save (suppressed), and not on
+    # the publish (already "created"). Publishing such a draft silently built
+    # nothing at all: no run, no error, just a release with no binaries and
+    # no Homebrew/install.sh update behind it.
+    #
+    # `published` fires on both paths -- publishing an existing draft, and
+    # creating a release non-draft in one shot -- so it covers the draft
+    # review flow without losing the direct `gh release create` flow.
+    #
+    # Deliberately a single activity type. Release activity types overlap
+    # rather than partition: one non-draft `gh release create` emits
+    # `created` AND `published` (and `released`/`prereleased`), so listing
+    # two of them would start two concurrent runs for one release -- both
+    # uploading the same assets with --clobber and both racing to push the
+    # Homebrew tap, which is exactly the non-fast-forward hazard
+    # sync-homebrew-formula's `needs` ordering exists to prevent. Do not add
+    # `created` or `prereleased` alongside this; `published` already covers
+    # stable and pre-releases alike.
+    types: [published]
   workflow_dispatch:
     inputs:
       platform:
@@ -527,7 +550,7 @@ jobs:
     needs: build-headless
     # A sibling of sync-homebrew-cask above, same reasoning: install.sh
     # deliberately pins to a specific, confirmed-built release rather than
-    # floating to "latest" (this repo's own `release: types: [created]`
+    # floating to "latest" (this repo's own `release: types: [published]`
     # trigger fires before build-headless's binaries even start building,
     # so "latest" can point at a release with no CLI assets yet). This job
     # is what advances the pin once those binaries are confirmed uploaded
