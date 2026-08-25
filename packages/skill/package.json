@@ -17,7 +17,8 @@
   "files": [
     "dist",
     "shims",
-    "SKILL.md"
+    "SKILL.md",
+    "references"
   ],
   "publishConfig": {
     "access": "public"

@@ -87,6 +87,8 @@ bun run gh:edit <issue-number> --state "closed"
 
 When creating or modifying issues, follow the [Issue Workflow Guide](../nodespace-docs/development/issue-workflow.md).
 
+**Never assign an issue at creation time.** An assignee means *work is in progress* — it is set in the startup sequence (`bun run gh:assign <N> "@me"`), at the moment work actually begins, and nowhere else. Do not pass `--assignees` to `gh:create`, and do not assign someone to a newly filed issue to indicate intent, ownership, or triage. A backlog issue is unassigned; that is how the backlog stays readable. (`gh:create` does not assign by default — this only happens when the flag is passed explicitly.)
+
 Issue priority: `foundation` (highest) > `design-system` > `ui` > `backend`
 
 ## Architecture & Docs
