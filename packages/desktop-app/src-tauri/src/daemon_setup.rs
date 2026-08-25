@@ -491,13 +491,23 @@ pub async fn wait_for_daemon(socket_path: &Path, max_wait: Duration) -> DaemonSt
 }
 
 /// Extract a sidecar binary from the Tauri bundle to `~/.nodespace/bin/`,
-/// but only if the destination is missing, has a different file size than
-/// the bundled source, or fails code-signature verification. Returns true
-/// if the binary was (re-)extracted.
+/// but only re-copy it if the destination is missing, has a different file
+/// size than the bundled source, or fails code-signature verification.
+/// Returns true if the binary was (re-)extracted.
 ///
-/// Writes to a temp path in the same directory, re-seals the ad-hoc signature
-/// (macOS only), then renames into place — so a concurrently-launched launchd
-/// `KeepAlive` daemon can never `mmap` a partially-written or unsigned image.
+/// Quarantine is cleared on `dest` unconditionally, even when re-copying is
+/// skipped: an ad-hoc signature stays valid regardless of quarantine state
+/// (see `clear_quarantine`'s doc comment), so a binary already on disk from
+/// before this check existed can be same-size and validly signed and still
+/// carry the flag that gets it killed by syspolicyd — a size/signature match
+/// alone would otherwise let that binary sit there untouched forever on any
+/// upgrade whose bundled daemon binary happens not to change size.
+///
+/// When re-copying does happen, it writes to a temp path in the same
+/// directory, re-seals the ad-hoc signature and clears quarantine there too,
+/// then renames into place — so a concurrently-launched launchd `KeepAlive`
+/// daemon can never `mmap` a partially-written, unsigned, or quarantined
+/// image.
 async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path) -> Result<bool> {
     let src = resolve_sidecar_path(app, name)?;
     let dest = bin_dir.join(name);
@@ -509,6 +519,15 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
 
     if let Ok(dest_meta) = tokio::fs::metadata(&dest).await {
         if dest_meta.len() == src_size && verify_signature(&dest) {
+            // A signature check alone doesn't rule out a lingering quarantine
+            // flag: an ad-hoc signature stays valid regardless of quarantine
+            // state, so a binary extracted before this fix existed can sit
+            // here indefinitely — same size, validly signed, still killed by
+            // syspolicyd — and every upgrade whose bundled daemon binary
+            // happens not to change size would otherwise skip extraction and
+            // never reach the one call that clears it. Always clear it here
+            // too, not just on the extraction path below.
+            clear_quarantine(&dest)?;
             tracing::debug!(
                 "{} is up-to-date (size={}) and validly signed, skipping extraction",
                 name,
@@ -540,7 +559,10 @@ async fn extract_sidecar_if_changed(app: &AppHandle, name: &str, bin_dir: &Path)
     // If anything below fails, remove the temp file rather than leaving a stray
     // `.tmp-<pid>` behind in ~/.nodespace/bin/ — harmless on its own, but it
     // would otherwise accumulate silently across repeated failures.
-    if let Err(e) = set_executable(&tmp_dest).and_then(|_| resign_binary(&tmp_dest)) {
+    if let Err(e) = set_executable(&tmp_dest)
+        .and_then(|_| resign_binary(&tmp_dest))
+        .and_then(|_| clear_quarantine(&tmp_dest))
+    {
         let _ = std::fs::remove_file(&tmp_dest);
         return Err(e);
     }
@@ -573,6 +595,68 @@ fn resign_binary(path: &Path) -> Result<()> {
 
 #[cfg(not(target_os = "macos"))]
 fn resign_binary(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Strip the `com.apple.quarantine` extended attribute an extracted sidecar
+/// can pick up from the copy that produced it.
+///
+/// The sidecar's signature is ad-hoc, not Developer-ID (see `resign_binary`'s
+/// doc comment) — it runs fine *inside* the bundle because Gatekeeper's
+/// notarization check happens once, at the bundle level, when the user
+/// launches `NodeSpace.app` itself, and everything inside is implicitly
+/// trusted in that context. Once copied out to `~/.nodespace/bin/` and
+/// registered as an independent `launchd` service — not spawned as a child of
+/// the already-trusted running app — `syspolicyd` evaluates it on its own:
+/// an ad-hoc-only signature fails that independent check outright if the file
+/// also carries a quarantine flag, which is exactly what a plain copy of a
+/// quarantined source produces (confirmed directly: even `cp` on a quarantined
+/// file leaves a freshly-quarantined destination, not an unquarantined one).
+/// The observed failure is `syspolicyd: rejecting due to lack of matching
+/// active rule`, `bundle_id: NOT_A_BUNDLE` — the daemon never stays up long
+/// enough to do anything (core#2287).
+///
+/// `xattr -d` exits non-zero both when the attribute is simply absent (the
+/// common case: a source that was never quarantined) and on a genuine
+/// failure (permission denied, read-only filesystem) — the exit code alone
+/// doesn't distinguish them. Checking presence first with a separate, plain
+/// `xattr` invocation (no `-d`) sidesteps that ambiguity entirely: skip the
+/// removal altogether when the attribute isn't there, and treat any failure
+/// of the removal itself — now known to be acting on a real attribute — as
+/// the genuine error it is, rather than swallowing it at debug level.
+#[cfg(target_os = "macos")]
+fn has_quarantine_attribute(path: &Path) -> bool {
+    std::process::Command::new("xattr")
+        .arg(path)
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line == "com.apple.quarantine")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn clear_quarantine(path: &Path) -> Result<()> {
+    if !has_quarantine_attribute(path) {
+        return Ok(());
+    }
+    let status = std::process::Command::new("xattr")
+        .args(["-d", "com.apple.quarantine"])
+        .arg(path)
+        .status()
+        .context("Failed to invoke xattr")?;
+    anyhow::ensure!(
+        status.success(),
+        "xattr -d com.apple.quarantine failed for {} despite the attribute being present",
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clear_quarantine(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -1101,7 +1185,7 @@ fn register_autorun_windows(daemon_bin: &Path) {
 
 #[cfg(all(test, target_os = "macos"))]
 mod macos_codesign_tests {
-    use super::{resign_binary, verify_signature};
+    use super::{clear_quarantine, has_quarantine_attribute, resign_binary, verify_signature};
     use std::path::PathBuf;
 
     /// Copy a real Mach-O binary into a scratch dir so tampering with its
@@ -1145,6 +1229,122 @@ mod macos_codesign_tests {
             !verify_signature(&bin),
             "tampered binary must fail --verify --strict — this is exactly the \
              corruption class that causes the CODESIGNING SIGKILL crash-loop"
+        );
+    }
+
+    /// Reads the `com.apple.quarantine` xattr directly via the `xattr` CLI —
+    /// deliberately not through `clear_quarantine` itself, so the assertion
+    /// can't pass merely because both sides share a bug.
+    fn has_quarantine_attr(path: &std::path::Path) -> bool {
+        std::process::Command::new("xattr")
+            .arg(path)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("com.apple.quarantine"))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn clear_quarantine_removes_a_real_quarantine_attribute() {
+        let bin = scratch_copy("clear-quarantine");
+        // `xattr -w` on a freshly-copied scratch file — not a claim about how
+        // the daemon's own extraction path acquires the attribute (that's a
+        // plain `cp` of an already-quarantined source, verified separately
+        // during core#2287's investigation), just a controlled fixture for
+        // this function's own removal behavior.
+        std::process::Command::new("xattr")
+            .args(["-w", "com.apple.quarantine", "0081;00000000;test;"])
+            .arg(&bin)
+            .status()
+            .expect("xattr -w should succeed on a scratch file");
+        assert!(
+            has_quarantine_attr(&bin),
+            "fixture setup must actually apply the attribute, or this test proves nothing"
+        );
+
+        clear_quarantine(&bin).expect("clear_quarantine must not error on a real attribute");
+
+        assert!(
+            !has_quarantine_attr(&bin),
+            "com.apple.quarantine must be gone after clear_quarantine — this is the exact \
+             attribute that makes syspolicyd reject an ad-hoc-signed extracted binary \
+             (core#2287)"
+        );
+    }
+
+    #[test]
+    fn clear_quarantine_on_an_unquarantined_file_is_not_an_error() {
+        // The common case: a source that was never quarantined in the first
+        // place. `xattr -d` on an absent attribute exits non-zero — this must
+        // not surface as a hard failure that aborts extraction.
+        let bin = scratch_copy("no-quarantine");
+        assert!(
+            !has_quarantine_attr(&bin),
+            "fixture must start with no quarantine attribute"
+        );
+        clear_quarantine(&bin).expect(
+            "clearing an absent attribute is success, not failure — extraction must not abort \
+             over a file that was never quarantined",
+        );
+    }
+
+    #[test]
+    fn has_quarantine_attribute_reflects_real_xattr_state() {
+        // Production `has_quarantine_attribute`, checked directly — this is
+        // the presence check `clear_quarantine` now runs before attempting
+        // removal, so a bug here would either skip a real removal (leaving a
+        // binary quarantined) or attempt — and potentially fail loudly on —
+        // a removal that was never needed.
+        let unquarantined = scratch_copy("presence-check-absent");
+        assert!(
+            !has_quarantine_attribute(&unquarantined),
+            "must report false when the attribute was never set"
+        );
+
+        let quarantined = scratch_copy("presence-check-present");
+        std::process::Command::new("xattr")
+            .args(["-w", "com.apple.quarantine", "0081;00000000;test;"])
+            .arg(&quarantined)
+            .status()
+            .expect("xattr -w should succeed on a scratch file");
+        assert!(
+            has_quarantine_attribute(&quarantined),
+            "must report true once the attribute is actually present"
+        );
+    }
+
+    #[test]
+    fn extraction_skip_path_still_clears_a_pre_existing_quarantine_flag() {
+        // Regresses the gap an adversarial review of PR#2290 caught: a
+        // same-size, validly-signed binary can still be quarantined if it was
+        // extracted before this fix existed, and a naive skip-when-unchanged
+        // check would leave it that way forever on any upgrade whose bundled
+        // daemon binary happens not to change size. `extract_sidecar_if_changed`
+        // itself needs a live AppHandle to exercise end-to-end, so this pins
+        // the same behavior at the level that can run in an ordinary `#[test]`:
+        // `clear_quarantine` must be safe and effective to call on a file that
+        // is already up-to-date, not just on a freshly-copied temp file.
+        let bin = scratch_copy("skip-path-quarantine");
+        std::process::Command::new("xattr")
+            .args(["-w", "com.apple.quarantine", "0081;00000000;test;"])
+            .arg(&bin)
+            .status()
+            .expect("xattr -w should succeed on a scratch file");
+        resign_binary(&bin).expect("codesign should succeed");
+        assert!(
+            verify_signature(&bin),
+            "fixture must be validly signed — the exact state that hits the skip path"
+        );
+        assert!(
+            has_quarantine_attribute(&bin),
+            "fixture setup must actually apply the attribute, or this test proves nothing"
+        );
+
+        clear_quarantine(&bin)
+            .expect("clear_quarantine must succeed on an already-signed, up-to-date binary");
+
+        assert!(
+            !has_quarantine_attribute(&bin),
+            "a signature match must not be treated as proof the binary is unquarantined"
         );
     }
 }
