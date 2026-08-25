@@ -209,6 +209,17 @@ Use a relationship with `--type member_of` against the collection node. If the c
 nodespace relationship create --from <node-id> --type member_of --to <collection-id>
 ```
 
+### Delete a node
+
+Deletion is permanent and takes the node's children with it. Resolve the node first and confirm with the user before deleting anything you did not just create — a wrong id here is not recoverable.
+
+```bash
+nodespace node query --content-contains "draft spec"   # resolve the id first
+nodespace node delete <node-id>
+```
+
+If the user wants something out of the way rather than gone, prefer moving it (re-parent it, or drop it from a collection) over deleting it.
+
 ### Bulk import from markdown
 
 ```bash

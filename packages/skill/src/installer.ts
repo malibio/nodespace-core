@@ -110,13 +110,31 @@ export function uninstall(targetAgents?: AgentName[]): UninstallResult[] {
 
     // Removing `references/cli.md` leaves an empty `references/` behind, which
     // would make the directory look non-empty and strand the whole folder.
-    // Prune emptied subdirectories before deciding whether anything is left.
-    for (const entry of readdirSync(config.installDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        const subdir = join(config.installDir, entry.name);
-        if (readdirSync(subdir).length === 0) {
+    //
+    // Prune ONLY directories this installer created, derived from `shims` —
+    // never "any empty directory". Uninstall must not reach outside what it
+    // installed: a user's own empty folder here is not ours to delete, and
+    // removing it would also empty the parent and take the whole install
+    // directory with it, silently and without reporting any of it in
+    // `removed`. Deleting more than we installed is a worse failure than
+    // leaving something behind.
+    const ownedDirs = new Set(
+      config.shims
+        .map(shim => dirname(installedName(shim)))
+        .filter(dir => dir !== '.' && dir !== '')
+    );
+    for (const dir of ownedDirs) {
+      const subdir = join(config.installDir, dir);
+      // An unreadable directory (bad permissions) must not abort the uninstall
+      // for this agent or the ones after it — leaving a stale directory is a
+      // far smaller problem than skipping every remaining agent's cleanup.
+      try {
+        if (existsSync(subdir) && readdirSync(subdir).length === 0) {
           rmSync(subdir, { recursive: true });
         }
+      } catch {
+        // Leave it in place; the is-empty check below then keeps the install
+        // directory too, which is the correct conservative outcome.
       }
     }
 

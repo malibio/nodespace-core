@@ -121,10 +121,15 @@ describe('install', () => {
       readFileSync(join(import.meta.dirname, '../../package.json'), 'utf8')
     ) as { files: string[] };
 
+    // The first segment of each shim path: a directory (`references`, `shims`)
+    // or a bare file (`SKILL.md`). npm's `files` accepts either form verbatim,
+    // so an exact match is the whole check.
     const topLevel = new Set(AGENTS.flatMap(a => a.shims).map(s => s.split('/')[0]));
     for (const entry of topLevel) {
-      const published = pkg.files.some(f => f === entry || f === entry.replace(/\.md$/, ''));
-      expect(published, `"${entry}" is installed but not in package.json "files"`).toBe(true);
+      expect(
+        pkg.files,
+        `"${entry}" is installed but not in package.json "files"`
+      ).toContain(entry);
     }
   });
 
@@ -350,6 +355,42 @@ describe('uninstall', () => {
         ).toBe(false);
       }
     }
+  });
+
+  // Uninstall must not reach outside what it installed. Pruning "any empty
+  // directory" would delete a user's own folder, empty the parent, and take
+  // the whole install directory with it — none of it reported in `removed`.
+  // Removing more than we installed is a worse failure than leaving something
+  // behind.
+  it('never deletes directories it did not install', () => {
+    const config = AGENTS.find(a => a.name === 'claude-code')!;
+    mkdirSync(config.detectionDir, { recursive: true });
+    seedPkgRoot(FAKE_PKG_ROOT, config);
+    install([config.name], FAKE_PKG_ROOT);
+
+    const userDir = join(config.installDir, 'user-scripts');
+    mkdirSync(userDir, { recursive: true });
+
+    uninstall([config.name]);
+
+    expect(existsSync(userDir), 'uninstall deleted a user-created directory').toBe(true);
+    expect(existsSync(config.installDir)).toBe(true);
+    expect(existsSync(join(config.installDir, 'references'))).toBe(false);
+    expect(existsSync(join(config.installDir, 'SKILL.md'))).toBe(false);
+  });
+
+  it('preserves user files inside a directory it does own', () => {
+    const config = AGENTS.find(a => a.name === 'claude-code')!;
+    mkdirSync(config.detectionDir, { recursive: true });
+    seedPkgRoot(FAKE_PKG_ROOT, config);
+    install([config.name], FAKE_PKG_ROOT);
+
+    const userNote = join(config.installDir, 'references', 'my-notes.md');
+    writeFileSync(userNote, 'user content', 'utf8');
+
+    uninstall([config.name]);
+
+    expect(existsSync(userNote), 'uninstall deleted a user file inside references/').toBe(true);
   });
 
   it('still removes the install dir when a shim was already deleted by hand', () => {

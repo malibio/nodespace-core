@@ -67,6 +67,51 @@ fn skill_md() -> String {
     combined
 }
 
+/// The shipped skill with every generated region stripped out — i.e. only the
+/// prose a human wrote.
+///
+/// Some assertions are about whether a *human* explained something, and those
+/// must not be satisfiable by generated content. The generated CLI surface
+/// contains every command string by construction, so any needle shaped like a
+/// command is trivially present in it: an assertion checking the full corpus
+/// for `nodespace node delete` passes even if every word of hand-written
+/// guidance were deleted. That is the same "cannot fail" defect as searching
+/// the whole corpus for a colliding flag name — and it lands on the one test
+/// whose subject is precisely the judgment prose this file's one-way contract
+/// exists to protect.
+fn skill_prose_only() -> String {
+    let full = skill_md();
+    let mut out = String::new();
+    let mut rest = full.as_str();
+
+    // Regions are delimited by `<!-- BEGIN GENERATED: ... -->` / `<!-- END
+    // GENERATED: ... -->`. Drop everything between each pair, keeping the prose
+    // around them.
+    while let Some(begin) = rest.find("<!-- BEGIN GENERATED:") {
+        out.push_str(&rest[..begin]);
+        let after = &rest[begin..];
+        match after.find("<!-- END GENERATED:") {
+            Some(end_start) => {
+                let tail = &after[end_start..];
+                let end_len = tail
+                    .find("-->")
+                    .map(|i| i + "-->".len())
+                    .unwrap_or(tail.len());
+                rest = &tail[end_len..];
+            }
+            // An unterminated begin marker means the file is malformed; the
+            // generator's own splice would have rejected it. Stop here rather
+            // than silently keeping generated content.
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Subcommands a user can actually invoke — clap's generated `help` and
 /// anything hidden are not part of the documented surface. Mirrors the
 /// generator's filter.
@@ -136,7 +181,15 @@ fn every_cli_flag_is_documented() {
         // the common case here (`--limit`, `--json`, `--collection` each appear
         // under many commands). Slicing to the section makes the assertion
         // answer the question it claims to.
-        let section = command_section(skill, path).unwrap_or("");
+        // A command with no section of its own is reported here rather than
+        // silently yielding an empty slice. `every_cli_command_is_documented`
+        // does NOT cover this case: it searches for the bare string
+        // "nodespace <path>" anywhere in the corpus, which a worked example or
+        // a prose mention satisfies without any generated section existing.
+        let Some(section) = command_section(skill, path) else {
+            missing.push(format!("{path} (no generated section at all)"));
+            return;
+        };
 
         for arg in cmd.get_arguments() {
             if arg.is_hide_set() || arg.is_global_set() {
@@ -179,9 +232,12 @@ fn every_cli_flag_is_documented() {
 ///
 /// The generator emits a leaf as `**`nodespace node query`**` and a
 /// subcommand-less command as `### `nodespace search``, so both forms are
-/// tried. Returns `None` when the command has no section at all — which
-/// `every_cli_command_is_documented` reports, so this returning an empty slice
-/// here does not hide it.
+/// tried. Both markers are backtick-delimited, so a command whose name is a
+/// prefix of another (`node get` vs `node get-related`) does not match the
+/// wrong section.
+///
+/// Returns `None` when the command has no generated section at all; the caller
+/// reports that as its own failure.
 fn command_section<'a>(skill: &'a str, path: &str) -> Option<&'a str> {
     let heading = format!("**`nodespace {path}`**");
     let alt = format!("### `nodespace {path}`\n");
@@ -239,7 +295,11 @@ fn every_global_cli_flag_is_documented() {
 /// skill defined any way at all is a `NodeTemplate` in the returned vector.
 #[test]
 fn every_seeded_skill_is_represented() {
-    let skill = skill_md().to_lowercase();
+    // Prose only. The generated CLI surface contains every command string by
+    // construction, so checking the full corpus would pass even if all the
+    // hand-written guidance were deleted — this test would be measuring the
+    // generator instead of the thing it is named for.
+    let skill = skill_prose_only().to_lowercase();
     let mut missing = Vec::new();
 
     for template in nodespace_agent::skill_pipeline::seed_skill_nodes() {
