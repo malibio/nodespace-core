@@ -39,6 +39,17 @@ use std::time::Duration;
 use nodespace_app_lib::services::GrpcClient;
 use tauri::Manager;
 
+// Re-exported the same way `daemon_binary_freshness` below is: `pub` purely
+// so `tests/sidecar_staging_sync_test.rs` can exercise the real algorithm,
+// not because anything in this crate calls it itself. Pulled in via
+// `#[path]` rather than a `[build-dependencies]` crate because this crate
+// already depends on `nodespace-app` — a build-dependency back onto the same
+// package would be a cycle. See `build_support.rs`'s module doc for the full
+// story.
+#[path = "../../build_support.rs"]
+mod build_support;
+pub use build_support::sync_stale_sidecar;
+
 /// Default timeout for `TauriTestApp::connect`'s daemon-health wait, shared
 /// by every `tests/*.rs` call site instead of each hardcoding its own
 /// duplicate literal.
