@@ -3435,7 +3435,7 @@ dependencies = [
 
 [[package]]
 name = "nodespace-app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3498,6 +3498,7 @@ dependencies = [
  "nodespace-core",
  "nodespace-daemon",
  "nodespace-nlp-engine",
+ "nodespace-proto",
  "serde_json",
  "tempfile",
  "tokio",

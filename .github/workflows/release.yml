@@ -2,7 +2,30 @@ name: Release
 
 on:
   release:
-    types: [created]
+    # `published`, NOT `created`. GitHub defines `created` as "a draft was
+    # saved, or a release or pre-release was published without previously
+    # being saved as a draft", and Actions additionally never runs workflows
+    # for the `created` activity type on draft releases. The combination
+    # means a release that is saved as a draft first and published later
+    # NEVER fires `created` -- not on the draft save (suppressed), and not on
+    # the publish (already "created"). Publishing such a draft silently built
+    # nothing at all: no run, no error, just a release with no binaries and
+    # no Homebrew/install.sh update behind it.
+    #
+    # `published` fires on both paths -- publishing an existing draft, and
+    # creating a release non-draft in one shot -- so it covers the draft
+    # review flow without losing the direct `gh release create` flow.
+    #
+    # Deliberately a single activity type. Release activity types overlap
+    # rather than partition: one non-draft `gh release create` emits
+    # `created` AND `published` (and `released`/`prereleased`), so listing
+    # two of them would start two concurrent runs for one release -- both
+    # uploading the same assets with --clobber and both racing to push the
+    # Homebrew tap, which is exactly the non-fast-forward hazard
+    # sync-homebrew-formula's `needs` ordering exists to prevent. Do not add
+    # `created` or `prereleased` alongside this; `published` already covers
+    # stable and pre-releases alike.
+    types: [published]
   workflow_dispatch:
     inputs:
       platform:
@@ -24,8 +47,14 @@ permissions:
   issues: write
 
 jobs:
-  # macOS ARM is a standalone job so publish-npm can depend on it alone,
-  # without being blocked by the Windows leg.
+  # macOS ARM is a standalone job so downstream sync jobs (sync-homebrew-cask,
+  # sync-skill-repo) can depend on it alone, without being blocked by the
+  # Windows leg. (An earlier publish-npm job used to be the reason this was
+  # split out; it was removed before ever running -- npm publishing was
+  # dropped as a distribution path in favor of the public
+  # NodeSpaceAI/nodespace-skill repo sync-skill-repo pushes to, so there is no
+  # publish-npm job to depend on it anymore. The split itself stayed useful
+  # for the reason above and was kept.)
   build-tauri-macos-arm:
     name: Build Tauri (macOS ARM)
     runs-on: macos-latest
@@ -521,13 +550,42 @@ jobs:
           # loudly here and notify-failure below opens an issue.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+  sync-skill-repo:
+    name: Publish NodeSpace skill to nodespace-skill
+    runs-on: ubuntu-22.04
+    # Unlike sync-homebrew-cask/sync-homebrew-formula, this job needs no
+    # release asset -- scripts/publish-skill-repo.ts reads packages/skill/
+    # SKILL.md and references/cli.md straight from the checked-out repo at
+    # the release tag, so it doesn't wait on any build-* job and cannot be
+    # blocked by one of them failing.
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Publish skill to nodespace-skill
+        run: bun run scripts/publish-skill-repo.ts ${{ github.event.release.tag_name }} --push
+        env:
+          # PAT (or fine-grained token) with contents:write on
+          # NodeSpaceAI/nodespace-skill -- secrets.GITHUB_TOKEN is scoped to
+          # this repo only and cannot push cross-repo. Must be added as a
+          # repo secret before this step can succeed; until then it fails
+          # loudly here and notify-failure below opens an issue.
+          SKILL_REPO_TOKEN: ${{ secrets.SKILL_REPO_TOKEN }}
+
   sync-install-script:
     name: Pin nodespace-website's install.sh to this release
     runs-on: ubuntu-22.04
     needs: build-headless
     # A sibling of sync-homebrew-cask above, same reasoning: install.sh
     # deliberately pins to a specific, confirmed-built release rather than
-    # floating to "latest" (this repo's own `release: types: [created]`
+    # floating to "latest" (this repo's own `release: types: [published]`
     # trigger fires before build-headless's binaries even start building,
     # so "latest" can point at a release with no CLI assets yet). This job
     # is what advances the pin once those binaries are confirmed uploaded
@@ -606,7 +664,7 @@ jobs:
     # before this job existed there was only ever one writer per release.
     # Running them concurrently would let either `git push` lose a
     # non-fast-forward race against the other with no retry (see
-    # homebrew-tap-push.ts) -- ordering this job after sync-homebrew-cask
+    # push-to-external-repo.ts) -- ordering this job after sync-homebrew-cask
     # finishes (success OR failure, hence `always()` below rather than
     # gating on its result) removes that race entirely: this job's own
     # fresh `git clone` always sees whatever sync-homebrew-cask already
@@ -638,7 +696,7 @@ jobs:
   notify-failure:
     name: Notify on build failure
     runs-on: ubuntu-22.04
-    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless, sync-homebrew-cask, sync-install-script, sync-homebrew-formula]
+    needs: [build-tauri-macos-arm, build-tauri, build-pkg-macos, build-headless, sync-homebrew-cask, sync-skill-repo, sync-install-script, sync-homebrew-formula]
     if: failure()
 
     steps:

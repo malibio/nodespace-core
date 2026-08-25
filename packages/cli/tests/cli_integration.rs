@@ -379,6 +379,10 @@ async fn diagnostics_collect_reports_counts_and_recency() {
         "baseline collect must not produce errors: {:?}",
         baseline.errors
     );
+    assert!(
+        baseline.total_node_count.is_some(),
+        "a successful query must report a count, not unknown"
+    );
     // The registry has exactly the seeded default, and it is the target when no
     // database is selected.
     assert_eq!(baseline.databases.len(), 1, "one registered database");
@@ -423,19 +427,26 @@ async fn diagnostics_collect_reports_counts_and_recency() {
     let report = commands::diagnostics::collect(&mut node, &mut db, None).await;
     assert_eq!(
         report.total_node_count,
-        baseline.total_node_count + 3,
+        baseline.total_node_count.map(|n| n + 3),
         "expected three additional nodes vs baseline"
     );
     assert_eq!(
         report.root_node_count,
-        baseline.root_node_count + 1,
+        baseline.root_node_count.map(|n| n + 1),
         "expected one additional root node vs baseline"
     );
     assert!(
         report.database_size_bytes.unwrap_or(0) > 0,
         "targeted database file should have a nonzero size after writes"
     );
-    assert_eq!(report.recent_node_ids[0], last_child_id);
+    assert_eq!(
+        report
+            .recent_node_ids
+            .as_ref()
+            .and_then(|ids| ids.first())
+            .map(String::as_str),
+        Some(last_child_id.as_str())
+    );
     assert!(
         report.errors.is_empty(),
         "happy-path collect must not surface errors: {:?}",
@@ -1559,6 +1570,172 @@ async fn database_routing_isolates_writes() {
     assert!(
         in_default.nodes.is_empty(),
         "the write must not leak into the default database"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// tonic's default decode limit is 4 MiB, which several list-shaped RPCs in
+/// this contract can legitimately exceed on a real database: `QueryNodesSimple`
+/// returns every matching node's full record in a single message. This seeds a
+/// response comfortably past that default and asserts both halves of the
+/// contract — a client left on the default limit fails with `OutOfRange`
+/// (proving the payload really does cross the boundary, so the test can't go
+/// vacuous), while the client the CLI actually builds reads it in full.
+#[tokio::test]
+async fn query_nodes_simple_handles_response_over_the_default_grpc_limit() {
+    const DEFAULT_TONIC_DECODE_LIMIT: usize = 4 * 1024 * 1024;
+    const NODE_COUNT: usize = 90;
+    const CONTENT_BYTES: usize = 60_000;
+
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut seed = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect seed");
+
+    // 90 × 60 KB ≈ 5.1 MB of content alone — past 4 MiB even before proto
+    // framing and the rest of each record.
+    let query = QueryNodesSimpleRequest {
+        id: None,
+        mentioned_by: None,
+        content_contains: None,
+        title_contains: None,
+        node_type: None,
+        limit: 100_000,
+        offset: 0,
+    };
+
+    // The daemon bootstraps its own nodes (schemas and friends), so count what
+    // is already there rather than assuming an empty database.
+    let baseline = seed
+        .query_nodes_simple(query.clone())
+        .await
+        .expect("baseline query")
+        .into_inner()
+        .nodes
+        .len();
+
+    let filler = "x".repeat(CONTENT_BYTES);
+    for _ in 0..NODE_COUNT {
+        seed.create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: filler.clone(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed large node");
+    }
+
+    // A client on tonic's default decode limit cannot read this response.
+    let mut default_limit_client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect default-limit")
+        .max_decoding_message_size(DEFAULT_TONIC_DECODE_LIMIT);
+    let status = default_limit_client
+        .query_nodes_simple(query.clone())
+        .await
+        .expect_err("a >4 MiB response must exceed tonic's default decode limit");
+    assert_eq!(
+        status.code(),
+        Code::OutOfRange,
+        "expected the decode-limit failure this test exists to prevent, got: {status}"
+    );
+
+    // The client the CLI builds reads the same response in full.
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let response = client
+        .query_nodes_simple(query)
+        .await
+        .expect("configured client must read a multi-megabyte response")
+        .into_inner();
+    assert_eq!(
+        response.nodes.len(),
+        baseline + NODE_COUNT,
+        "every seeded node must come back"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// When the node query fails, diagnostics must report the count as unknown and
+/// exit non-zero — never present a failed query as a zero-node database.
+#[tokio::test]
+async fn diagnostics_reports_unknown_counts_when_the_node_query_fails() {
+    let (sock, shutdown, _tempdir) = spawn_routing_daemon().await;
+    let mut seed = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect seed");
+    let mut db = connect_database(&sock).await.expect("connect database");
+
+    // Seed real nodes so a reported count of 0 would be provably wrong.
+    for label in ["alpha", "beta", "gamma"] {
+        seed.create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: label.into(),
+            parent_id: None,
+            properties: String::new(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .unwrap_or_else(|e| panic!("seed {label}: {e}"));
+    }
+
+    // Clamping the decode limit reproduces what an oversized response does to a
+    // real client, without having to seed one here.
+    let mut starved = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect starved")
+        .max_decoding_message_size(1);
+
+    let report = commands::diagnostics::collect(&mut starved, &mut db, None).await;
+
+    assert!(
+        report.total_node_count.is_none(),
+        "a failed node query must report an unknown count, not a number: {:?}",
+        report.total_node_count
+    );
+    assert!(
+        report.recent_node_ids.is_none(),
+        "recency is derived from the failed query and must be unknown too"
+    );
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.contains("QueryNodesSimple failed")),
+        "the underlying failure must be surfaced: {:?}",
+        report.errors
+    );
+    // The registry enumeration rides an unclamped client, so the report is
+    // partial rather than empty — that is exactly the state that must not read
+    // as a success.
+    assert!(
+        !report.databases.is_empty(),
+        "registry enumeration should still succeed"
+    );
+
+    let err = commands::diagnostics::run(
+        &mut starved,
+        &mut db,
+        None,
+        commands::diagnostics::DiagnosticsArgs {},
+        false,
+    )
+    .await
+    .expect_err("diagnostics must exit non-zero when a query failed");
+    assert!(
+        err.to_string().contains("diagnostics incomplete"),
+        "expected a loud failure, got: {err}"
     );
 
     let _ = shutdown.send(());

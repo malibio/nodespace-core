@@ -59,16 +59,35 @@ const PROTO_PATH = path.resolve(__dirname, '../../proto/proto/node_service.proto
 const AGENT_PROTO_PATH = path.resolve(__dirname, '../../proto/proto/local_agent_service.proto');
 
 /**
- * Bound the gRPC-js reconnect backoff to a short, FIXED interval. This is the
- * root-cause fix: it caps grpc-js's default 1s->120s exponential backoff so a
- * channel whose peer was unreachable re-probes the transport roughly every
- * 100ms and recovers promptly once the socket appears — instead of sitting
- * out an ever-growing backoff the caller cannot control. Applies only to the
- * dev-proxy's gRPC-js client, never to the production tonic path.
+ * Maximum size, in bytes, of a single gRPC message on the dev-proxy's channel.
+ * Mirrors `MAX_MESSAGE_SIZE_BYTES` in `packages/proto/src/lib.rs`, which the
+ * production tonic clients and the daemon use — both stacks default to 4 MiB,
+ * which several list-shaped RPCs (`QueryNodesSimple`, `GetChildrenTree`,
+ * `GetCollectionMembers`, …) exceed on a real database. Keeping the two in
+ * step means browser mode fails, or doesn't, exactly where the packaged app
+ * does. Update both together.
  */
-export const RECONNECT_CHANNEL_OPTIONS: grpc.ClientOptions = {
+const MAX_MESSAGE_SIZE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Channel options for the dev-proxy's gRPC-js clients.
+ *
+ * The reconnect pair bounds gRPC-js's backoff to a short, FIXED interval. This
+ * is the root-cause fix for the not-ready path: it caps grpc-js's default
+ * 1s->120s exponential backoff so a channel whose peer was unreachable
+ * re-probes the transport roughly every 100ms and recovers promptly once the
+ * socket appears — instead of sitting out an ever-growing backoff the caller
+ * cannot control. Applies only to the dev-proxy's gRPC-js client, never to the
+ * production tonic path.
+ *
+ * The message-size pair lifts grpc-js's own 4 MiB default (see
+ * [`MAX_MESSAGE_SIZE_BYTES`]).
+ */
+export const DEV_PROXY_CHANNEL_OPTIONS: grpc.ClientOptions = {
   'grpc.initial_reconnect_backoff_ms': 100,
-  'grpc.max_reconnect_backoff_ms': 100
+  'grpc.max_reconnect_backoff_ms': 100,
+  'grpc.max_receive_message_length': MAX_MESSAGE_SIZE_BYTES,
+  'grpc.max_send_message_length': MAX_MESSAGE_SIZE_BYTES
 };
 
 export function resolveSocketAddress(): string {
@@ -103,7 +122,7 @@ export interface NodeSpaceGrpcClients {
   agentClient: grpc.Client;
   /**
    * Wait for `client`'s channel to reach READY, actively driving a connection
-   * attempt (and, thanks to RECONNECT_CHANNEL_OPTIONS, re-probing every
+   * attempt (and, thanks to DEV_PROXY_CHANNEL_OPTIONS, re-probing every
    * ~100ms). Resolves as soon as the transport is usable; rejects only if the
    * deadline passes with the channel still not READY.
    */
@@ -126,12 +145,12 @@ export function createNodeSpaceClients(
   const nodeClient = new proto.nodespace.NodeService(
     address,
     grpc.credentials.createInsecure(),
-    RECONNECT_CHANNEL_OPTIONS
+    DEV_PROXY_CHANNEL_OPTIONS
   );
   const agentClient = new agentProto.nodespace.LocalAgentService(
     address,
     grpc.credentials.createInsecure(),
-    RECONNECT_CHANNEL_OPTIONS
+    DEV_PROXY_CHANNEL_OPTIONS
   );
 
   const ready = (client: grpc.Client, timeoutMs = 30_000): Promise<void> =>

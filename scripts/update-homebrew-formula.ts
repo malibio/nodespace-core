@@ -62,7 +62,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pushFilesToTap, TAP_REPO } from "./homebrew-tap-push";
+import { pushFilesToRepo } from "./push-to-external-repo";
 import { REQUIRED_HEADLESS_TARGETS } from "./publish-install-script";
 import {
   downloadAndHash,
@@ -70,6 +70,7 @@ import {
   fetchReleaseAssets,
   isVersionDrifted,
   normalizeVersion,
+  TAP_REPO,
 } from "./update-homebrew-cask";
 
 export { TAP_REPO };
@@ -416,7 +417,8 @@ async function pushFormulaUpdate(
   token: string,
 ): Promise<void> {
   const v = normalizeVersion(version);
-  const pushed = await pushFilesToTap(
+  const pushed = await pushFilesToRepo(
+    TAP_REPO,
     [{ relPath: "Formula/nodespace-cli.rb", content: formulaContent }],
     `Update nodespace-cli formula to v${v} (automated release sync)`,
     token,

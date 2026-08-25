@@ -24,8 +24,8 @@ use crate::NodeClient;
 /// Upper bound on the per-query fetch when counting nodes. Diagnostics is a
 /// developer tool, not a hot path — keeping this generous avoids surprise
 /// truncation in any realistic dev database while still bounding memory.
-/// If a database ever exceeds this, `collect()` surfaces a warning via the
-/// `errors` field so the operator knows counts are undercounts.
+/// If a database ever exceeds this, `collect()` surfaces a notice via the
+/// `warnings` field so the operator knows counts are undercounts.
 const QUERY_LIMIT: u32 = 100_000;
 
 /// How many recent node IDs to report.
@@ -54,11 +54,27 @@ pub struct DiagnosticsReport {
     pub targeted_database_path: String,
     /// Size on disk of the targeted database, `None` when the file is absent.
     pub database_size_bytes: Option<u64>,
-    pub total_node_count: usize,
-    pub root_node_count: usize,
-    pub schema_count: i32,
-    pub recent_node_ids: Vec<String>,
+    /// `None` when the query that would produce the count failed — the count
+    /// is unknown, which is not the same fact as "the database is empty".
+    pub total_node_count: Option<usize>,
+    /// `None` when the roots query failed. See [`total_node_count`].
+    ///
+    /// [`total_node_count`]: DiagnosticsReport::total_node_count
+    pub root_node_count: Option<usize>,
+    /// `None` when the schema query failed. See [`total_node_count`].
+    ///
+    /// [`total_node_count`]: DiagnosticsReport::total_node_count
+    pub schema_count: Option<i32>,
+    /// `None` when the node query these are derived from failed; `Some(vec![])`
+    /// when it succeeded and the database genuinely has no nodes.
+    pub recent_node_ids: Option<Vec<String>>,
+    /// RPC/IO failures. A non-empty list means part of the report is unknown,
+    /// and `run` exits non-zero rather than presenting a partial report as a
+    /// success.
     pub errors: Vec<String>,
+    /// Conditions that don't invalidate the report but qualify it — currently
+    /// only result truncation at [`QUERY_LIMIT`].
+    pub warnings: Vec<String>,
 }
 
 pub async fn run(
@@ -70,11 +86,22 @@ pub async fn run(
 ) -> Result<()> {
     let report = collect(node_client, db_client, target_id).await;
     if json_output {
-        print_json(&report)
+        print_json(&report)?;
     } else {
         print_human(&report);
-        Ok(())
     }
+
+    // A report with failed queries is not a successful diagnostics run: the
+    // counts it shows are "unknown", not zero. Exiting non-zero keeps a
+    // scripted caller (and a reader skimming the tail of the output) from
+    // reading a partial report as a clean bill of health.
+    if !report.errors.is_empty() {
+        anyhow::bail!(
+            "diagnostics incomplete: {} query/IO failure(s) — see the Errors section above",
+            report.errors.len()
+        );
+    }
+    Ok(())
 }
 
 /// Build a diagnostics report: enumerate the registry via `DatabaseService.List`
@@ -90,6 +117,7 @@ pub async fn collect(
     target_id: Option<&str>,
 ) -> DiagnosticsReport {
     let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     // Enumerate the registry.
     let (databases, default_id) = match db_client.list(ListDatabasesRequest {}).await {
@@ -148,7 +176,7 @@ pub async fn collect(
 
     // Pull all nodes once (bounded by QUERY_LIMIT) to compute total count
     // and surface the most-recently-created IDs from a single snapshot.
-    let mut all_nodes = match node_client
+    let all_nodes = match node_client
         .query_nodes_simple(QueryNodesSimpleRequest {
             id: None,
             mentioned_by: None,
@@ -160,10 +188,13 @@ pub async fn collect(
         })
         .await
     {
-        Ok(response) => response.into_inner().nodes,
+        Ok(response) => Some(response.into_inner().nodes),
         Err(e) => {
             errors.push(format!("QueryNodesSimple failed: {e}"));
-            Vec::new()
+            // Deliberately NOT an empty Vec: every figure derived from this
+            // query stays `None` so the report says "unknown" rather than
+            // reporting a failed query as a zero-node database.
+            None
         }
     };
 
@@ -171,13 +202,16 @@ pub async fn collect(
     // a full batch is the only hint of truncation. Surface it so operators
     // know counts and recency lists may be undercounts rather than ground
     // truth.
-    if all_nodes.len() == QUERY_LIMIT as usize {
-        errors.push(format!(
+    if all_nodes
+        .as_ref()
+        .is_some_and(|n| n.len() == QUERY_LIMIT as usize)
+    {
+        warnings.push(format!(
             "Result truncated at QUERY_LIMIT={QUERY_LIMIT}; counts may be undercounts and recent IDs may miss nodes."
         ));
     }
 
-    let total_node_count = all_nodes.len();
+    let total_node_count = all_nodes.as_ref().map(Vec::len);
 
     let root_node_count = match node_client
         .get_roots(GetRootsRequest {
@@ -186,10 +220,10 @@ pub async fn collect(
         })
         .await
     {
-        Ok(response) => response.into_inner().count as usize,
+        Ok(response) => Some(response.into_inner().count as usize),
         Err(e) => {
             errors.push(format!("GetRoots failed: {e}"));
-            0
+            None
         }
     };
 
@@ -204,18 +238,20 @@ pub async fn collect(
     // so lexicographic comparison is equivalent to chronological order. If
     // a second serialization path appears (e.g. `Z` suffix, local TZ),
     // parse to `DateTime` here instead.
-    all_nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    let recent_node_ids: Vec<String> = all_nodes
-        .iter()
-        .take(RECENT_LIMIT)
-        .map(|n| n.id.clone())
-        .collect();
+    let recent_node_ids = all_nodes.map(|mut nodes| {
+        nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        nodes
+            .iter()
+            .take(RECENT_LIMIT)
+            .map(|n| n.id.clone())
+            .collect::<Vec<String>>()
+    });
 
     let schema_count = match node_client.get_all_schemas(GetAllSchemasRequest {}).await {
-        Ok(response) => response.into_inner().count,
+        Ok(response) => Some(response.into_inner().count),
         Err(e) => {
             errors.push(format!("GetAllSchemas failed: {e}"));
-            0
+            None
         }
     };
 
@@ -229,6 +265,7 @@ pub async fn collect(
         schema_count,
         recent_node_ids,
         errors,
+        warnings,
     }
 }
 
@@ -329,6 +366,18 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+/// Rendered in place of any figure whose source query failed. Never print a
+/// number there: a reader skimming the report must not be able to mistake a
+/// failed query for a genuine zero.
+const UNKNOWN: &str = "unknown (query failed — see Errors below)";
+
+fn or_unknown<T: std::fmt::Display>(value: Option<T>) -> String {
+    match value {
+        Some(v) => v.to_string(),
+        None => UNKNOWN.to_string(),
+    }
+}
+
 fn print_human(r: &DiagnosticsReport) {
     println!("NodeSpace Diagnostics");
     println!("─────────────────────────────────────");
@@ -348,13 +397,20 @@ fn print_human(r: &DiagnosticsReport) {
         Some(bytes) => println!("Database size:     {}", format_size(bytes)),
         None => println!("Database size:     n/a"),
     }
-    println!("Total nodes:       {}", r.total_node_count);
-    println!("Root nodes:        {}", r.root_node_count);
-    println!("Schemas:           {}", r.schema_count);
-    if r.recent_node_ids.is_empty() {
-        println!("Recent node IDs:   (none)");
-    } else {
-        println!("Recent node IDs:   {}", r.recent_node_ids.join(", "));
+    println!("Total nodes:       {}", or_unknown(r.total_node_count));
+    println!("Root nodes:        {}", or_unknown(r.root_node_count));
+    println!("Schemas:           {}", or_unknown(r.schema_count));
+    match &r.recent_node_ids {
+        None => println!("Recent node IDs:   {UNKNOWN}"),
+        Some(ids) if ids.is_empty() => println!("Recent node IDs:   (none)"),
+        Some(ids) => println!("Recent node IDs:   {}", ids.join(", ")),
+    }
+    if !r.warnings.is_empty() {
+        println!();
+        println!("Warnings:");
+        for warning in &r.warnings {
+            println!("  - {warning}");
+        }
     }
     if !r.errors.is_empty() {
         println!();
@@ -382,6 +438,7 @@ fn print_json(r: &DiagnosticsReport) -> Result<()> {
         "schema_count": r.schema_count,
         "recent_node_ids": r.recent_node_ids,
         "errors": r.errors,
+        "warnings": r.warnings,
     });
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())

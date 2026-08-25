@@ -15,9 +15,10 @@
 //! [`InteractionRule::imperative`] produce the terse, ALL-CAPS-header style
 //! `seed_skill_nodes()` uses for LLM prompt content, and
 //! [`SchemaRule::prose`] / [`InteractionRule::prose`] produce the
-//! bold-lead-sentence markdown style `SKILL.md` uses. `bin/gen_skill_md.rs`
-//! renders the prose form into `packages/skill/SKILL.md`; a checked-in copy
-//! is verified against that output so the file cannot silently go stale.
+//! bold-lead-sentence markdown style the skill uses.
+//! `packages/cli/examples/gen_skill_md.rs` renders the prose form into the
+//! shipped skill content; a checked-in copy is verified against that output
+//! so the file cannot silently go stale.
 
 /// A schema-authoring convention (field naming, enums, relationships,
 /// title templates, request-scoping).
@@ -265,24 +266,44 @@ mod tests {
 
     /// Interaction rules are woven mid-sentence into hand-written SKILL.md
     /// prose (unlike SchemaRule, which is regenerated verbatim by
-    /// bin/gen_skill_md.rs — see that binary's own staleness test). This
+    /// packages/cli/examples/gen_skill_md.rs — see its own staleness test). This
     /// only catches outright removal of a rule's substance; it does not
     /// guarantee SKILL.md's wording matches `prose` exactly.
     #[test]
     fn skill_md_still_mentions_every_interaction_rule() {
-        let skill_md_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skill/SKILL.md");
-        let skill_md = std::fs::read_to_string(&skill_md_path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {e}", skill_md_path.display()));
+        // Read the whole shipped skill, not `SKILL.md` alone. The body is kept
+        // within the Agent Skills size recommendation by moving the CLI
+        // reference into `references/`, which the standard defines as the
+        // on-demand tier. Guidance that moved there is still shipped and still
+        // reachable by an agent, so scanning only the body would report drift
+        // for content that simply changed tier.
+        let skill_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skill");
+
+        let read = |p: &std::path::Path| -> String {
+            std::fs::read_to_string(p)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", p.display()))
+        };
+
+        let mut skill_md = read(&skill_dir.join("SKILL.md"));
+        let refs_dir = skill_dir.join("references");
+        let entries = std::fs::read_dir(&refs_dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", refs_dir.display()));
+        for entry in entries {
+            let path = entry.expect("bad dir entry").path();
+            if path.extension().is_some_and(|x| x == "md") {
+                skill_md.push('\n');
+                skill_md.push_str(&read(&path));
+            }
+        }
 
         for r in INTERACTION_RULES {
             assert!(
                 skill_md.contains(r.skill_md_key_phrase),
-                "packages/skill/SKILL.md no longer mentions the '{}' rule \
-                 (expected to find the phrase {:?}) — if this rule's guidance \
-                 moved or was reworded, update skill_md_key_phrase in \
-                 skill_rules.rs to match; if the rule's substance was removed \
-                 from SKILL.md, that's the drift this test exists to catch",
+                "the shipped skill (packages/skill/SKILL.md + references/) no \
+                 longer mentions the '{}' rule (expected to find the phrase \
+                 {:?}) — if this rule's guidance moved or was reworded, update \
+                 skill_md_key_phrase in skill_rules.rs to match; if the rule's \
+                 substance was removed, that's the drift this test exists to catch",
                 r.id,
                 r.skill_md_key_phrase
             );

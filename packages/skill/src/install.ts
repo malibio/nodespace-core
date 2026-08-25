@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// Invoked directly via `bun <path-to-this-file> <command> [agent]` — the
+// desktop app's bundled installer runs it this way (see
+// packages/desktop-app/src-tauri/src/skill_setup.rs), and it's the same
+// invocation for a manual run from a source checkout. Never `npx`/`npm`:
+// `@nodespaceai/skill` is not published to npm (the public
+// NodeSpaceAI/nodespace-skill repo is the distribution channel for external
+// harnesses that want the skill outside the app — see packages/skill/README.md).
 import { install, uninstall } from './installer.js';
 import type { AgentName } from './types.js';
 import { AGENTS } from './agents.js';
@@ -13,7 +20,7 @@ function isValidAgent(name: string): name is AgentName {
 }
 
 function printUsage(): void {
-  console.log(`Usage: npx @nodespaceai/skill <command> [agent]
+  console.log(`Usage: bun install.js <command> [agent]
 
 Commands:
   install [agent]    Install NodeSpace skill for detected (or specified) agents
@@ -22,9 +29,9 @@ Commands:
 Agents: ${validAgents.join(', ')}
 
 Examples:
-  npx @nodespaceai/skill install
-  npx @nodespaceai/skill install claude-code
-  npx @nodespaceai/skill uninstall`);
+  bun install.js install
+  bun install.js install claude-code
+  bun install.js uninstall`);
 }
 
 if (!command || command === '--help' || command === '-h') {
@@ -46,7 +53,7 @@ if (command === 'install') {
   if (results.length === 0) {
     console.log('No supported agents detected.');
     console.log(`Checked: ${validAgents.join(', ')}`);
-    console.log('To install manually, specify an agent: npx @nodespaceai/skill install <agent>');
+    console.log('To install manually, specify an agent: bun install.js install <agent>');
     process.exit(0);
   }
 

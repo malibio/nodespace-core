@@ -22,6 +22,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 nodespace-daemon = { path = "../daemon" }
+nodespace-proto = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
