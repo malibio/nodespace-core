@@ -50,12 +50,7 @@ export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT):
     const installed: string[] = [];
     for (const shim of config.shims) {
       const src = join(packageRoot, shim);
-      // Shim paths flatten to a basename (`shims/codex/x.ts` installs as
-      // `x.ts`), but `references/` must keep its directory: SKILL.md links to
-      // `references/cli.md` by relative path, so flattening it would leave the
-      // body pointing at a file that isn't where it says.
-      const relative = shim.startsWith('references/') ? shim : basename(shim);
-      const dest = join(config.installDir, relative);
+      const dest = join(config.installDir, installedName(shim));
       if (existsSync(src)) {
         mkdirSync(dirname(dest), { recursive: true });
         // SKILL.md gets the agent's frontmatter prepended — a skill is
@@ -76,6 +71,26 @@ export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT):
   return results;
 }
 
+/**
+ * Where a source path lands inside the installed skill directory.
+ *
+ * Shims flatten to a basename (`shims/codex/x.ts` installs as `x.ts`), but
+ * `references/` keeps its directory: SKILL.md links to `references/cli.md` by
+ * relative path, so flattening it would leave the body pointing at a file that
+ * isn't where it says.
+ *
+ * Install and uninstall MUST agree on this, which is why it is one function
+ * rather than the same expression written twice. When it was duplicated, only
+ * the install side learned about `references/` — so uninstall looked for a
+ * `cli.md` that never existed, left the real file behind, and the
+ * "directory is now empty" check then preserved a folder containing a
+ * reference and no SKILL.md: a malformed skill in the harness's scan path,
+ * created by the cleanup command itself.
+ */
+function installedName(shim: string): string {
+  return shim.startsWith('references/') ? shim : basename(shim);
+}
+
 export function uninstall(targetAgents?: AgentName[]): UninstallResult[] {
   const agents = targetAgents ?? AGENTS.map(a => a.name);
   const results: UninstallResult[] = [];
@@ -86,10 +101,22 @@ export function uninstall(targetAgents?: AgentName[]): UninstallResult[] {
 
     const removed: string[] = [];
     for (const shim of config.shims) {
-      const dest = join(config.installDir, basename(shim));
+      const dest = join(config.installDir, installedName(shim));
       if (existsSync(dest)) {
         rmSync(dest);
         removed.push(dest);
+      }
+    }
+
+    // Removing `references/cli.md` leaves an empty `references/` behind, which
+    // would make the directory look non-empty and strand the whole folder.
+    // Prune emptied subdirectories before deciding whether anything is left.
+    for (const entry of readdirSync(config.installDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const subdir = join(config.installDir, entry.name);
+        if (readdirSync(subdir).length === 0) {
+          rmSync(subdir, { recursive: true });
+        }
       }
     }
 

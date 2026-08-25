@@ -129,6 +129,15 @@ fn every_cli_flag_is_documented() {
     let mut missing = Vec::new();
 
     fn check(cmd: &ClapCommand, path: &str, skill: &str, missing: &mut Vec<String>) {
+        // Scope the search to this command's own section rather than the whole
+        // corpus. A bare `skill.contains("--limit")` passes as soon as ANY
+        // command documents `--limit`, so a genuinely undocumented flag whose
+        // name collides with an existing one slips through — and collisions are
+        // the common case here (`--limit`, `--json`, `--collection` each appear
+        // under many commands). Slicing to the section makes the assertion
+        // answer the question it claims to.
+        let section = command_section(skill, path).unwrap_or("");
+
         for arg in cmd.get_arguments() {
             if arg.is_hide_set() || arg.is_global_set() {
                 continue;
@@ -140,7 +149,7 @@ fn every_cli_flag_is_documented() {
                 continue; // positionals are covered by the command test
             };
             let needle = format!("--{long}");
-            if !skill.contains(&needle) {
+            if !section.contains(&needle) {
                 missing.push(format!("{path} {needle}"));
             }
         }
@@ -160,9 +169,36 @@ fn every_cli_flag_is_documented() {
 
     assert!(
         missing.is_empty(),
-        "SKILL.md does not document these CLI flags: {missing:#?}\n\
-         Run `bun run skill:gen` and commit the result."
+        "these CLI flags are not documented under their own command's section: \
+         {missing:#?}\nRun `bun run skill:gen` and commit the result."
     );
+}
+
+/// The slice of the generated surface belonging to `nodespace <path>`, from its
+/// heading to the next heading.
+///
+/// The generator emits a leaf as `**`nodespace node query`**` and a
+/// subcommand-less command as `### `nodespace search``, so both forms are
+/// tried. Returns `None` when the command has no section at all — which
+/// `every_cli_command_is_documented` reports, so this returning an empty slice
+/// here does not hide it.
+fn command_section<'a>(skill: &'a str, path: &str) -> Option<&'a str> {
+    let heading = format!("**`nodespace {path}`**");
+    let alt = format!("### `nodespace {path}`\n");
+    let (start, marker_len) = match skill.find(&heading) {
+        Some(i) => (i, heading.len()),
+        None => (skill.find(&alt)?, alt.len()),
+    };
+
+    let rest = &skill[start + marker_len..];
+    // Either form of heading ends the section: the next leaf, or the next
+    // command group.
+    let end = [rest.find("\n**`nodespace "), rest.find("\n### ")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
 }
 
 /// Every global flag is documented once.
@@ -207,20 +243,37 @@ fn every_seeded_skill_is_represented() {
     let mut missing = Vec::new();
 
     for template in nodespace_agent::skill_pipeline::seed_skill_nodes() {
-        // Match on the skill's distinguishing noun rather than its exact
-        // title: SKILL.md is organized by task ("Create a node", "Semantic
-        // search"), not by the internal skill names, and requiring the literal
-        // titles would force the file into the agent's vocabulary instead of
-        // the user's.
+        // The mapping below is hand-written, and unavoidably so: the two sides
+        // share no identifier. A seeded skill's `tool_whitelist` names internal
+        // tools (`create_node`, `search_semantic`) that appear nowhere in the
+        // skill, because the CLI is the external surface — so there is nothing
+        // to derive a needle from. What is NOT hand-maintained is the *list of
+        // skills*, which comes from `seed_skill_nodes()`; a skill added later
+        // hits the fallback arm and fails, rather than being silently omitted.
+        //
+        // Needles are full CLI invocations rather than bare nouns. A needle
+        // like "search" matches dozens of unrelated places and would pass for a
+        // skill whose commands were entirely absent, which is the failure mode
+        // this test exists to prevent.
         let covered = match template.title.as_str() {
-            "Research & Search" => skill.contains("search"),
-            "Node Creation" => skill.contains("node create"),
-            "Schema Creation" => skill.contains("schema create"),
-            "Graph Editing" => skill.contains("node update"),
-            "Relationship Management" => skill.contains("relationship create"),
-            "Node Deletion" => skill.contains("node delete"),
-            "Bulk Import" => skill.contains("import"),
-            "Organization" => skill.contains("collection"),
+            "Research & Search" => {
+                skill.contains("nodespace search") && skill.contains("nodespace node query")
+            }
+            "Node Creation" => skill.contains("nodespace node create"),
+            "Schema Creation" => {
+                skill.contains("nodespace schema create") && skill.contains("nodespace schema list")
+            }
+            "Graph Editing" => {
+                skill.contains("nodespace node update")
+                    && skill.contains("nodespace node set-status")
+            }
+            "Relationship Management" => {
+                skill.contains("nodespace relationship create")
+                    && skill.contains("nodespace relationship get")
+            }
+            "Node Deletion" => skill.contains("nodespace node delete"),
+            "Bulk Import" => skill.contains("nodespace import"),
+            "Organization" => skill.contains("member_of"),
             // A skill added later has no arm here and fails loudly, which is
             // the intent: someone must decide how it surfaces to an external
             // agent rather than have it silently omitted.

@@ -23,10 +23,13 @@
 //! The dependency graph is `nodespace-cli -> nodespace-daemon ->
 //! nodespace-agent`, so an equivalent binary in `nodespace-agent` (where this
 //! logic previously lived) cannot reach clap without a dependency cycle.
-//! `nodespace-cli` is downstream of both. Building it as an *example* rather
-//! than a `[[bin]]` keeps it on the dev-target graph, where `nodespace-agent`
-//! is already a dev-dependency — so generation adds no dependency to the
-//! shipped `nodespace` binary.
+//! `nodespace-cli` is downstream of both, so it can see everything needed.
+//!
+//! It is an *example* rather than a `[[bin]]` so it is not built or shipped as
+//! part of a release: `cargo build --release` builds bins, not examples. (This
+//! is not about keeping `nodespace-agent` out of the binary — that already
+//! reaches it transitively through `nodespace-daemon`. It is about not adding
+//! a second executable to the release artifact for a dev-time tool.)
 //!
 //! Usage (prefer the bun wrappers, which is how the gate calls it):
 //!   bun run skill:gen     # regenerate and overwrite SKILL.md

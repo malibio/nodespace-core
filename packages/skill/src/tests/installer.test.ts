@@ -111,6 +111,23 @@ describe('install', () => {
     }
   });
 
+  // Four separate places enumerate what the skill is made of: this package's
+  // `files` array (npm), scripts/build-skill.ts (Tauri bundle), the per-agent
+  // `shims` lists (install), and context_assembly.rs (PTY). A path present in
+  // one and missing from another ships a body linking to a file that isn't
+  // there — silently, because nothing errors.
+  it('publishes every directory the agents install from', () => {
+    const pkg = JSON.parse(
+      readFileSync(join(import.meta.dirname, '../../package.json'), 'utf8')
+    ) as { files: string[] };
+
+    const topLevel = new Set(AGENTS.flatMap(a => a.shims).map(s => s.split('/')[0]));
+    for (const entry of topLevel) {
+      const published = pkg.files.some(f => f === entry || f === entry.replace(/\.md$/, ''));
+      expect(published, `"${entry}" is installed but not in package.json "files"`).toBe(true);
+    }
+  });
+
   it('installs the same frontmatter block for every target', () => {
     const blocks = new Set(AGENTS.map(a => a.skillFrontmatter));
     expect(blocks.size).toBe(1);
@@ -278,10 +295,9 @@ describe('uninstall', () => {
 
   it('uninstalls from all detected agents when no target specified', () => {
     for (const agent of AGENTS) {
-      mkdirSync(agent.installDir, { recursive: true });
-      for (const shim of agent.shims) {
-        writeFileSync(join(agent.installDir, basename(shim)), SKILL_MD_CONTENT, 'utf8');
-      }
+      mkdirSync(agent.detectionDir, { recursive: true });
+      seedPkgRoot(FAKE_PKG_ROOT, agent);
+      install([agent.name], FAKE_PKG_ROOT);
     }
 
     const results = uninstall();
@@ -289,6 +305,63 @@ describe('uninstall', () => {
     for (const result of results) {
       expect(result.removed.length).toBeGreaterThan(0);
     }
+  });
+
+  // Seeding the install dir by hand lets uninstall's own path assumptions go
+  // unchallenged — which is exactly how uninstall kept using basename() after
+  // install learned to preserve references/. Driving the real install() means
+  // the two sides are tested against each other, not against a fixture that
+  // agrees with whichever one is wrong.
+  it('removes everything install() created, leaving no directory behind', () => {
+    for (const config of AGENTS) {
+      mkdirSync(config.detectionDir, { recursive: true });
+      seedPkgRoot(FAKE_PKG_ROOT, config);
+      const installed = install([config.name], FAKE_PKG_ROOT)[0].installed;
+      expect(installed.length).toBe(config.shims.length);
+
+      const removed = uninstall([config.name])[0].removed;
+      expect(removed.length, `${config.name}: not everything was removed`).toBe(installed.length);
+
+      for (const path of installed) {
+        expect(existsSync(path), `${config.name}: ${path} survived uninstall`).toBe(false);
+      }
+      expect(
+        existsSync(config.installDir),
+        `${config.name}: install dir survived a full uninstall`
+      ).toBe(false);
+    }
+  });
+
+  // A leftover directory holding references/cli.md but no SKILL.md is worse
+  // than either a clean removal or no removal at all: it is a malformed skill
+  // folder sitting in the harness's scan path, produced by the command whose
+  // job was to clean up.
+  it('never leaves a reference file behind without its SKILL.md', () => {
+    for (const config of AGENTS) {
+      mkdirSync(config.detectionDir, { recursive: true });
+      seedPkgRoot(FAKE_PKG_ROOT, config);
+      install([config.name], FAKE_PKG_ROOT);
+      uninstall([config.name]);
+
+      for (const shim of config.shims.filter(s => s.startsWith('references/'))) {
+        expect(
+          existsSync(join(config.installDir, shim)),
+          `${config.name}: ${shim} survived uninstall`
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('still removes the install dir when a shim was already deleted by hand', () => {
+    const config = AGENTS.find(a => a.name === 'claude-code')!;
+    mkdirSync(config.detectionDir, { recursive: true });
+    seedPkgRoot(FAKE_PKG_ROOT, config);
+    install([config.name], FAKE_PKG_ROOT);
+
+    rmSync(join(config.installDir, 'SKILL.md'));
+    uninstall([config.name]);
+
+    expect(existsSync(config.installDir)).toBe(false);
   });
 });
 
