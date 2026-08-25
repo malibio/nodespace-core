@@ -6,7 +6,7 @@
  * Usage:
  *   bun run release                     # Interactive release (prompts for version)
  *   bun run release v0.1.0              # Create release with specified version
- *   bun run release v0.1.0 --draft      # Create as draft (doesn't trigger builds)
+ *   bun run release v0.1.0 --draft      # Create as draft (builds run once published)
  *   bun run release:list                # List recent releases
  *   bun run release:watch               # Watch build progress
  */
@@ -144,7 +144,15 @@ Download the appropriate file for your platform from the assets below.
 }
 
 /**
- * Create a GitHub release
+ * Create a GitHub release.
+ *
+ * Both paths this produces -- a draft that is published later, and a release
+ * created non-draft in one shot -- start the release build pipeline, because
+ * .github/workflows/release.yml subscribes to the `published` release
+ * activity type. It previously subscribed to `created`, which fires only for
+ * a release published without having been a draft first; publishing a draft
+ * built nothing, silently, and this script printed the opposite. Keep the
+ * messages below in sync with that workflow's `on.release.types`.
  */
 async function createRelease(config: ReleaseConfig): Promise<void> {
   const version = config.version.startsWith("v") ? config.version : `v${config.version}`;
@@ -158,7 +166,7 @@ async function createRelease(config: ReleaseConfig): Promise<void> {
 
   if (config.draft) {
     args.push("--draft");
-    console.log("📝 Creating as draft (won't trigger builds until published)");
+    console.log("📝 Creating as draft (builds start when you publish it)");
   }
 
   if (config.prerelease) {
@@ -185,9 +193,11 @@ async function createRelease(config: ReleaseConfig): Promise<void> {
     console.log("   bun run release:watch");
     console.log(`   Or visit: https://github.com/${OWNER}/${REPO}/actions`);
   } else {
-    console.log("\n📝 Draft release created.");
-    console.log("   Publish it to trigger builds:");
+    console.log("\n📝 Draft release created. Review it, then publish to start builds:");
     console.log(`   gh release edit ${version} --draft=false`);
+    console.log("\n📊 Once published, watch progress:");
+    console.log("   bun run release:watch");
+    console.log(`   Or visit: https://github.com/${OWNER}/${REPO}/actions`);
   }
 }
 
@@ -304,7 +314,7 @@ async function main() {
 
 📦 Create a Release:
   bun run release v0.1.0              # Create release (triggers builds)
-  bun run release v0.1.0 --draft      # Create draft release
+  bun run release v0.1.0 --draft      # Create draft (builds run once published)
   bun run release v0.1.0 --prerelease # Mark as pre-release
   bun run release v0.1.0 --title "Custom Title"
   bun run release v0.1.0 --notes "Custom release notes"
@@ -319,7 +329,7 @@ async function main() {
 🔧 Version Management:
   bun run release:bump v0.2.0         # Update version in config files
 
-📊 After creating a release:
+📊 After a release is published (created non-draft, or a draft you publish):
   - GitHub Actions automatically builds for all platforms
   - Installers are attached to the release when builds complete
   - Users can download from: https://github.com/${OWNER}/${REPO}/releases
