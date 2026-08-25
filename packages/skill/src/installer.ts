@@ -118,6 +118,12 @@ export function uninstall(targetAgents?: AgentName[]): UninstallResult[] {
     // directory with it, silently and without reporting any of it in
     // `removed`. Deleting more than we installed is a worse failure than
     // leaving something behind.
+    //
+    // This prunes the immediate parent only, which covers every shim today
+    // (`references/` is the one nested case). A deeper shim such as
+    // `references/api/cli.md` would prune `references/api` and strand
+    // `references/` — reviving the stranded-directory bug this exists to
+    // prevent. Prune leaf-upward if such a shim is ever added.
     const ownedDirs = new Set(
       config.shims
         .map(shim => dirname(installedName(shim)))
