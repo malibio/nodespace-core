@@ -70,7 +70,7 @@ fn skill_md() -> String {
 /// Subcommands a user can actually invoke — clap's generated `help` and
 /// anything hidden are not part of the documented surface. Mirrors the
 /// generator's filter.
-fn visible<'a>(cmd: &'a ClapCommand) -> Vec<&'a ClapCommand> {
+fn visible(cmd: &ClapCommand) -> Vec<&ClapCommand> {
     cmd.get_subcommands()
         .filter(|c| !c.is_hide_set() && c.get_name() != "help")
         .collect()
