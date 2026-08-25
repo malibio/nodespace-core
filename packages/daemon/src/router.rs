@@ -6,6 +6,7 @@
 //! top. Adding a field to `BaseServices` causes a compile error in
 //! `nodespaced-pro` until it provides the new implementation.
 
+use nodespace_proto::with_message_limits;
 use tonic::service::Routes;
 use tonic::transport::Server;
 use tower::Layer;
@@ -51,9 +52,10 @@ pub struct BaseServices {
 ///     base_services,
 /// );
 ///
-/// // Pro extension:
+/// // Pro extension — wrap the added stub in `with_message_limits!` too, or it
+/// // keeps tonic's 4 MiB decode default while every base service does not:
 /// let router = build_base_router(Server::builder(), base_services)
-///     .add_service(CloudSyncServiceServer::new(cloud_sync));
+///     .add_service(with_message_limits!(CloudSyncServiceServer::new(cloud_sync)));
 /// ```
 pub fn build_base_router<L>(
     mut server: Server<L>,
@@ -63,15 +65,27 @@ where
     L: Layer<Routes> + Clone,
 {
     let router = server
-        .add_service(NodeServiceServer::new(services.node_service))
-        .add_service(AgentSessionServiceServer::new(services.agent_session))
-        .add_service(ImportServiceServer::new(services.import))
-        .add_service(SettingsServiceServer::new(services.settings))
-        .add_service(LocalAgentServiceServer::new(services.local_agent))
-        .add_service(DatabaseServiceServer::new(services.database));
+        .add_service(with_message_limits!(NodeServiceServer::new(
+            services.node_service
+        )))
+        .add_service(with_message_limits!(AgentSessionServiceServer::new(
+            services.agent_session
+        )))
+        .add_service(with_message_limits!(ImportServiceServer::new(
+            services.import
+        )))
+        .add_service(with_message_limits!(SettingsServiceServer::new(
+            services.settings
+        )))
+        .add_service(with_message_limits!(LocalAgentServiceServer::new(
+            services.local_agent
+        )))
+        .add_service(with_message_limits!(DatabaseServiceServer::new(
+            services.database
+        )));
 
     match services.embeddings {
-        Some(emb) => router.add_service(EmbeddingsServiceServer::new(emb)),
+        Some(emb) => router.add_service(with_message_limits!(EmbeddingsServiceServer::new(emb))),
         None => router,
     }
 }

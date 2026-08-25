@@ -7,6 +7,50 @@ pub mod nodespace {
     tonic::include_proto!("nodespace");
 }
 
+/// Maximum size, in bytes, of a single gRPC message on any NodeSpace
+/// connection — applied to both directions on both ends.
+///
+/// tonic defaults the *decode* limit to 4 MiB, which is far below what the
+/// list-shaped RPCs in this contract can legitimately produce: `NodeService`
+/// has several unary RPCs (`QueryNodesSimple`, `GetRoots`, `GetChildren`,
+/// `GetCollectionMembers`, `ExportMarkdown`, …) whose response carries every
+/// matching node's full record in one message. A real database of a few tens
+/// of megabytes already produces a response of several megabytes, so the
+/// default limit turns an ordinary read into an `OutOfRange` transport error.
+///
+/// The transport here is a local Unix socket / Named Pipe between processes
+/// owned by the same user, and the daemon already holds the same records in
+/// memory to build the response — so the limit exists to bound memory, not to
+/// defend a trust boundary. This value leaves roughly an order of magnitude of
+/// headroom over the largest response observed from a real database while
+/// still refusing a runaway allocation.
+///
+/// A response large enough to approach this ceiling means the RPC needs a
+/// bounded/paged contract, not a larger number here.
+pub const MAX_MESSAGE_SIZE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Apply [`MAX_MESSAGE_SIZE_BYTES`] to a generated tonic client or server stub.
+///
+/// tonic configures message-size limits per generated stub rather than on the
+/// shared `Channel`/`Server`, and each stub is a distinct type with no common
+/// trait — so this is a macro rather than a function. Every NodeSpace client
+/// and server stub must be constructed through it; a stub that skips it silently
+/// keeps tonic's 4 MiB decode default.
+///
+/// ```rust,ignore
+/// let node = nodespace_proto::with_message_limits!(
+///     NodeServiceClient::with_interceptor(channel, interceptor)
+/// );
+/// ```
+#[macro_export]
+macro_rules! with_message_limits {
+    ($stub:expr) => {
+        $stub
+            .max_decoding_message_size($crate::MAX_MESSAGE_SIZE_BYTES)
+            .max_encoding_message_size($crate::MAX_MESSAGE_SIZE_BYTES)
+    };
+}
+
 /// The gRPC metadata/header key a client sets to route a request at a specific
 /// registered local database (ADR-053: "One Daemon, Multiple Local Databases").
 ///

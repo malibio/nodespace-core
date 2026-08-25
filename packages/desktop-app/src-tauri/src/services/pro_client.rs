@@ -14,6 +14,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use nodespace_proto::with_message_limits;
 use tokio::sync::{watch, RwLock};
 use tonic::transport::Channel;
 
@@ -66,7 +67,7 @@ impl ProClient {
     /// "Service was not ready: transport error" on subsequent calls
     /// after the probe stream was dropped.
     pub async fn probe_on_channel(channel: Channel) -> Self {
-        let mut client = CloudSyncServiceClient::new(channel);
+        let mut client = with_message_limits!(CloudSyncServiceClient::new(channel));
         let (tier, last_status) = probe(&mut client).await;
         tracing::info!(?tier, "Pro capability probe complete");
 
@@ -115,7 +116,7 @@ impl ProClient {
     pub async fn rebind(&self, channel: Channel) {
         {
             let mut inner = self.inner.write().await;
-            inner.client = CloudSyncServiceClient::new(channel);
+            inner.client = with_message_limits!(CloudSyncServiceClient::new(channel));
         }
         // Bump AFTER installing the new client (and after releasing the lock) so a
         // forwarding task woken by this notification re-fetches the already-rebound
