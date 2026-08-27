@@ -561,6 +561,25 @@ impl NodeService {
             )));
         }
 
+        // Reject renaming a Core/System-protected field. `can_modify_field`
+        // exists exactly for this — only a `User`-protected field's storage
+        // key may change. Checked before the migration below runs: renaming
+        // rekeys every existing node's property data and rewrites the schema
+        // as it goes, so a check that ran afterwards would find the damage
+        // already durably applied.
+        if !schema.can_modify_field(from) {
+            let protection = schema
+                .get_field(from)
+                .map(|f| f.protection.clone())
+                .unwrap_or_default();
+            return Err(NodeServiceError::invalid_update(format!(
+                "Field '{}' in schema '{}' is {}-protected and cannot be renamed — only \
+                 User-protected fields may be renamed. Core and System fields are immutable \
+                 through update_schema.",
+                from, type_id, protection
+            )));
+        }
+
         // Validate destination field does not already exist
         if schema.fields.iter().any(|f| f.name == to) {
             return Err(NodeServiceError::invalid_update(format!(
@@ -650,6 +669,23 @@ impl NodeService {
             return Err(NodeServiceError::invalid_update(format!(
                 "Field '{}' not found in schema '{}'",
                 field_name, type_id
+            )));
+        }
+
+        // Same protection-level guard as `rename_schema_field`'s identity
+        // rename: a Core/System field is immutable through `update_schema`,
+        // and a relabel is a modification of the field definition just as
+        // much as a storage-key rename is.
+        if !schema.can_modify_field(field_name) {
+            let protection = schema
+                .get_field(field_name)
+                .map(|f| f.protection.clone())
+                .unwrap_or_default();
+            return Err(NodeServiceError::invalid_update(format!(
+                "Field '{}' in schema '{}' is {}-protected and cannot be relabeled — only \
+                 User-protected fields may be modified. Core and System fields are immutable \
+                 through update_schema.",
+                field_name, type_id, protection
             )));
         }
 

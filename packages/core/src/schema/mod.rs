@@ -799,8 +799,10 @@ pub async fn handle_update_schema(
 
     // --- Phase 0: Verify schema exists, validate renames, run playbook impact check ---
     // Schema existence is verified upfront so rename/playbook validation errors are reported
-    // before any mutations execute.
-    node_service
+    // before any mutations execute. The fetched schema is also the pre-mutation snapshot the
+    // protection-level and grammar checks below validate `remove_fields`/`rename_fields`
+    // against, before Phase 1 or Phase 2 touch anything.
+    let schema_before = node_service
         .get_schema_node(&params.schema_id)
         .await
         .map_err(|e| MarkdownError::internal_error(format!("Failed to get schema: {}", e)))?
@@ -842,6 +844,67 @@ pub async fn handle_update_schema(
                     rename.to
                 )));
             }
+        }
+    }
+
+    // --- Phase 0: Reject mutations that touch a Core/System-protected field ---
+    //
+    // `SchemaField` carries a protection level, and `SchemaNode::can_delete_field`
+    // / `can_modify_field` exist to enforce it — a Core/System field (e.g.
+    // `task.status`) must never be deletable or renameable by a caller. Neither
+    // was ever consulted on this path: `remove_fields` below deletes by name
+    // alone, and `rename_schema_field` rekeys by name alone, so either could
+    // permanently strip a protected field from a core schema with no recovery
+    // path through the API.
+    //
+    // Checked here, against `schema_before` (the schema as it stood before this
+    // call touched anything), and before Phase 1 executes a single rename: a
+    // rename migrates every existing node's property data and rewrites the
+    // schema as it goes, so validating the whole batch upfront — rather than
+    // per-entry as Phase 1 runs — keeps a batch with one bad entry from
+    // partially applying before the rejection is returned.
+    if let Some(ref remove_names) = params.remove_fields {
+        for name in remove_names {
+            if let Some(field) = schema_before.get_field(name) {
+                if !schema_before.can_delete_field(name) {
+                    return Err(MarkdownError::invalid_params(format!(
+                        "Field '{}' on schema '{}' is {}-protected and cannot be removed — \
+                         only User-protected fields may be removed via update_schema. Core \
+                         and System fields are immutable through this API.",
+                        name, params.schema_id, field.protection
+                    )));
+                }
+            }
+        }
+    }
+
+    if let Some(ref renames) = params.rename_fields {
+        for rename in renames {
+            if let Some(field) = schema_before.get_field(&rename.from) {
+                if !schema_before.can_modify_field(&rename.from) {
+                    return Err(MarkdownError::invalid_params(format!(
+                        "Field '{}' on schema '{}' is {}-protected and cannot be renamed or \
+                         relabeled — only User-protected fields may be modified via \
+                         update_schema. Core and System fields are immutable through this API.",
+                        rename.from, params.schema_id, field.protection
+                    )));
+                }
+            }
+
+            // The destination name's grammar must be rejected here too, before
+            // Phase 1 runs — not left to Phase 2's re-validation. An identity
+            // rename is persisted by `rename_schema_field` immediately,
+            // migrating every node's property data as it executes; Phase 2's
+            // check runs only after that migration has already committed, so a
+            // malformed name (spaces, punctuation, more than one namespace
+            // prefix) would already be durably written to the schema and every
+            // node instance by the time it was caught.
+            crate::behaviors::validate_schema_field_name(&rename.to).map_err(|e| {
+                MarkdownError::invalid_params(format!(
+                    "rename_fields: invalid destination name '{}': {}",
+                    rename.to, e
+                ))
+            })?;
         }
     }
 
