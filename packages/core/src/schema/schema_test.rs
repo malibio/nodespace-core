@@ -588,6 +588,374 @@ async fn test_rename_field_migrates_node_data() {
     );
 }
 
+// ============================================================================
+// Protection-level enforcement: Core/System fields must survive remove_fields
+// and rename_fields, and a malformed rename destination must never persist
+// ============================================================================
+
+#[tokio::test]
+async fn test_update_schema_remove_fields_rejects_core_protected_field() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "remove_fields": ["status"]
+        }),
+    )
+    .await;
+
+    let err = result
+        .expect_err("removing a Core-protected field must be rejected")
+        .to_string();
+    assert!(
+        err.contains("status") && err.contains("core"),
+        "error should name the field and its protection level: {err}"
+    );
+
+    let schema = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("core task schema should exist");
+    assert!(
+        schema.fields.iter().any(|f| f.name == "status"),
+        "status must survive a rejected removal: {:?}",
+        schema.fields.iter().map(|f| &f.name).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_remove_fields_rejects_system_protected_field() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "person",
+            "remove_fields": ["_possible_duplicate"]
+        }),
+    )
+    .await;
+
+    let err = result
+        .expect_err("removing a System-protected field must be rejected")
+        .to_string();
+    assert!(
+        err.contains("_possible_duplicate") && err.contains("system"),
+        "error should name the field and its protection level: {err}"
+    );
+
+    let schema = svc
+        .get_schema_node("person")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("core person schema should exist");
+    assert!(
+        schema
+            .fields
+            .iter()
+            .any(|f| f.name == "_possible_duplicate"),
+        "System-protected field must survive a rejected removal"
+    );
+}
+
+/// The positive-path counterpart to the two tests above: the guard is
+/// field-level, not schema-level — a User-protected field must remain
+/// removable even on a schema NodeSpace ships.
+#[tokio::test]
+async fn test_update_schema_remove_fields_allows_user_protected_field_on_core_schema() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "remove_fields": ["priority"]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "removing a User-protected field, even on a core schema, must still succeed: {:?}",
+        result
+    );
+
+    let schema = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("core task schema should exist");
+    assert!(
+        !schema.fields.iter().any(|f| f.name == "priority"),
+        "priority should have been removed"
+    );
+}
+
+/// A batch mixing an allowed removal with a forbidden one must reject the
+/// whole call rather than applying the allowed half before hitting the
+/// protected one — the same all-or-nothing guarantee `update_schema` already
+/// gives the namespace-prefix and playbook-impact checks.
+#[tokio::test]
+async fn test_update_schema_remove_fields_rejects_whole_batch_when_one_field_is_protected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "remove_fields": ["priority", "status"]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "a batch containing a protected field must be rejected entirely"
+    );
+
+    let schema = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("core task schema should exist");
+    let field_names: Vec<&str> = schema.fields.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        field_names.contains(&"priority"),
+        "priority must survive — the batch must not partially apply: {field_names:?}"
+    );
+    assert!(
+        field_names.contains(&"status"),
+        "status must survive: {field_names:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_rename_fields_rejects_core_protected_field_and_preserves_node_data() {
+    use crate::services::CreateNodeParams;
+
+    let (svc, _tmp) = create_test_service().await;
+
+    // A real task instance with a real status value — a bypassed check would
+    // migrate this exact value to the rejected destination key.
+    let node_params = CreateNodeParams {
+        id: None,
+        node_type: "task".to_string(),
+        content: "test task".to_string(),
+        parent_id: None,
+        position: crate::services::InsertPositionOwned::End,
+        properties: serde_json::json!({
+            "task": { "status": "open" }
+        }),
+    };
+    let node_id = svc
+        .create_node_with_parent(node_params)
+        .await
+        .expect("create_node_with_parent failed");
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "rename_fields": [{ "from": "status", "to": "custom:status" }]
+        }),
+    )
+    .await;
+
+    let err = result
+        .expect_err("renaming a Core-protected field must be rejected")
+        .to_string();
+    assert!(
+        err.contains("status") && err.contains("core"),
+        "error should name the field and its protection level: {err}"
+    );
+
+    // Schema definition unchanged.
+    let schema = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("core task schema should exist");
+    assert!(
+        schema.fields.iter().any(|f| f.name == "status"),
+        "status must survive a rejected rename"
+    );
+    assert!(
+        !schema.fields.iter().any(|f| f.name == "custom:status"),
+        "the rejected destination name must not appear in the schema"
+    );
+
+    // Node data untouched — the migration must never have run.
+    let node = svc
+        .get_node(&node_id)
+        .await
+        .expect("get_node failed")
+        .expect("node not found");
+    let task_props = node
+        .properties
+        .get("task")
+        .expect("task-namespaced properties should exist");
+    assert_eq!(
+        task_props.get("status").and_then(|v| v.as_str()),
+        Some("open"),
+        "status value must be untouched by a rejected rename"
+    );
+    assert!(
+        task_props.get("custom:status").is_none(),
+        "no data should have been migrated to the rejected destination key"
+    );
+}
+
+/// A display-only relabel (`from == to` with `friendlyName` set) is still a
+/// modification of a protected field's definition and must be rejected the
+/// same way an identity rename is.
+#[tokio::test]
+async fn test_update_schema_rename_fields_rejects_friendly_name_only_relabel_of_core_field() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "task",
+            "rename_fields": [{ "from": "status", "to": "status", "friendlyName": "State" }]
+        }),
+    )
+    .await;
+
+    let err = result
+        .expect_err("relabeling a Core-protected field must be rejected")
+        .to_string();
+    assert!(
+        err.contains("status") && err.contains("core"),
+        "error should name the field and its protection level: {err}"
+    );
+
+    let schema = svc
+        .get_schema_node("task")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("core task schema should exist");
+    let status_field = schema
+        .fields
+        .iter()
+        .find(|f| f.name == "status")
+        .expect("status field should still exist");
+    assert_eq!(
+        status_field.friendly_name, "Status",
+        "friendly_name must be unchanged by a rejected relabel"
+    );
+}
+
+/// A malformed destination name must be rejected before the rename runs, not
+/// after — `rename_schema_field` persists the schema rewrite and migrates
+/// every node's property data immediately, so validating only the final
+/// field list (as Phase 2 already did) catches the problem after the damage
+/// is already committed.
+#[tokio::test]
+async fn test_update_schema_rename_fields_validates_destination_grammar_before_persisting() {
+    use crate::services::CreateNodeParams;
+
+    let (svc, _tmp) = create_test_service().await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Venue",
+            "fields": [
+                { "name": "capacity", "type": "number", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("create_schema should succeed");
+
+    // A real venue instance, so a bypassed check would be visible in node
+    // data too, not just the schema definition.
+    let node_params = CreateNodeParams {
+        id: None,
+        node_type: "venue".to_string(),
+        content: "test venue".to_string(),
+        parent_id: None,
+        position: crate::services::InsertPositionOwned::End,
+        properties: serde_json::json!({ "venue": { "capacity": 100 } }),
+    };
+    let node_id = svc
+        .create_node_with_parent(node_params)
+        .await
+        .expect("create_node_with_parent failed");
+
+    // A space is not valid field-name grammar — this is the exact kind of
+    // malformed destination a caller can send.
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "venue",
+            "rename_fields": [{ "from": "capacity", "to": "max capacity" }]
+        }),
+    )
+    .await;
+
+    let err = result
+        .expect_err("a malformed destination name must be rejected")
+        .to_string();
+    assert!(
+        err.contains("max capacity"),
+        "error should name the bad destination: {err}"
+    );
+
+    // The schema must not have been rewritten with the bad name.
+    let schema = svc
+        .get_schema_node("venue")
+        .await
+        .expect("get_schema_node should succeed")
+        .expect("venue schema should exist");
+    let field_names: Vec<&str> = schema.fields.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        field_names.contains(&"capacity"),
+        "capacity must survive a rejected rename: {field_names:?}"
+    );
+    assert!(
+        !field_names.iter().any(|n| n.contains("max capacity")),
+        "the malformed destination name must never reach the schema: {field_names:?}"
+    );
+
+    // Node data must not have been migrated to the bad key either.
+    let node = svc
+        .get_node(&node_id)
+        .await
+        .expect("get_node failed")
+        .expect("node not found");
+    let props = node
+        .properties
+        .get("venue")
+        .expect("venue-namespaced properties should exist");
+    assert_eq!(
+        props.get("capacity").and_then(|v| v.as_i64()),
+        Some(100),
+        "capacity value must be untouched by a rejected rename"
+    );
+    assert!(
+        props.get("max capacity").is_none(),
+        "no data should have been migrated to the rejected destination key"
+    );
+
+    // A subsequent, valid update on the same schema must still succeed —
+    // proving the schema was never left wedged on the rejected name.
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "venue",
+            "add_fields": [
+                { "name": "address", "type": "string", "protection": "user", "indexed": false }
+            ]
+        }),
+    )
+    .await
+    .expect("a schema untouched by the rejected rename should accept a further update");
+}
+
 #[tokio::test]
 async fn test_rename_field_friendly_name_only_updates_label_without_migrating_data() {
     use crate::services::CreateNodeParams;

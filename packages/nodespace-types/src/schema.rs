@@ -101,6 +101,20 @@ pub enum SchemaProtectionLevel {
     System,
 }
 
+impl std::fmt::Display for SchemaProtectionLevel {
+    /// Mirrors the wire form (`#[serde(rename_all = "lowercase")]`) so error
+    /// messages naming a protection level match what the same value
+    /// serializes to over the API.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            SchemaProtectionLevel::Core => "core",
+            SchemaProtectionLevel::User => "user",
+            SchemaProtectionLevel::System => "system",
+        };
+        write!(f, "{s}")
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchemaField {

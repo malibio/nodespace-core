@@ -1275,7 +1275,7 @@ pub struct SchemaNodeBehavior;
 /// here would reject names the rest of the system handles correctly: CEL strips
 /// the prefix, the graph resolver matches with and without it, and identifier
 /// validation in the query path permits it.
-fn validate_schema_field_name(name: &str) -> Result<(), NodeValidationError> {
+pub(crate) fn validate_schema_field_name(name: &str) -> Result<(), NodeValidationError> {
     let invalid = |reason: &str| {
         Err(NodeValidationError::InvalidProperties(format!(
             "Invalid field name '{}': {}",

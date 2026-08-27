@@ -2089,6 +2089,84 @@ mod tests {
         (service, temp_dir)
     }
 
+    // ========================================================================
+    // Protection-level guard on the two schema-field mutation primitives.
+    //
+    // `handle_update_schema` (packages/core/src/schema/mod.rs) is the only
+    // production caller of either method below, and it rejects a protected
+    // field before reaching them — but the guard belongs here too, at the
+    // primitive itself, so a future second caller can't reintroduce the
+    // bypass by skipping that upstream check.
+    // ========================================================================
+
+    #[tokio::test]
+    async fn rename_schema_field_rejects_core_protected_field() {
+        let (svc, _tmp) = create_test_service().await;
+
+        let result = svc
+            .rename_schema_field("task", "status", "custom:status")
+            .await;
+
+        let err = result
+            .expect_err("renaming a Core-protected field must be rejected")
+            .to_string();
+        assert!(
+            err.contains("status") && err.contains("core"),
+            "error should name the field and its protection level: {err}"
+        );
+
+        let schema = svc
+            .get_schema_node("task")
+            .await
+            .unwrap()
+            .expect("core task schema should exist");
+        assert!(
+            schema.fields.iter().any(|f| f.name == "status"),
+            "status must survive a rejected rename"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_schema_field_allows_user_protected_field_on_core_schema() {
+        let (svc, _tmp) = create_test_service().await;
+
+        // "priority" is User-protected on the core "task" schema — the guard
+        // is field-level, not schema-level, so this must still succeed.
+        let result = svc.rename_schema_field("task", "priority", "urgency").await;
+        assert!(
+            result.is_ok(),
+            "renaming a User-protected field must still succeed: {result:?}"
+        );
+
+        let schema = svc.get_schema_node("task").await.unwrap().unwrap();
+        assert!(schema.fields.iter().any(|f| f.name == "urgency"));
+        assert!(!schema.fields.iter().any(|f| f.name == "priority"));
+    }
+
+    #[tokio::test]
+    async fn update_schema_field_friendly_name_rejects_core_protected_field() {
+        let (svc, _tmp) = create_test_service().await;
+
+        let result = svc
+            .update_schema_field_friendly_name("task", "status", "State")
+            .await;
+
+        let err = result
+            .expect_err("relabeling a Core-protected field must be rejected")
+            .to_string();
+        assert!(
+            err.contains("status") && err.contains("core"),
+            "error should name the field and its protection level: {err}"
+        );
+
+        let schema = svc.get_schema_node("task").await.unwrap().unwrap();
+        let status_field = schema.fields.iter().find(|f| f.name == "status").unwrap();
+        assert_eq!(
+            status_field.friendly_name, "Status",
+            "friendly_name must be unchanged by a rejected relabel"
+        );
+    }
+
     /// ADR-059 §6/§7: embedding aggregation never spans an access boundary — the
     /// boundary is made UNREACHABLE BY CONSTRUCTION (the root-only `member_of`
     /// constraint of §2 + the embeddable-type list), NOT filtered at aggregation
