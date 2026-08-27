@@ -203,9 +203,14 @@ pub async fn build_database_services(
     database_id: &str,
 ) -> Result<(DatabaseServices, Option<tokio::task::JoinHandle<()>>)> {
     if let Some(parent) = db_path.parent() {
-        tokio::fs::create_dir_all(parent).await.with_context(|| {
-            format!("Failed to create database parent dir: {}", parent.display())
-        })?;
+        // Owner-only from birth (and re-restricted if it already existed at a
+        // wider mode): this directory holds the raw SQLite file for every
+        // database the daemon opens, default or otherwise registered.
+        crate::create_dir_owner_only(parent)
+            .await
+            .with_context(|| {
+                format!("Failed to create database parent dir: {}", parent.display())
+            })?;
     }
 
     let mut store = Arc::new(

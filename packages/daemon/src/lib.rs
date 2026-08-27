@@ -54,6 +54,49 @@ pub fn resolve_db_path() -> Result<PathBuf> {
     Ok(nodespace_dir()?.join("database").join("nodespace.db"))
 }
 
+/// Create a directory (and any missing parents) owner-only from the instant it
+/// exists, and restrict it to owner-only even if it already existed at a wider
+/// mode. `create_dir_all` applies the ambient umask to a default `0o777`, so a
+/// plain create-then-`chmod` — or no `chmod` at all — leaves the directory
+/// briefly (or permanently) group/other-traversable: a process of another uid
+/// that opens a directory descriptor on it during that window keeps resolving
+/// names inside it afterward even once a later `chmod` lands, because path
+/// resolution from an already-open directory descriptor never re-checks the
+/// execute bit. `umask` can only clear bits, so requesting `0o700` at creation
+/// (`DirBuilder::mode`) is owner-only under every ambient umask; the explicit
+/// `set_permissions` afterward is the backstop for a directory that something
+/// else — an earlier daemon version, or a different subsystem that shares this
+/// directory and created it first during this same boot — already left at a
+/// wider mode.
+///
+/// Every daemon-owned path under `nodespace_dir()` should be created through
+/// this helper: it holds the UDS whose mode is the whole local-authorization
+/// boundary (ADR-052), the database file, the database registry, and the
+/// settings file (which carries third-party API keys).
+#[cfg(unix)]
+pub async fn create_dir_owner_only(dir: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    tokio::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .await
+        .with_context(|| format!("create dir {}", dir.display()))?;
+    tokio::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .await
+        .with_context(|| format!("chmod 0o700 {}", dir.display()))
+}
+
+/// Windows has no POSIX permission-bit model to apply here. Directory access
+/// control on that platform is a separate, currently-open gap (see the Named
+/// Pipe DACL note in `main.rs`), so this is a plain recursive create.
+#[cfg(not(unix))]
+pub async fn create_dir_owner_only(dir: &std::path::Path) -> Result<()> {
+    tokio::fs::create_dir_all(dir)
+        .await
+        .with_context(|| format!("create dir {}", dir.display()))
+}
+
 // Re-export proto types from the lightweight nodespace-proto crate so existing
 // consumers of `nodespace-daemon` types continue to work without changing imports.
 pub use nodespace_proto::nodespace;

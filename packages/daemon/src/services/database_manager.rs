@@ -193,7 +193,10 @@ impl Registry {
     /// write until the next `load()` (e.g. process restart) re-reads it.
     pub async fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
+            // Owner-only from birth: the registry enumerates every database's
+            // on-disk path and shares this directory with the socket and the
+            // settings file.
+            crate::create_dir_owner_only(parent)
                 .await
                 .with_context(|| format!("creating registry directory {}", parent.display()))?;
         }
