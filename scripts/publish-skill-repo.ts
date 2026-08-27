@@ -45,6 +45,19 @@
  * merges what's already there. Hand edits to NodeSpaceAI/nodespace-skill do
  * not survive the next release.
  *
+ * Alongside the skill content, this also renders and pushes
+ * `.claude-plugin/marketplace.json` (see `renderMarketplaceFile`) so
+ * `/plugin marketplace add NodeSpaceAI/nodespace-skill` +
+ * `/plugin install nodespace@nodespace-skill` works in Claude Code without
+ * a clone-and-copy detour. That mechanism is Claude Code-specific: Codex and
+ * Gemini CLI have their own native plugin-marketplace mechanisms with
+ * different, incompatible manifest formats (`.codex-plugin/plugin.json` and
+ * `gemini-extension.json` respectively), and OpenCode has no first-party
+ * marketplace concept at all (its plugins are npm packages or local files
+ * referenced from `opencode.json`, with only third-party community tooling
+ * layered on top). None of those are addressed here -- clone-and-copy stays
+ * the documented install path for all three.
+ *
  * Usage:
  *   bun run scripts/publish-skill-repo.ts <version>            # dry run -- prints
  *                                                                # the rendered files, pushes nothing
@@ -68,7 +81,7 @@
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { AGENTS, buildSkillFrontmatter } from "../packages/skill/src/agents";
+import { AGENTS, buildSkillFrontmatter, SHARED_SKILL_FRONTMATTER } from "../packages/skill/src/agents";
 import { pushFilesToRepo, type RepoFile } from "./push-to-external-repo";
 
 export const SKILL_REPO = "NodeSpaceAI/nodespace-skill";
@@ -130,6 +143,107 @@ export function renderPublishFiles(version: string): RepoFile[] {
   });
 }
 
+/** Pulls `name` and a plain-text `description` out of the shared skill
+ * frontmatter block (`SHARED_SKILL_FRONTMATTER`, packages/skill/src/agents.ts)
+ * -- the same block every installer target's SKILL.md ships, and the source
+ * this script already trusts for the published SKILL.md itself. The
+ * marketplace manifest's plugin identity is read from here rather than
+ * typed in a second time, so it cannot drift from what the skill declares
+ * about itself.
+ *
+ * Written as a small extractor targeted at this file's own two-field shape
+ * (a scalar `name:` line, a folded `description: >` block) rather than a
+ * general YAML parser: this script fully owns SHARED_SKILL_FRONTMATTER, so
+ * there is no external schema whose future shape a real parser would be
+ * guarding against here -- only this file's own two fields, which the tests
+ * pin. */
+export function extractSkillMeta(frontmatter: string): { name: string; description: string } {
+  const nameMatch = /^name:\s*(.+)$/m.exec(frontmatter);
+  if (!nameMatch) {
+    throw new Error("shared skill frontmatter is missing a `name:` field");
+  }
+
+  const descMatch = /^description:\s*>\s*\n((?:^ {2}.*\n?)+)/m.exec(frontmatter);
+  if (!descMatch) {
+    throw new Error("shared skill frontmatter is missing a folded `description:` block");
+  }
+  // Replicates YAML's `>` folded-scalar rule -- join single newlines with a
+  // space -- well enough for this specific two-space-indented block. The
+  // manifest field this feeds is a plain string, not YAML, so the folded
+  // form (not the raw indented block) is what belongs there.
+  const description = descMatch[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {2}/, ""))
+    .filter((line) => line.length > 0)
+    .join(" ")
+    .trim();
+
+  return { name: nameMatch[1].trim(), description };
+}
+
+/** Renders `.claude-plugin/marketplace.json` -- the file Claude Code's
+ * `/plugin marketplace add NodeSpaceAI/nodespace-skill` reads. Shape
+ * verified against the real docs (https://code.claude.com/docs/en/plugin-marketplaces,
+ * https://code.claude.com/docs/en/plugins-reference) and a real, currently
+ * live example (anthropics/claude-code's own
+ * `.claude-plugin/marketplace.json`), not guessed: a marketplace needs
+ * `name` + `owner` + `plugins[]`, and each plugin entry's own
+ * `name`/`description`/`version`/`license`/`repository` fields are
+ * sufficient metadata on their own -- no separate
+ * `skills/nodespace/.claude-plugin/plugin.json` is required for a plugin
+ * that only uses the default `skills/` directory convention, which
+ * `skills/nodespace/SKILL.md` (see `renderPublishFiles`) already satisfies.
+ *
+ * `source: "./"` points the plugin root at the marketplace root -- this
+ * repo's own root -- rather than a `./plugins/<name>` subdirectory, because
+ * this repo publishes exactly one plugin and already places
+ * `skills/nodespace/` at the root for the clone-and-copy path. No `skills`
+ * field is declared on the plugin entry, which matters: for a marketplace
+ * entry whose `source` resolves to the marketplace root, an *explicit*
+ * `skills` field replaces the default `skills/` scan instead of adding to
+ * it. Leaving it undeclared keeps that default scan active, so
+ * `skills/nodespace/SKILL.md` is discovered with no extra configuration.
+ *
+ * Every identifying field (name, description, version, license,
+ * repository) is derived rather than typed in here a second time: name and
+ * description from `extractSkillMeta(SHARED_SKILL_FRONTMATTER)` (the same
+ * source `renderPublishFiles` trusts for the published SKILL.md), version
+ * from the release argument this script always takes, license from
+ * `packages/skill/package.json` (the skill's own package manifest), and the
+ * marketplace's own `name`/`owner` from `SKILL_REPO` (already this script's
+ * single source of truth for which repo it publishes to). */
+export function renderMarketplaceFile(version: string): RepoFile {
+  const v = normalizeVersion(version);
+  const { name, description } = extractSkillMeta(SHARED_SKILL_FRONTMATTER);
+  const [ownerName, marketplaceName] = SKILL_REPO.split("/");
+  const { license } = JSON.parse(
+    readFileSync(join(SKILL_DIR, "package.json"), "utf8"),
+  ) as { license: string };
+
+  const manifest = {
+    $schema: "https://json.schemastore.org/claude-code-marketplace.json",
+    name: marketplaceName,
+    owner: { name: ownerName, url: `https://github.com/${ownerName}` },
+    description,
+    version: v,
+    plugins: [
+      {
+        name,
+        description,
+        version: v,
+        license,
+        repository: `https://github.com/${SKILL_REPO}`,
+        source: "./",
+      },
+    ],
+  };
+
+  return {
+    relPath: ".claude-plugin/marketplace.json",
+    content: `${JSON.stringify(manifest, null, 2)}\n`,
+  };
+}
+
 async function pushSkillUpdate(version: string, files: RepoFile[], token: string): Promise<void> {
   const v = normalizeVersion(version);
   const pushed = await pushFilesToRepo(
@@ -169,7 +283,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const files = renderPublishFiles(command);
+  const files = [...renderPublishFiles(command), renderMarketplaceFile(command)];
   for (const file of files) {
     console.log(`--- ${file.relPath} ---`);
     console.log(file.content);
