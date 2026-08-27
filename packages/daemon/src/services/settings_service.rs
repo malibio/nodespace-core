@@ -383,7 +383,9 @@ pub async fn record_routing_probe_verdict(
     entry.routing_ok.insert(model.to_string(), routing_ok);
 
     if let Some(parent) = config_path.parent() {
-        tokio::fs::create_dir_all(parent)
+        // Owner-only from birth: this directory holds daemon.toml, which
+        // carries third-party API keys.
+        crate::create_dir_owner_only(parent)
             .await
             .map_err(|e| anyhow::anyhow!("failed to create config directory: {e}"))?;
     }
@@ -489,7 +491,9 @@ impl SettingsServiceImpl {
 
     async fn write_config(&self, config: &DaemonConfig) -> Result<(), Status> {
         if let Some(parent) = self.config_path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            // Owner-only from birth: this directory holds daemon.toml, which
+            // carries third-party API keys.
+            crate::create_dir_owner_only(parent).await.map_err(|e| {
                 Status::internal(format!("Failed to create config directory: {}", e))
             })?;
         }

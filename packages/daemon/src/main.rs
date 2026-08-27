@@ -37,8 +37,9 @@ use anyhow::{Context, Result};
 use nodespace_agent::local_agent::otlp_tracer;
 use nodespace_daemon::tray::layer::TrayMetricsLayer;
 use nodespace_daemon::{
-    build_base_router, build_shared_services, resolve_db_path, tray, BaseServices, DatabaseManager,
-    DatabaseServiceImpl, DatabaseServices, DbManagerLayer, SharedContext,
+    build_base_router, build_shared_services, create_dir_owner_only, resolve_db_path, tray,
+    BaseServices, DatabaseManager, DatabaseServiceImpl, DatabaseServices, DbManagerLayer,
+    SharedContext,
 };
 use nodespace_nlp_engine::EmbeddingService;
 use tokio::sync::watch;
@@ -110,33 +111,51 @@ fn socket_path() -> std::path::PathBuf {
         .join("daemon.sock")
 }
 
-/// Binds a Unix domain socket with no window where it is exposed at the
-/// ambient umask (ADR-052 §3). `UnixListener::bind` creates the socket file
-/// honoring the process umask, so a plain `bind` then `set_permissions` leaves
-/// the socket briefly group/other-reachable if the umask is permissive. We
-/// narrow the umask to `0o177` (owner rw only) for the duration of the bind
-/// so the socket is created at `0o600` from the instant it appears, then
-/// restore the prior umask — `umask` is process-global, so the narrowed
-/// window must be as short as possible and restored even on error.
+/// Binds a Unix domain socket so no other local user can ever reach it,
+/// without mutating any process-global state (ADR-052 §3: the socket mode is
+/// the entire local-authorization boundary for the gRPC surface below).
 ///
-/// Precondition: callers must not invoke this concurrently with another bind
-/// on the same process (`umask` is process-global, not per-thread). Both call
-/// sites in this file are safe because `main` runs exactly one of
-/// `serve_headless` / `serve_grpc` per process, before any other task binds
-/// a socket of its own.
+/// `UnixListener::bind` creates the socket file honoring the ambient umask, so
+/// a plain `bind`-then-`chmod` leaves it briefly at a wider mode. The tempting
+/// fix — narrowing the umask around the bind — is not usable here: `umask(2)`
+/// is process-global rather than per-thread, so mutating it silently re-modes
+/// every file and directory any *other* thread creates while it is narrowed.
+/// This bind happens with a multi-threaded Tokio runtime already live (shared
+/// services and their background tasks are built first), and `cargo test`
+/// runs every test in one process on a thread pool, so that race is real both
+/// in production and, more visibly, in the test binary — a umask-narrowing
+/// bind test here previously corrupted directories concurrently created by
+/// unrelated tests, failing them with a bogus `Permission denied` on a path
+/// they had just created themselves.
+///
+/// The containing directory carries the guarantee instead: callers restrict it
+/// to owner-only before binding (`create_dir_owner_only`), so nobody else can
+/// traverse into it and the window between `bind` and `chmod` below is
+/// unreachable. Because that precondition is the entire basis of the
+/// guarantee, it is enforced here fail-closed rather than assumed.
 #[cfg(unix)]
 fn bind_uds_owner_only(sock: &std::path::Path) -> Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt;
 
-    // SAFETY: umask(2) is a plain libc call; no pointers involved.
-    let prev_umask = unsafe { libc::umask(0o177) };
-    let result = tokio::net::UnixListener::bind(sock);
-    unsafe { libc::umask(prev_umask) };
+    let dir = sock
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .with_context(|| format!("socket path {} has no directory", sock.display()))?;
+    let dir_mode = std::fs::metadata(dir)
+        .with_context(|| format!("Failed to stat socket directory: {}", dir.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    anyhow::ensure!(
+        dir_mode & 0o077 == 0,
+        "refusing to bind {}: its directory {} is mode {dir_mode:o} — group/other can reach \
+         the socket during the window between bind and chmod",
+        sock.display(),
+        dir.display()
+    );
 
-    let listener =
-        result.with_context(|| format!("Failed to bind Unix socket: {}", sock.display()))?;
-    // Defense-in-depth: the umask already guarantees 0o600 at creation, but
-    // set it explicitly in case the umask was somehow not honored.
+    let listener = tokio::net::UnixListener::bind(sock)
+        .with_context(|| format!("Failed to bind Unix socket: {}", sock.display()))?;
     std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("Failed to set socket permissions: {}", sock.display()))?;
     Ok(listener)
@@ -249,7 +268,11 @@ async fn serve_headless() -> Result<()> {
     let shutdown_manager = manager.clone();
 
     if let Some(parent) = sock.parent() {
-        tokio::fs::create_dir_all(parent)
+        // Owner-only from birth (and re-restricted if it already existed at a
+        // wider mode) — this directory is what `bind_uds_owner_only` checks
+        // fail-closed before binding, and what closes the bind-to-chmod window
+        // on the socket itself (ADR-052).
+        create_dir_owner_only(parent)
             .await
             .with_context(|| format!("Failed to create socket directory: {}", parent.display()))?;
     }
@@ -311,7 +334,11 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let shutdown_manager = manager.clone();
 
     if let Some(parent) = sock.parent() {
-        tokio::fs::create_dir_all(parent)
+        // Owner-only from birth (and re-restricted if it already existed at a
+        // wider mode) — this directory is what `bind_uds_owner_only` checks
+        // fail-closed before binding, and what closes the bind-to-chmod window
+        // on the socket itself (ADR-052).
+        create_dir_owner_only(parent)
             .await
             .with_context(|| format!("Failed to create socket directory: {}", parent.display()))?;
     }
@@ -627,42 +654,131 @@ fn install_shutdown_handler() -> Result<impl std::future::Future<Output = ()>> {
 #[cfg(all(test, unix))]
 mod uds_permission_tests {
     use super::bind_uds_owner_only;
+    use std::os::unix::fs::PermissionsExt;
 
-    /// `umask` is process-global, so both assertions run in one test to avoid
-    /// racing against a second test thread mutating it concurrently.
-    ///
-    /// Covers: even under a permissive ambient umask (which would otherwise
-    /// yield a group/other-reachable socket), the bound socket ends up
-    /// owner-only; and the ambient umask is restored afterward so later code
-    /// in the process does not inherit the narrowed `0o177`.
+    fn mode_of(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    // The UDS is the local authorization boundary (ADR-052): after bind it
+    // must be 0o600 regardless of what the directory's own owner-only mode
+    // would otherwise have let the ambient umask produce. Deliberately does
+    // NOT touch the process umask — see the note on
+    // `binding_the_socket_does_not_corrupt_a_concurrently_created_directory`
+    // below for why.
     #[tokio::test]
-    async fn bind_uds_owner_only_is_0o600_and_restores_umask() {
-        use std::os::unix::fs::PermissionsExt;
-
+    async fn bind_uds_owner_only_is_0o600() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let sock = dir.path().join("race-test.sock");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let sock = dir.path().join("test.sock");
 
-        // SAFETY: umask(2) is a plain libc call with no pointers. This test
-        // is the sole owner of process umask mutation for its duration —
-        // no other test in this module runs concurrently with it.
-        let ambient_prev = unsafe { libc::umask(0o022) };
         let listener = bind_uds_owner_only(&sock).expect("bind should succeed");
-        let observed = unsafe { libc::umask(ambient_prev) };
 
         assert_eq!(
-            observed, 0o022,
-            "umask must be restored after bind, not left narrowed"
+            mode_of(&sock),
+            0o600,
+            "socket must be owner-only once bound"
+        );
+        drop(listener);
+    }
+
+    // The owner-only socket directory is what makes the window between `bind`
+    // and the chmod harmless, so a directory anyone else can traverse must
+    // fail closed rather than bind and hope (ADR-052).
+    #[tokio::test]
+    async fn bind_uds_owner_only_refuses_a_group_or_other_reachable_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sock = dir.path().join("test.sock");
+
+        let err = bind_uds_owner_only(&sock).unwrap_err().to_string();
+
+        assert!(
+            err.contains("group/other can reach"),
+            "a traversable socket directory must be refused, got: {err}"
+        );
+        assert!(!sock.exists(), "nothing may be bound when the check fails");
+    }
+
+    /// Regression test for the flakiness class behind this issue (mirrored
+    /// from sync#450/#452, fixed there in sync#456): binding the daemon's UDS
+    /// must never perturb ambient-umask-governed directory creation happening
+    /// concurrently elsewhere in the process. `cargo test` runs the whole
+    /// suite on one process's thread pool, so the old implementation — which
+    /// narrowed the process-global umask to `0o177` around `bind()` — could
+    /// strip the execute bit off a directory *any other test* created via
+    /// `DirBuilder`/`tempfile::tempdir()` (both default to `0o777` shaped only
+    /// by the ambient umask) at that instant, leaving it unusable:
+    /// `Permission denied (os error 13)` on a path the victim test had just
+    /// created itself.
+    ///
+    /// This test does not mutate the process umask itself — doing so here
+    /// would reintroduce exactly that hazard against every other test running
+    /// concurrently in this binary. Instead it drives a real bind concurrently
+    /// (barrier-synced, on a second OS thread) with a directory creation under
+    /// whatever ambient umask this test process already has, and asserts the
+    /// concurrently-created directory ends up bit-for-bit identical to one
+    /// created with no bind in flight at all — i.e. the bind has zero
+    /// observable effect on it. If `bind_uds_owner_only` ever narrows the
+    /// process umask again, this has a real (timing-dependent, like the
+    /// original bug) chance of catching it; it can never itself corrupt a
+    /// sibling test's directory, unlike the mutation it guards against.
+    #[tokio::test]
+    async fn binding_the_socket_does_not_corrupt_a_concurrently_created_directory() {
+        use std::sync::{Arc, Barrier};
+
+        // Baseline: what a solo directory creation looks like under today's
+        // ambient umask, no bind happening at all.
+        let baseline_parent = tempfile::tempdir().expect("baseline tempdir");
+        let baseline_dir = baseline_parent.path().join("baseline");
+        std::fs::DirBuilder::new()
+            .create(&baseline_dir)
+            .expect("baseline mkdir");
+        let expected_mode = mode_of(&baseline_dir);
+        assert_eq!(
+            expected_mode & 0o100,
+            0o100,
+            "precondition: the ambient test-runner umask must not already strip \
+             the owner-execute bit, or this test can't tell corruption from baseline"
         );
 
-        let mode = std::fs::metadata(&sock)
-            .expect("socket file should exist")
-            .permissions()
-            .mode()
-            & 0o777;
+        let bind_dir = tempfile::tempdir().expect("bind tempdir");
+        std::fs::set_permissions(bind_dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let sock = bind_dir.path().join("concurrent.sock");
+
+        let victim_parent = tempfile::tempdir().expect("victim tempdir");
+        let victim_dir = victim_parent.path().join("victim");
+
+        let barrier = Arc::new(Barrier::new(2));
+        let victim_barrier = barrier.clone();
+        let victim_dir_thread = victim_dir.clone();
+        let victim_handle = std::thread::spawn(move || {
+            victim_barrier.wait();
+            // Mirrors tempfile::tempdir(): DirBuilder at the OS default 0o777,
+            // shaped only by the ambient umask — exactly what a concurrently
+            // running unrelated test creates.
+            std::fs::DirBuilder::new()
+                .create(&victim_dir_thread)
+                .expect("victim mkdir")
+        });
+
+        barrier.wait();
+        let listener = bind_uds_owner_only(&sock);
+        victim_handle.join().expect("victim thread panicked");
+        let listener = listener.expect("bind should succeed");
+
         assert_eq!(
-            mode, 0o600,
-            "socket must be owner-only regardless of ambient umask"
+            mode_of(&victim_dir),
+            expected_mode,
+            "a directory created concurrently with the UDS bind must come out \
+             identical to one created with no bind in flight — a mismatch means \
+             bind_uds_owner_only is once again perturbing the process-global umask"
         );
+
+        // The literal symptom from the linked issues: prove the directory is
+        // actually usable, not merely correctly-moded.
+        std::fs::write(victim_dir.join("f"), b"ok")
+            .expect("victim dir must remain traversable/writable after a concurrent bind");
 
         drop(listener);
     }
