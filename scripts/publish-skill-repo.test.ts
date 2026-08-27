@@ -7,9 +7,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { SHARED_SKILL_FRONTMATTER } from "../packages/skill/src/agents";
 import {
+  extractSkillMeta,
   normalizeVersion,
   readSkillSource,
+  renderMarketplaceFile,
   renderPublishFiles,
   sharedShimPaths,
   SKILL_REPO,
@@ -124,5 +127,90 @@ describe("renderPublishFiles", () => {
     const referenceCli = files.find((f) => f.relPath === "skills/nodespace/references/cli.md")!;
     const { referenceCli: expected } = readSkillSource();
     expect(referenceCli.content).toBe(expected);
+  });
+});
+
+describe("extractSkillMeta", () => {
+  test("extracts the skill name from the shared frontmatter", () => {
+    expect(extractSkillMeta(SHARED_SKILL_FRONTMATTER).name).toBe("nodespace");
+  });
+
+  test("unfolds the description block into a single-line, whitespace-clean string", () => {
+    const { description } = extractSkillMeta(SHARED_SKILL_FRONTMATTER);
+    expect(description).not.toContain("\n");
+    expect(description).not.toMatch(/ {2}/);
+    expect(description).toContain("NodeSpace knowledge graph");
+    expect(description.startsWith("Context infrastructure for AI-native development.")).toBe(
+      true,
+    );
+  });
+
+  test("throws a descriptive error when the frontmatter has no name field", () => {
+    expect(() => extractSkillMeta("description: >\n  x\n")).toThrow(/name/);
+  });
+
+  test("throws a descriptive error when the frontmatter has no folded description block", () => {
+    expect(() => extractSkillMeta("name: nodespace\n")).toThrow(/description/);
+  });
+});
+
+describe("renderMarketplaceFile", () => {
+  test("publishes .claude-plugin/marketplace.json at the repo root, not under skills/nodespace/", () => {
+    const file = renderMarketplaceFile("v0.2.2");
+    expect(file.relPath).toBe(".claude-plugin/marketplace.json");
+  });
+
+  test("renders valid JSON matching the documented marketplace shape (name, owner, plugins[])", () => {
+    const manifest = JSON.parse(renderMarketplaceFile("v0.2.2").content);
+    const [ownerName, marketplaceName] = SKILL_REPO.split("/");
+
+    expect(manifest.name).toBe(marketplaceName);
+    expect(manifest.owner).toEqual({
+      name: ownerName,
+      url: `https://github.com/${ownerName}`,
+    });
+    expect(Array.isArray(manifest.plugins)).toBe(true);
+    expect(manifest.plugins).toHaveLength(1);
+  });
+
+  test("plugin name/description derive from the shared skill frontmatter, not a second hand-written copy", () => {
+    const manifest = JSON.parse(renderMarketplaceFile("v0.2.2").content);
+    const meta = extractSkillMeta(SHARED_SKILL_FRONTMATTER);
+    const plugin = manifest.plugins[0];
+
+    expect(plugin.name).toBe(meta.name);
+    expect(plugin.description).toBe(meta.description);
+    // The marketplace-level description reuses the same source too, rather
+    // than being independently hand-written text about the same skill.
+    expect(manifest.description).toBe(meta.description);
+  });
+
+  test("plugin and marketplace version come from the release argument, normalized the same way as SKILL.md's compatibility field", () => {
+    const withV = renderMarketplaceFile("v0.2.2");
+    const withoutV = renderMarketplaceFile("0.2.2");
+    expect(withV.content).toBe(withoutV.content);
+
+    const manifest = JSON.parse(withV.content);
+    expect(manifest.version).toBe("0.2.2");
+    expect(manifest.plugins[0].version).toBe("0.2.2");
+  });
+
+  test("plugin source is the marketplace root with no explicit skills override, so the default skills/ scan finds skills/nodespace/", () => {
+    const plugin = JSON.parse(renderMarketplaceFile("v0.2.2").content).plugins[0];
+    expect(plugin.source).toBe("./");
+    expect(plugin.skills).toBeUndefined();
+  });
+
+  test("plugin license derives from packages/skill/package.json, not a hardcoded copy", () => {
+    const expectedLicense = JSON.parse(
+      readFileSync(join(REPO_ROOT, "packages", "skill", "package.json"), "utf8"),
+    ).license;
+    const plugin = JSON.parse(renderMarketplaceFile("v0.2.2").content).plugins[0];
+    expect(plugin.license).toBe(expectedLicense);
+  });
+
+  test("plugin repository points at the published skill repo", () => {
+    const plugin = JSON.parse(renderMarketplaceFile("v0.2.2").content).plugins[0];
+    expect(plugin.repository).toBe(`https://github.com/${SKILL_REPO}`);
   });
 });
