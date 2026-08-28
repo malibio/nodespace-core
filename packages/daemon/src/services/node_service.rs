@@ -517,6 +517,7 @@ impl GrpcNodeService for NodeServiceImpl {
             content_contains: req.content_contains,
             title_contains: req.title_contains,
             node_type: req.node_type,
+            order_by: None,
             limit: if req.limit == 0 {
                 None
             } else {

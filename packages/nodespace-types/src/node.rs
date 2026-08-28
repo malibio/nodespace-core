@@ -113,6 +113,27 @@ impl Node {
     }
 }
 
+/// Sort order specification for query results
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum OrderBy {
+    /// Sort by creation time, oldest first
+    CreatedAsc,
+    /// Sort by creation time, newest first
+    CreatedDesc,
+    /// Sort by modification time, oldest first
+    ModifiedAsc,
+    /// Sort by modification time, newest first
+    ModifiedDesc,
+    /// Sort by content alphabetically, A-Z
+    ContentAsc,
+    /// Sort by content alphabetically, Z-A
+    ContentDesc,
+    /// Sort by node type alphabetically
+    NodeTypeAsc,
+    /// Sort by node type reverse alphabetically
+    NodeTypeDesc,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeQuery {
@@ -131,6 +152,11 @@ pub struct NodeQuery {
     pub title_contains: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_type: Option<String>,
+    /// Sort order applied by the store before `limit`/`offset` are sliced,
+    /// so pagination is stable across repeated calls with the same query.
+    /// `None` leaves the underlying result order store-defined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_by: Option<OrderBy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
