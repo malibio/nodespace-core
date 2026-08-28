@@ -916,7 +916,7 @@
         // Set focus with cursor position via FocusManager
         focusManager.focusNodeAtPosition(nodeId, editPosition, paneId);
       }}
-      onkeydown={(e) => {
+      onkeydown={async (e) => {
         if (readonly) {
           if (e.key === 'Enter') {
             // On readonly nodes (e.g. title_template entities): create a new empty
@@ -935,7 +935,13 @@
         if (e.key === 'Enter' || e.key === ' ') {
           // Use FocusManager instead of directly setting isEditing
           focusManager.focusNode(nodeId, paneId);
-          setTimeout(() => controller?.focus(), 0);
+          // Wait for the reactive DOM update (view div -> textarea swap) to land before
+          // focusing, instead of a setTimeout(0) macrotask. A macrotask defer loses the
+          // race against a fast-following keystroke, which has nothing focused to land
+          // on and gets silently dropped; tick() resolves on the next microtask, which
+          // always runs before the browser dispatches that next keydown.
+          await tick();
+          controller?.focus();
         }
       }}
       role="textbox"
