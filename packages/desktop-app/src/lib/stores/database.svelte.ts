@@ -4,9 +4,11 @@ import { backendAdapter } from '$lib/services/backend-adapter';
 import { onDaemonReconnect } from '$lib/services/daemon-status';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
-import { collectionsData } from '$lib/stores/collections.svelte';
+import { collectionsData, collectionsState } from '$lib/stores/collections.svelte';
 import { schemasData } from '$lib/stores/schemas.svelte';
 import { aiChatsData } from '$lib/stores/ai-chats.svelte';
+import { membership } from '$lib/stores/membership.svelte';
+import { resyncSchemaPluginsForDatabaseSwitch } from '$lib/plugins/schema-plugin-loader';
 import {
   clearAllTabs,
   addTab,
@@ -330,13 +332,34 @@ class DatabaseStore {
       // derived from the name, so keeping them would wrongly un-hide a
       // same-named empty collection in the new one.
       collectionsData.forgetLocallyCreated();
+      // The per-collection member-node cache is keyed by collection id, which
+      // is name-derived and can collide across databases — without this, a
+      // same-named collection in the new database would render the *previous*
+      // database's cached member nodes as its own contents.
+      collectionsData.invalidateAllMembers();
       collectionsData.loadCollections();
+      // Drop the sub-panel selection too: `collectionsState.selectedCollectionId`
+      // / `subPanelOpen` are not evicted by anything above, so a panel left open
+      // on a DB-A collection would otherwise keep rendering (now-stale) DB-A
+      // members against DB-B, including for a DB-B collection that happens to
+      // share the id.
+      collectionsState.reset();
+      // Same id-collision hazard as the member cache above, for the Pro
+      // membership roster/invites/requests cache (has_role edges are
+      // per-database — ADR-053).
+      membership.invalidateForDatabaseSwitch();
       schemasData.loadSchemas();
       // As with collectionsData.forgetLocallyCreated() above: invalidate any
       // in-flight "+ New chat" create before reloading, so its result can't
       // land in a store that now represents a different database.
       aiChatsData.invalidateForDatabaseSwitch();
       aiChatsData.loadAiChats();
+      // Re-sync the schema plugin registry (hasTitleTemplate/titleTemplate)
+      // against the newly-active database's schemas — otherwise a custom type
+      // keeps resolving titles via the previous database's template (or, for a
+      // type unique to the new database, via no template at all) until the
+      // next app restart.
+      void resyncSchemaPluginsForDatabaseSwitch();
       // Re-hydrate the new database's DatabaseSettingsNode (the previous one was
       // evicted by clearAll) so the Pro-sync variant re-resolves for it.
       this.refreshDatabaseSettings();

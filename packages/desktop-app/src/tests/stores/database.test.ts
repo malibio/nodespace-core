@@ -49,16 +49,35 @@ vi.mock('$lib/stores/reactive-structure-tree.svelte', () => ({
 
 const loadCollections = vi.fn((..._a: unknown[]) => undefined);
 const forgetLocallyCreated = vi.fn((..._a: unknown[]) => undefined);
+const invalidateAllMembers = vi.fn((..._a: unknown[]) => undefined);
+const collectionsStateReset = vi.fn((..._a: unknown[]) => undefined);
 vi.mock('$lib/stores/collections.svelte', () => ({
   collectionsData: {
     loadCollections: (...a: unknown[]) => loadCollections(...a),
-    forgetLocallyCreated: (...a: unknown[]) => forgetLocallyCreated(...a)
+    forgetLocallyCreated: (...a: unknown[]) => forgetLocallyCreated(...a),
+    invalidateAllMembers: (...a: unknown[]) => invalidateAllMembers(...a)
+  },
+  collectionsState: {
+    reset: (...a: unknown[]) => collectionsStateReset(...a)
   }
 }));
 
 const loadSchemas = vi.fn((..._a: unknown[]) => undefined);
 vi.mock('$lib/stores/schemas.svelte', () => ({
   schemasData: { loadSchemas: (...a: unknown[]) => loadSchemas(...a) }
+}));
+
+const membershipInvalidateForDatabaseSwitch = vi.fn((..._a: unknown[]) => undefined);
+vi.mock('$lib/stores/membership.svelte', () => ({
+  membership: {
+    invalidateForDatabaseSwitch: (...a: unknown[]) => membershipInvalidateForDatabaseSwitch(...a)
+  }
+}));
+
+const resyncSchemaPluginsForDatabaseSwitch = vi.fn((..._a: unknown[]) => Promise.resolve());
+vi.mock('$lib/plugins/schema-plugin-loader', () => ({
+  resyncSchemaPluginsForDatabaseSwitch: (...a: unknown[]) =>
+    resyncSchemaPluginsForDatabaseSwitch(...a)
 }));
 
 const loadAiChats = vi.fn((..._a: unknown[]) => undefined);
@@ -318,6 +337,18 @@ describe('Database Store', () => {
       expect(invalidateForDatabaseSwitch.mock.invocationCallOrder[0]).toBeLessThan(
         loadAiChats.mock.invocationCallOrder[0]
       );
+      // core#2218: the per-collection member cache and the sub-panel selection
+      // are both keyed on a collection id that is name-derived and can collide
+      // across databases — both must be dropped so a same-named collection in
+      // the new database can't render the previous database's cached members.
+      expect(invalidateAllMembers).toHaveBeenCalledOnce();
+      expect(collectionsStateReset).toHaveBeenCalledOnce();
+      // core#2218: the Pro membership roster/invites/requests cache has the
+      // same id-collision hazard (has_role edges are per-database, ADR-053).
+      expect(membershipInvalidateForDatabaseSwitch).toHaveBeenCalledOnce();
+      // core#2219: the schema plugin registry (hasTitleTemplate/titleTemplate)
+      // must re-sync against the newly-active database's schemas.
+      expect(resyncSchemaPluginsForDatabaseSwitch).toHaveBeenCalledOnce();
       // switchTo wraps its whole body in a try/catch that only records the
       // failure on `this.error`, so anything that throws mid-switch — an
       // incomplete mock being the usual culprit — is otherwise swallowed and

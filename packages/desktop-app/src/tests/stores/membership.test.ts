@@ -198,4 +198,33 @@ describe('MembershipStore', () => {
 		expect(membership.currentPerson).toBeNull();
 		expect(membership.get('c1').members).toEqual([]);
 	});
+
+	describe('invalidateForDatabaseSwitch (core#2218)', () => {
+		it('drops the per-collection roster cache but keeps the caller identity', async () => {
+			svc.listMembers.mockResolvedValue([{ personId: 'me', permission: 'admin' }]);
+			await membership.loadCollection('c1');
+			expect(membership.get('c1').members).toHaveLength(1);
+			expect(membership.currentPerson).not.toBeNull();
+
+			membership.invalidateForDatabaseSwitch();
+
+			// The roster is gone — a same-id collection in the newly-active
+			// database (has_role edges are per-database, ADR-053) must not keep
+			// rendering the previous database's roster.
+			expect(membership.get('c1').members).toEqual([]);
+			// Identity is per Pro sign-in, not per-database — unlike `reset()`
+			// (sign-out), a switch must not force a re-fetch of it.
+			expect(membership.currentPerson).not.toBeNull();
+		});
+
+		it('drops the joinable-collection discovery list', async () => {
+			svc.listJoinable.mockResolvedValue([{ id: 'c-open', name: 'Marketing', restricted: false }]);
+			await membership.loadJoinable();
+			expect(membership.joinable).toHaveLength(1);
+
+			membership.invalidateForDatabaseSwitch();
+
+			expect(membership.joinable).toEqual([]);
+		});
+	});
 });

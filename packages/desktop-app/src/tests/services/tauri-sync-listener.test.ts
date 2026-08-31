@@ -3,8 +3,10 @@ import { initializeTauriSyncListeners } from '$lib/services/tauri-sync-listener'
 import { SharedNodeStore, sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '$lib/types';
+import type { SchemaNode } from '$lib/types/schema-node';
 import * as backendAdapterModule from '$lib/services/backend-adapter';
 import { proSync } from '$lib/stores/pro-sync.svelte';
+import { pluginRegistry } from '$lib/plugins/plugin-registry';
 
 /**
  * Tests for Tauri Domain Event Listener
@@ -153,6 +155,10 @@ describe('TauriSyncListener', () => {
     // later file's setup to do it, which only works by accident of ordering.
     Reflect.deleteProperty(window, '__TAURI__');
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+    // schema-plugin-loader.ts's registry is a real, unmocked singleton in this
+    // file (only getNode/getSchema are spied per-test) — clear it so a plugin
+    // registered by one test can't leak into the next.
+    pluginRegistry.clear();
   });
 
   describe('Environment Detection', () => {
@@ -262,6 +268,74 @@ describe('TauriSyncListener', () => {
       emitTauriEvent('node:deleted', { id: 'node1' });
 
       expect(sharedNodeStore.hasNode('node1')).toBe(false);
+    });
+  });
+
+  // core#2219: a schema's plugin registration (hasTitleTemplate/titleTemplate)
+  // was only ever refreshed on node:created — node:updated (e.g. update_schema
+  // adding a title_template to an existing custom type mid-session) never
+  // touched it, so resolveDisplayTitle kept using the stale flag until a full
+  // app restart.
+  describe('Schema plugin refresh on node:updated (core#2219)', () => {
+    beforeEach(async () => {
+      await initializeTauriSyncListeners();
+    });
+
+    function mockSchema(id: string, titleTemplate?: string): SchemaNode {
+      return {
+        id,
+        content: 'Test Schema',
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 2,
+        isCore: false,
+        schemaVersion: 2,
+        description: '',
+        fields: [],
+        titleTemplate
+      };
+    }
+
+    it('refreshes an existing schema plugin`s title template', async () => {
+      const schemaId = 'sync-listener-test-schema';
+
+      // node:updated's payload carries only an id (no nodeType — see
+      // NodeEventData) — the *fetched* node's type is what must gate the
+      // refresh, so give it nodeType: 'schema'.
+      registerMockNode({
+        id: schemaId,
+        nodeType: 'schema',
+        content: 'Test Schema',
+        properties: {},
+        mentions: [],
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 2
+      });
+      vi.spyOn(backendAdapterModule.backendAdapter, 'getSchema').mockResolvedValue(
+        mockSchema(schemaId, '{first_name} {last_name}')
+      );
+
+      expect(pluginRegistry.hasTitleTemplate(schemaId)).toBe(false);
+
+      emitTauriEvent('node:updated', { id: schemaId });
+
+      await vi.waitFor(() => {
+        expect(pluginRegistry.hasTitleTemplate(schemaId)).toBe(true);
+      });
+      expect(pluginRegistry.getTitleTemplate(schemaId)).toBe('{first_name} {last_name}');
+    });
+
+    it('does not touch the plugin registry for a non-schema node:updated', async () => {
+      const getSchemaSpy = vi.spyOn(backendAdapterModule.backendAdapter, 'getSchema');
+      registerMockNode(createTestNode('node1', 'Just a text node'));
+
+      emitTauriEvent('node:updated', { id: 'node1' });
+
+      await vi.waitFor(() => {
+        expect(sharedNodeStore.hasNode('node1')).toBe(true);
+      });
+      expect(getSchemaSpy).not.toHaveBeenCalled();
     });
   });
 
