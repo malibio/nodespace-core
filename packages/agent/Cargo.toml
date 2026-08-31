@@ -1,6 +1,6 @@
 [package]
 name = "nodespace-agent"
-version = "0.2.0"
+version.workspace = true
 description = "Agent subsystem: local inference, ACP transport, tool execution"
 authors.workspace = true
 edition.workspace = true

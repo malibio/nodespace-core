@@ -1,6 +1,6 @@
 [package]
 name = "nodespace-core"
-version = "0.2.0"
+version.workspace = true
 description = "NodeSpace core business logic and database layer"
 authors.workspace = true
 edition.workspace = true

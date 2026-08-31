@@ -1,6 +1,6 @@
 [package]
 name = "nodespace-cli"
-version = "0.2.0"
+version.workspace = true
 description = "Command-line interface for NodeSpace — a gRPC client for nodespaced"
 authors.workspace = true
 edition.workspace = true

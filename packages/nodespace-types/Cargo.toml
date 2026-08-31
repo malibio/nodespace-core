@@ -1,6 +1,6 @@
 [package]
 name = "nodespace-types"
-version = "0.2.0"
+version.workspace = true
 description = "Shared wire types for NodeSpace — used by nodespace-core and the Tauri command layer"
 authors.workspace = true
 edition.workspace = true

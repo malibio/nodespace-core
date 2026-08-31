@@ -44,6 +44,15 @@ function getCurrentVersion(): string {
  * instead of packages/desktop-app/package.json, which isn't one of the three
  * check-version-sync.ts actually compares -- every release silently left the
  * real canonical sibling stale until the next push happened to touch it.
+ *
+ * The root Cargo.toml's [workspace.package] version is also updated here.
+ * Every Rust workspace member crate (agent, cli, core, daemon, nlp-engine,
+ * nodespace-types, proto) inherits it via `version.workspace = true` instead
+ * of hardcoding its own, so this one edit keeps all of them in sync -- this
+ * is what nodespaced's `--version` flag and its `get_daemon_version` gRPC RPC
+ * report at runtime via `env!("CARGO_PKG_VERSION")`, so leaving it stale here
+ * means those surfaces silently lie about the running build's real version.
+ * check-version-sync.ts enforces this field the same way as the other three.
  */
 function updateVersion(newVersion: string): void {
   // Remove 'v' prefix if present
@@ -66,6 +75,17 @@ function updateVersion(newVersion: string): void {
   );
   writeFileSync(cargoPath, cargoContent);
   console.log(`✅ Updated src-tauri/Cargo.toml to ${version}`);
+
+  // Update the root Cargo.toml's [workspace.package] version -- every other
+  // Rust workspace member crate inherits from this field.
+  const workspaceCargoPath = path.join(process.cwd(), "Cargo.toml");
+  let workspaceCargoContent = readFileSync(workspaceCargoPath, "utf-8");
+  workspaceCargoContent = workspaceCargoContent.replace(
+    /(\[workspace\.package\][\s\S]*?)version = ".*?"/m,
+    `$1version = "${version}"`
+  );
+  writeFileSync(workspaceCargoPath, workspaceCargoContent);
+  console.log(`✅ Updated Cargo.toml [workspace.package] to ${version}`);
 
   // Update packages/desktop-app/package.json -- the canonical sibling
   // check-version-sync.ts actually checks.
@@ -410,6 +430,7 @@ async function main() {
           const versionFiles = [
             "packages/desktop-app/src-tauri/tauri.conf.json",
             "packages/desktop-app/src-tauri/Cargo.toml",
+            "Cargo.toml",
             "package.json"
           ];
           for (const file of versionFiles) {
