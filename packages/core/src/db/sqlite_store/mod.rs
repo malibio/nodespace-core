@@ -1,5 +1,5 @@
 use crate::db::fractional_ordering::FractionalOrderCalculator;
-use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate};
+use crate::models::{DeleteResult, Node, NodeQuery, NodeUpdate, OrderBy};
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use connections::{Connections, ReadConn, WriteGuard};

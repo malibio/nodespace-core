@@ -969,53 +969,48 @@ impl SqliteStore {
             return Ok(nodes);
         }
 
-        if let Some(ref search_q) = query.content_contains {
-            let search_lower = format!("%{}%", search_q.to_lowercase());
-            let sql = match (query.limit, query.offset) {
-                (None, None) => "SELECT * FROM node WHERE LOWER(content) LIKE ?1".to_string(),
-                (Some(l), None) => format!(
-                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {}",
-                    l
-                ),
-                (None, Some(o)) => format!(
-                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT -1 OFFSET {}",
-                    o
-                ),
-                (Some(l), Some(o)) => format!(
-                    "SELECT * FROM node WHERE LOWER(content) LIKE ?1 LIMIT {} OFFSET {}",
-                    l, o
-                ),
-            };
-            return self
-                .query_nodes_from_sql(&sql, libsql::params![search_lower])
-                .await;
-        }
-
+        // Collect every scalar condition (content/title/type) into one shared
+        // AND-chain so `content_contains` composes with `node_type`,
+        // `title_contains`, and (below) `ids` instead of one filter silently
+        // dropping the others. Each placeholder number is derived from
+        // `bind_values.len() + 1` at the point it's pushed (the same idiom
+        // the `ids` chunk loop below uses via `binds.len()`), so conditions
+        // can be added, removed, or reordered without a separate counter to
+        // keep in sync.
         let mut conditions = Vec::new();
         let mut bind_values: Vec<libsql::Value> = Vec::new();
-        let mut param_idx = 1usize;
+
+        if let Some(ref search_q) = query.content_contains {
+            let search_lower = format!("%{}%", search_q.to_lowercase());
+            conditions.push(format!("LOWER(content) LIKE ?{}", bind_values.len() + 1));
+            bind_values.push(libsql::Value::Text(search_lower));
+        }
 
         if let Some(ref search_q) = query.title_contains {
             let search_lower = format!("%{}%", search_q.to_lowercase());
             conditions.push(format!(
                 "title IS NOT NULL AND LOWER(title) LIKE ?{}",
-                param_idx
+                bind_values.len() + 1
             ));
             bind_values.push(libsql::Value::Text(search_lower));
-            param_idx += 1;
         }
 
         if let Some(ref nt) = query.node_type {
-            conditions.push(format!("node_type = ?{}", param_idx));
+            conditions.push(format!("node_type = ?{}", bind_values.len() + 1));
             bind_values.push(libsql::Value::Text(nt.clone()));
         }
 
         // id-scoping (e.g. a collection's members). Build `id IN (…)` and
         // CHUNK it under SQLite's bound-parameter ceiling so a large member set
-        // can't overflow the limit. Each chunk also carries the title/node_type
-        // conditions already collected. The caller (NodeService::query_nodes)
-        // applies order_by + limit/offset in memory, so per-chunk order is
-        // irrelevant here. Empty id set ⇒ no rows can match.
+        // can't overflow the limit. Each chunk also carries the
+        // content/title/node_type conditions already collected, so this path
+        // stays scoped the same way the unchunked path below is. `limit`/
+        // `offset` are intentionally NOT applied per-chunk — the caller
+        // (`ops::query_nodes`) paginates the merged, id-scoped set in memory.
+        // Per-chunk row order is not globally meaningful (chunk boundaries are
+        // arbitrary), so `order_by`, when present, is applied once via an
+        // in-memory sort over the FULL merged set below rather than per chunk.
+        // Empty id set ⇒ no rows can match.
         if let Some(ref ids) = query.ids {
             if ids.is_empty() {
                 return Ok(Vec::new());
@@ -1036,15 +1031,14 @@ impl SqliteStore {
                     binds.push(libsql::Value::Text(id.clone()));
                 }
                 let sql = format!("SELECT * FROM node WHERE {}", conds.join(" AND "));
-                let mut rows = self
-                    .read()
-                    .await?
-                    .query(&sql, binds)
+                let chunk_nodes = self
+                    .query_nodes_from_sql(&sql, binds)
                     .await
                     .context("Failed to query nodes by id set")?;
-                while let Some(row) = rows.next().await? {
-                    nodes.push(Self::row_to_node(&row)?);
-                }
+                nodes.extend(chunk_nodes);
+            }
+            if let Some(ref order_by) = query.order_by {
+                Self::sort_nodes_by(&mut nodes, order_by);
             }
             return Ok(nodes);
         }
@@ -1055,6 +1049,17 @@ impl SqliteStore {
             String::new()
         };
 
+        // ORDER BY must run before LIMIT/OFFSET are applied — SQLite makes no
+        // ordering guarantee for a plain table scan, so without this the
+        // LIMIT/OFFSET below would slice an arbitrary (effectively
+        // insertion-order) subset instead of the documented order, and
+        // repeated calls with the same query could return different rows or
+        // the same rows in a different order.
+        let order_by_clause = match query.order_by.as_ref() {
+            Some(order_by) => format!(" ORDER BY {}", Self::order_by_sql(order_by)),
+            None => String::new(),
+        };
+
         let limit_offset = match (query.limit, query.offset) {
             (None, None) => String::new(),
             (Some(l), None) => format!(" LIMIT {}", l),
@@ -1062,17 +1067,14 @@ impl SqliteStore {
             (Some(l), Some(o)) => format!(" LIMIT {} OFFSET {}", l, o),
         };
 
-        let sql = format!("SELECT * FROM node {} {}", where_clause, limit_offset);
-        let mut rows = self
-            .read()
-            .await?
-            .query(&sql, bind_values)
+        let sql = format!(
+            "SELECT * FROM node {}{}{}",
+            where_clause, order_by_clause, limit_offset
+        );
+        let nodes = self
+            .query_nodes_from_sql(&sql, bind_values)
             .await
             .context("Failed to query nodes")?;
-        let mut nodes = Vec::new();
-        while let Some(row) = rows.next().await? {
-            nodes.push(Self::row_to_node(&row)?);
-        }
 
         // Exact-substring title match found nothing: fall back to a
         // stem-token match so a word variant of a title (e.g. "groceries"
@@ -1082,8 +1084,10 @@ impl SqliteStore {
         // direction), so the fallback compares tokenized query words against
         // tokenized title words by shared stem instead. Only engaged on a
         // genuine miss so the precise exact-substring match (and its
-        // ordering) stays authoritative whenever it finds anything.
-        if nodes.is_empty() {
+        // ordering) stays authoritative whenever it finds anything. Skipped
+        // when `content_contains` is also set — the fallback has no notion of
+        // content matching, so running it would silently drop that condition.
+        if nodes.is_empty() && query.content_contains.is_none() {
             if let Some(ref search_q) = query.title_contains {
                 return self
                     .query_nodes_title_stem_fallback(
@@ -1096,6 +1100,73 @@ impl SqliteStore {
             }
         }
         Ok(nodes)
+    }
+
+    /// Map an `OrderBy` value to a SQL `ORDER BY` fragment (column list only,
+    /// no `ORDER BY` keyword). `id ASC` is always appended as a deterministic
+    /// tiebreaker so two nodes that share the same primary sort value (e.g.
+    /// identical `created_at` timestamps) still sort the same way on every
+    /// call — without it, SQLite's tie order is unspecified and pagination
+    /// across repeated calls could reorder or duplicate/skip rows at the
+    /// boundary.
+    fn order_by_sql(order_by: &OrderBy) -> &'static str {
+        match order_by {
+            OrderBy::CreatedAsc => "created_at ASC, id ASC",
+            OrderBy::CreatedDesc => "created_at DESC, id ASC",
+            OrderBy::ModifiedAsc => "modified_at ASC, id ASC",
+            OrderBy::ModifiedDesc => "modified_at DESC, id ASC",
+            OrderBy::ContentAsc => "LOWER(content) ASC, id ASC",
+            OrderBy::ContentDesc => "LOWER(content) DESC, id ASC",
+            OrderBy::NodeTypeAsc => "node_type ASC, id ASC",
+            OrderBy::NodeTypeDesc => "node_type DESC, id ASC",
+        }
+    }
+
+    /// In-memory equivalent of [`Self::order_by_sql`], used where results are
+    /// merged from multiple SQL queries (the id-chunked path) and a single
+    /// SQL `ORDER BY` can't cover the whole result set. Mirrors the same
+    /// column choice and `id` tiebreaker so behavior matches the SQL path.
+    fn sort_nodes_by(nodes: &mut [Node], order_by: &OrderBy) {
+        match order_by {
+            OrderBy::CreatedAsc => nodes.sort_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            }),
+            OrderBy::CreatedDesc => nodes.sort_by(|a, b| {
+                b.created_at
+                    .cmp(&a.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            }),
+            OrderBy::ModifiedAsc => nodes.sort_by(|a, b| {
+                a.modified_at
+                    .cmp(&b.modified_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            }),
+            OrderBy::ModifiedDesc => nodes.sort_by(|a, b| {
+                b.modified_at
+                    .cmp(&a.modified_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            }),
+            OrderBy::ContentAsc => nodes.sort_by(|a, b| {
+                a.content
+                    .to_lowercase()
+                    .cmp(&b.content.to_lowercase())
+                    .then_with(|| a.id.cmp(&b.id))
+            }),
+            OrderBy::ContentDesc => nodes.sort_by(|a, b| {
+                b.content
+                    .to_lowercase()
+                    .cmp(&a.content.to_lowercase())
+                    .then_with(|| a.id.cmp(&b.id))
+            }),
+            OrderBy::NodeTypeAsc => {
+                nodes.sort_by(|a, b| a.node_type.cmp(&b.node_type).then_with(|| a.id.cmp(&b.id)))
+            }
+            OrderBy::NodeTypeDesc => {
+                nodes.sort_by(|a, b| b.node_type.cmp(&a.node_type).then_with(|| a.id.cmp(&b.id)))
+            }
+        }
     }
 
     /// Stem-token fallback for `title_contains` when the exact-substring
@@ -3022,6 +3093,248 @@ mod title_contains_stem_fallback_tests {
             SqliteStore::stem_word("dates"),
             SqliteStore::stem_word("date")
         );
+    }
+}
+
+#[cfg(test)]
+mod query_nodes_order_and_scoping_tests {
+    use super::*;
+    use crate::models::{NodeQuery, OrderBy};
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn bare_store() -> Result<(Arc<SqliteStore>, TempDir)> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let store = Arc::new(SqliteStore::new(db_path).await?);
+        Ok((store, temp_dir))
+    }
+
+    /// Insert a node with an explicit `created_at`, overriding `Node::new`'s
+    /// `Utc::now()` so tests get deterministic, well-separated timestamps
+    /// instead of racing the clock's resolution.
+    async fn make_node_at(
+        store: &SqliteStore,
+        node_type: &str,
+        content: &str,
+        created_at: DateTime<Utc>,
+    ) -> Result<String> {
+        let mut node = Node::new(node_type.to_string(), content.to_string(), json!({}));
+        node.created_at = created_at;
+        let id = node.id.clone();
+        store.create_node(node, None, None).await?;
+        Ok(id)
+    }
+
+    /// Regression test for the bug where `query_nodes` applied LIMIT/OFFSET
+    /// over an unordered `SELECT * FROM node` result set: `order_by` was
+    /// accepted on `NodeFilter`/`NodeQuery` but never turned into a SQL
+    /// `ORDER BY`, so pagination sliced an effectively arbitrary subset and
+    /// could return different rows (or the same rows reordered) across two
+    /// otherwise-identical calls. Twelve nodes get explicit, strictly
+    /// increasing `created_at` timestamps; a correct `CreatedDesc` query must
+    /// therefore return them newest-first, with adjacent pages tiling the
+    /// full set exactly once each, and repeated calls must agree with each
+    /// other and with that ground truth — not just with themselves.
+    #[tokio::test]
+    async fn order_by_created_desc_yields_stable_correctly_ordered_pagination() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let base = Utc::now();
+
+        let mut ascending_ids = Vec::new();
+        for i in 0..12i64 {
+            let id = make_node_at(
+                &store,
+                "task",
+                &format!("Task {}", i),
+                base + chrono::Duration::seconds(i),
+            )
+            .await?;
+            ascending_ids.push(id);
+        }
+        // Newest-first is the reverse of insertion order, since each node got
+        // a strictly later `created_at` than the one before it.
+        let mut expected_desc_ids = ascending_ids.clone();
+        expected_desc_ids.reverse();
+
+        let query = |limit: usize, offset: usize| NodeQuery {
+            node_type: Some("task".to_string()),
+            order_by: Some(OrderBy::CreatedDesc),
+            limit: Some(limit),
+            offset: Some(offset),
+            ..Default::default()
+        };
+
+        let page1 = store.query_nodes(query(6, 0)).await?;
+        let page2 = store.query_nodes(query(6, 6)).await?;
+        let page1_ids: Vec<String> = page1.iter().map(|n| n.id.clone()).collect();
+        let page2_ids: Vec<String> = page2.iter().map(|n| n.id.clone()).collect();
+
+        assert_eq!(
+            page1_ids,
+            expected_desc_ids[0..6].to_vec(),
+            "page 1 must be the 6 newest nodes, newest first"
+        );
+        assert_eq!(
+            page2_ids,
+            expected_desc_ids[6..12].to_vec(),
+            "page 2 must be the 6 oldest nodes, still newest-first within the page"
+        );
+
+        // The two pages tiled together, in order, must reconstruct the full
+        // CreatedDesc ordering exactly — no row repeated across the page
+        // boundary and none skipped, which is exactly what an unordered
+        // LIMIT/OFFSET could get wrong.
+        let mut combined = page1_ids.clone();
+        combined.extend(page2_ids.clone());
+        assert_eq!(combined, expected_desc_ids);
+
+        // Repeating the identical query (same filter, same page) multiple
+        // times must return the identical rows in the identical order every
+        // time — this is the actual "stable pagination" property, not just
+        // that a single call is internally ordered.
+        for attempt in 0..3 {
+            let repeat = store.query_nodes(query(6, 6)).await?;
+            let repeat_ids: Vec<String> = repeat.iter().map(|n| n.id.clone()).collect();
+            assert_eq!(
+                repeat_ids, page2_ids,
+                "attempt {attempt}: repeated identical query must return the identical page"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Without `order_by`, behavior is unchanged (store-defined order) —
+    /// this just pins that a `None` order_by doesn't panic or otherwise
+    /// misbehave now that the field flows all the way to SQL.
+    #[tokio::test]
+    async fn no_order_by_still_returns_all_matching_rows() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        for i in 0..5 {
+            make_node_at(&store, "task", &format!("Task {}", i), Utc::now()).await?;
+        }
+        let nodes = store
+            .query_nodes(NodeQuery {
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(nodes.len(), 5);
+        Ok(())
+    }
+
+    /// Regression test: the `content_contains` branch used to return early
+    /// with a bare `SELECT * FROM node WHERE LOWER(content) LIKE ?1`,
+    /// dropping `node_type` (and `ids`/`title_contains`) entirely — so a
+    /// content search "scoped" to one node type actually matched content in
+    /// every type. Two node types share the same content substring; a query
+    /// scoped to `task` must return only the task matches.
+    #[tokio::test]
+    async fn content_contains_combines_with_node_type_via_and() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let now = Utc::now();
+        let task_a = make_node_at(&store, "task", "schedule the team meeting", now).await?;
+        let task_b = make_node_at(&store, "task", "reschedule the client meeting", now).await?;
+        // Same content substring, different node_type — must NOT leak into a
+        // `node_type: "task"`-scoped content search.
+        make_node_at(&store, "text", "notes from last week's meeting", now).await?;
+        make_node_at(&store, "collection", "meeting rooms", now).await?;
+
+        let nodes = store
+            .query_nodes(NodeQuery {
+                content_contains: Some("meeting".to_string()),
+                node_type: Some("task".to_string()),
+                ..Default::default()
+            })
+            .await?;
+
+        let ids: std::collections::HashSet<String> = nodes.into_iter().map(|n| n.id).collect();
+        assert_eq!(
+            ids,
+            [task_a, task_b].into_iter().collect(),
+            "content_contains scoped to node_type=task must return only task matches, \
+             not matches from every type"
+        );
+        Ok(())
+    }
+
+    /// Regression test: the same dropped-filter bug for `ids` scoping — a
+    /// content search restricted to an explicit id set (e.g. a collection's
+    /// members) must not return content matches from nodes OUTSIDE that set.
+    /// Also exercises `node_type` + `ids` + `content_contains` combined,
+    /// matching how `ops::query_nodes` composes a collection-scoped,
+    /// type-filtered content search in practice.
+    #[tokio::test]
+    async fn content_contains_combines_with_ids_and_node_type_via_and() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let now = Utc::now();
+        // In scope: task, in the id set, matches content.
+        let in_scope = make_node_at(&store, "task", "urgent: fix the meeting bug", now).await?;
+        // Out of scope by id: same type, same content match, NOT in the id set.
+        make_node_at(&store, "task", "urgent: another meeting bug", now).await?;
+        // Out of scope by type: in the id set, but wrong node_type.
+        let out_of_scope_by_type =
+            make_node_at(&store, "text", "urgent: meeting bug notes", now).await?;
+
+        let nodes = store
+            .query_nodes(NodeQuery {
+                content_contains: Some("meeting bug".to_string()),
+                node_type: Some("task".to_string()),
+                ids: Some(vec![in_scope.clone(), out_of_scope_by_type.clone()]),
+                ..Default::default()
+            })
+            .await?;
+
+        let ids: Vec<String> = nodes.into_iter().map(|n| n.id).collect();
+        assert_eq!(
+            ids,
+            vec![in_scope],
+            "content_contains + node_type + ids must AND together: only the node that \
+             satisfies content, type, AND id-scope should be returned"
+        );
+        Ok(())
+    }
+
+    /// Regression test: `content_contains` must also compose with
+    /// `title_contains` rather than the title condition being silently
+    /// dropped once a content filter is present.
+    #[tokio::test]
+    async fn content_contains_combines_with_title_contains_via_and() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let now = Utc::now();
+        let mut matching = Node::new(
+            "task".to_string(),
+            "notes about the quarterly meeting".to_string(),
+            json!({}),
+        );
+        matching.title = Some("Quarterly Planning".to_string());
+        matching.created_at = now;
+        let matching_id = matching.id.clone();
+        store.create_node(matching, None, None).await?;
+
+        // Same content match, different title — must be excluded once
+        // title_contains is also part of the query.
+        let mut wrong_title = Node::new(
+            "task".to_string(),
+            "notes about the quarterly meeting".to_string(),
+            json!({}),
+        );
+        wrong_title.title = Some("Random Grocery List".to_string());
+        wrong_title.created_at = now;
+        store.create_node(wrong_title, None, None).await?;
+
+        let nodes = store
+            .query_nodes(NodeQuery {
+                content_contains: Some("quarterly meeting".to_string()),
+                title_contains: Some("Quarterly Planning".to_string()),
+                ..Default::default()
+            })
+            .await?;
+
+        let ids: Vec<String> = nodes.into_iter().map(|n| n.id).collect();
+        assert_eq!(ids, vec![matching_id]);
+        Ok(())
     }
 }
 

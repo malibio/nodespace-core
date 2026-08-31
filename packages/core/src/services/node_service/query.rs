@@ -35,14 +35,6 @@ impl NodeService {
     /// # }
     /// ```
     pub async fn query_nodes(&self, filter: NodeFilter) -> Result<Vec<Node>, NodeServiceError> {
-        // Note: order_by is intentionally handled in-memory after query
-        // Complex sorting with sibling chains requires post-query processing
-        if filter.order_by.is_some() {
-            tracing::debug!(
-                "query_nodes: order_by handled via in-memory sorting after database query"
-            );
-        }
-
         // When property filters are present, fetch all matching rows from DB and
         // filter in memory. Safety cap prevents accidental OOM on large datasets.
         const PROPERTY_FILTER_FETCH_CAP: usize = 10_000;
@@ -52,7 +44,9 @@ impl NodeService {
             (filter.limit, filter.offset)
         };
 
-        // Convert NodeFilter to NodeQuery
+        // Convert NodeFilter to NodeQuery. order_by is forwarded through so the
+        // store applies it in SQL (ORDER BY before LIMIT/OFFSET) rather than
+        // relying on in-memory sorting that never actually happened.
         let query = crate::models::NodeQuery {
             id: None,
             ids: filter.ids.clone(),
@@ -60,6 +54,7 @@ impl NodeService {
             content_contains: filter.content_contains.clone(),
             title_contains: filter.title_contains.clone(),
             mentioned_by: None,
+            order_by: filter.order_by.clone(),
             limit: db_limit,
             offset: db_offset,
         };
