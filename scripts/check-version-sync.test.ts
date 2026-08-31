@@ -1,5 +1,5 @@
 // Enforces the app-version single source of truth (nodespace-core#1686). If any of
-// the three app-version fields drifts from the canonical tauri.conf.json, this test
+// the four app-version fields drifts from the canonical tauri.conf.json, this test
 // fails under `bun test scripts/` (part of `test:all`) so the pre-push gate catches
 // it before a stale-versioned build can ship.
 import { describe, expect, test } from "bun:test";
@@ -18,11 +18,25 @@ describe("app version single source of truth (#1686)", () => {
     expect(r.canonical).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  test("the guard covers all three known version fields", () => {
+  test("the guard covers all four known version fields", () => {
     const r = checkAppVersionSync();
     expect(Object.keys(r.versions).sort()).toEqual(
-      ["Cargo.toml", "package.json", "tauri.conf.json"].sort(),
+      ["Cargo.toml", "package.json", "tauri.conf.json", "workspace Cargo.toml"].sort(),
     );
     expect(r.versions[CANONICAL]).toBeDefined();
+  });
+
+  // Regression test: every Rust workspace member crate (agent, cli, core, daemon,
+  // nlp-engine, nodespace-types, proto) inherits its version from the root
+  // Cargo.toml's [workspace.package] field via `version.workspace = true`. Before
+  // this field existed, every one of those crates hardcoded its own stale version,
+  // which `nodespaced --version` and the `get_daemon_version` gRPC RPC both read
+  // at compile time via `env!("CARGO_PKG_VERSION")` -- so a caller trusting either
+  // surface to reflect the real running build was being lied to. This test fails
+  // the same way the drift check above does if the workspace field goes stale
+  // again, which is the failure mode that shipped undetected for multiple releases.
+  test("workspace Cargo.toml version (inherited by every member crate) matches canonical", () => {
+    const r = checkAppVersionSync();
+    expect(r.versions["workspace Cargo.toml"]).toBe(r.canonical);
   });
 });

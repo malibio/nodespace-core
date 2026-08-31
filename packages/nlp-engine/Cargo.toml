@@ -1,6 +1,6 @@
 [package]
 name = "nodespace-nlp-engine"
-version = "0.2.0"
+version.workspace = true
 description = "NodeSpace unified vector embedding service using llama.cpp"
 authors.workspace = true
 edition.workspace = true

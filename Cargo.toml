@@ -13,6 +13,18 @@ members = [
 resolver = "2"
 
 [workspace.package]
+# Canonical version for every workspace member crate below (agent, cli, core,
+# daemon, nlp-engine, nodespace-types, proto) via `version.workspace = true` in
+# each crate's [package] section — a member crate must never hardcode its own
+# version, or it silently drifts from the app version that `scripts/release.ts`
+# bumps (packages/desktop-app/src-tauri/tauri.conf.json is the ultimate
+# canonical source; `scripts/release.ts`'s `release:bump` writes this field too,
+# and `scripts/check-version-sync.ts` fails the pre-push gate if it drifts).
+# nodespace-daemon reads this at compile time via `env!("CARGO_PKG_VERSION")`
+# for both `nodespaced --version` and the `get_daemon_version` gRPC RPC, and
+# nodespace-cli's `--version` flag reads it via clap's derived `version` field —
+# both are real user/API-facing surfaces, not cosmetic.
+version = "0.2.3"
 authors = ["NodeSpace Team"]
 edition = "2021"
 license = "MIT"

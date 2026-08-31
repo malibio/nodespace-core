@@ -1,6 +1,6 @@
 [package]
 name = "nodespace-daemon"
-version = "0.2.0"
+version.workspace = true
 description = "gRPC daemon for NodeSpace services — compiled proto types and service definitions"
 authors.workspace = true
 edition.workspace = true
