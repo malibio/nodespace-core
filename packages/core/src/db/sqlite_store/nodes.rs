@@ -365,13 +365,26 @@ impl SqliteStore {
                 serde_json::to_string(props).context("Failed to serialize properties")?;
             tx.execute(
                 "UPDATE node SET content = ?1, node_type = ?2, properties = ?3 WHERE id = ?4",
-                libsql::params![updated_content.clone(), updated_node_type.clone(), props_json, id.to_string()],
-            ).await.context("Failed to update node")?;
+                libsql::params![
+                    updated_content.clone(),
+                    updated_node_type.clone(),
+                    props_json,
+                    id.to_string()
+                ],
+            )
+            .await
+            .context("Failed to update node")?;
         } else {
             tx.execute(
                 "UPDATE node SET content = ?1, node_type = ?2 WHERE id = ?3",
-                libsql::params![updated_content.clone(), updated_node_type.clone(), id.to_string()],
-            ).await.context("Failed to update node")?;
+                libsql::params![
+                    updated_content.clone(),
+                    updated_node_type.clone(),
+                    id.to_string()
+                ],
+            )
+            .await
+            .context("Failed to update node")?;
         }
 
         if let Some(title) = update.title {
