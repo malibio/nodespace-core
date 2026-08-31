@@ -279,6 +279,18 @@
         });
       });
 
+      // A relaunch can arrive before this `listen()` call above has finished
+      // its IPC round-trip (the webview is still booting) — Tauri does not
+      // buffer an event emitted with zero listeners, so that live event is
+      // dropped on the floor. Pull the pull-based fallback stash once the
+      // listener is guaranteed to be registered so a pick that raced boot
+      // still lands.
+      unlistenSelectDatabase.then(() => {
+        databaseStore.applyPendingTraySelection().catch((err) => {
+          log.error('Failed to apply pending tray database selection:', err);
+        });
+      });
+
       // Show a warning if the nodespace CLI is not on $PATH after skill install.
       unlistenSkillCliMissing = listen<{ warning: string }>('skill:cli-missing', (event) => {
         log.warn('nodespace CLI not on PATH:', event.payload.warning);

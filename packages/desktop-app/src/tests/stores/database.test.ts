@@ -348,18 +348,74 @@ describe('Database Store', () => {
       expect(clearAll).not.toHaveBeenCalled();
     });
 
-    it('ignores a switch to an id that is not in the registered databases list', async () => {
+    it('ignores a switch to an id that is not in the registered databases list, even after a fresh registry pull', async () => {
       // Every UI call site only ever passes an id drawn from `databases`; the
       // one caller that doesn't control its input is the tray's
       // `tray:select-database` relaunch event (the database could have been
       // removed between the tray click and the event arriving). Committing to
       // it anyway would clear every cache and reset the workspace before the
-      // daemon's per-request NOT_FOUND ever surfaced.
+      // daemon's per-request NOT_FOUND ever surfaced. The guard re-checks
+      // against a fresh `list_databases` pull before rejecting — this id is
+      // still absent from that fresh pull, so it must still be rejected.
+      mockInvoke.mockResolvedValueOnce({
+        databases: [db('a'), db('b')],
+        defaultDatabaseId: ''
+      });
+
       await databaseStore.switchTo('does-not-exist');
 
-      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockInvoke).toHaveBeenCalledWith('list_databases');
+      expect(mockInvoke).not.toHaveBeenCalledWith('set_active_database', expect.anything());
       expect(clearAll).not.toHaveBeenCalled();
       expect(databaseStore.activeDatabaseId).toBe('a');
+    });
+
+    it('recognizes a database registered after boot instead of dropping the tray pick (#2203)', async () => {
+      // The frontend's `databases` list is loaded once at boot; a database
+      // registered later via another path (the shipped CLI, another window)
+      // is legitimately switchable — the daemon tray's submenu already
+      // live-refreshes and offers it — even though this store has not heard
+      // of it yet. The guard must re-pull the registry rather than reject
+      // outright.
+      databaseStore.databases = [db('a')];
+      databaseStore.activeDatabaseId = 'a';
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('work')],
+            defaultDatabaseId: ''
+          });
+        }
+        return Promise.resolve(undefined); // set_active_database, pro_activate_database
+      });
+
+      await databaseStore.switchTo('work');
+
+      expect(mockInvoke).toHaveBeenCalledWith('list_databases');
+      expect(mockInvoke).toHaveBeenCalledWith('set_active_database', { id: 'work' });
+      expect(databaseStore.activeDatabaseId).toBe('work');
+      expect(databaseStore.databases.map((d) => d.id)).toEqual(['a', 'work']);
+      expect(clearAll).toHaveBeenCalledOnce();
+    });
+
+    it('recognizes a tray pick arriving before the very first load() resolves, when databases is still empty (#2203)', async () => {
+      databaseStore.databases = [];
+      databaseStore.activeDatabaseId = null;
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'list_databases') {
+          return Promise.resolve({
+            databases: [db('a'), db('b')],
+            defaultDatabaseId: ''
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      await databaseStore.switchTo('b');
+
+      expect(mockInvoke).toHaveBeenCalledWith('list_databases');
+      expect(mockInvoke).toHaveBeenCalledWith('set_active_database', { id: 'b' });
+      expect(databaseStore.activeDatabaseId).toBe('b');
     });
 
     it('flushes pending saves BEFORE re-pointing the routed clients', async () => {
@@ -395,6 +451,59 @@ describe('Database Store', () => {
       // Only the winner cleared caches and reloaded — no stale mid-switch state.
       expect(clearAll).toHaveBeenCalledOnce();
       expect(loadCollections).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('applyPendingTraySelection (#2202)', () => {
+    beforeEach(() => {
+      databaseStore.databases = [db('a'), db('b')];
+      databaseStore.activeDatabaseId = 'a';
+    });
+
+    it('switches to the pending selection when one was stashed', async () => {
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'take_pending_tray_database_selection') return Promise.resolve('b');
+        return Promise.resolve(undefined); // set_active_database, pro_activate_database
+      });
+
+      await databaseStore.applyPendingTraySelection();
+
+      expect(mockInvoke).toHaveBeenCalledWith('take_pending_tray_database_selection');
+      expect(mockInvoke).toHaveBeenCalledWith('set_active_database', { id: 'b' });
+      expect(databaseStore.activeDatabaseId).toBe('b');
+    });
+
+    it('is a no-op when nothing was stashed', async () => {
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'take_pending_tray_database_selection') return Promise.resolve(null);
+        return Promise.resolve(undefined);
+      });
+
+      await databaseStore.applyPendingTraySelection();
+
+      expect(mockInvoke).toHaveBeenCalledWith('take_pending_tray_database_selection');
+      expect(mockInvoke).not.toHaveBeenCalledWith('set_active_database', expect.anything());
+      expect(databaseStore.activeDatabaseId).toBe('a');
+    });
+
+    it('swallows a read failure rather than throwing', async () => {
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'take_pending_tray_database_selection') {
+          return Promise.reject(new Error('ipc failure'));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      await expect(databaseStore.applyPendingTraySelection()).resolves.toBeUndefined();
+      expect(databaseStore.activeDatabaseId).toBe('a');
+    });
+
+    it('does nothing outside Tauri (no bridge, no invoke)', async () => {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+
+      await databaseStore.applyPendingTraySelection();
+
+      expect(mockInvoke).not.toHaveBeenCalled();
     });
   });
 
