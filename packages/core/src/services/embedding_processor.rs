@@ -159,6 +159,25 @@ impl EmbeddingScheduler {
             .clone()
     }
 
+    /// Clear the active database id, but ONLY if it still names `db_id`.
+    ///
+    /// Used when a live `WatchNodes` stream ends (idle eviction, client
+    /// disconnect, or a natural close/error) to release the active claim it
+    /// took in `set_active` on open. A plain `set_active(None)` would be
+    /// wrong here: `active` holds at most one id, so if a NEWER stream (on a
+    /// different database) has already called `set_active` since this one
+    /// opened, an unconditional clear from the older stream's teardown would
+    /// clobber the newer stream's claim instead of just retracting its own —
+    /// leaving the actually-active database evictable while it still has a
+    /// live subscriber. Comparing before clearing makes teardown idempotent
+    /// and order-independent: it only ever retracts a still-current claim.
+    pub fn clear_active_if(&self, db_id: &str) {
+        let mut active = self.active.lock().expect("scheduler active lock poisoned");
+        if active.as_deref() == Some(db_id) {
+            *active = None;
+        }
+    }
+
     /// Whether `db_id` is currently the active database.
     pub fn is_active(&self, db_id: &str) -> bool {
         self.active
