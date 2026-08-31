@@ -23,6 +23,7 @@ import type {
   RelationshipEvent,
   RelationshipDeletedPayload
 } from '$lib/types/event-types';
+import type { Node } from '$lib/types';
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { backendAdapter } from './backend-adapter';
@@ -154,11 +155,13 @@ async function flushPendingNodeFetches(): Promise<void> {
       for (let i = 0; i < fetched.length; i++) {
         const node = fetched[i];
         if (!node || tombstonedDuringFlush.has(chunk[i])) continue;
+        const normalizedNode = normalizeNodeData(node);
         sharedNodeStore.setNode(
-          normalizeNodeData(node),
+          normalizedNode,
           { type: 'database', reason: 'domain-event' },
           true
         );
+        maybeRefreshSchemaPlugin(normalizedNode);
         applied++;
       }
     }
@@ -170,6 +173,28 @@ async function flushPendingNodeFetches(): Promise<void> {
     flushInProgress = false;
     tombstonedDuringFlush.clear();
   }
+}
+
+/**
+ * If the given (already-fetched) node is a non-core schema, refresh its
+ * plugin registration so `pluginRegistry.hasTitleTemplate`/`getTitleTemplate`
+ * pick up whatever changed.
+ *
+ * Called after every node fetch this listener applies to the store — both
+ * `node:created` (redundant with, but harmless alongside, the immediate
+ * payload-based call in the `node:created` handler below: `registerSchemaPlugin`
+ * upserts, so registering the same data twice is a no-op) and, critically,
+ * `node:updated` — whose event payload never carries `nodeType` (see
+ * `NodeEventData`), so this is the only point where an update to an existing
+ * schema (e.g. `update_schema` adding a `title_template`) is even detectable.
+ * Fire-and-forget: a failure here only leaves that type's title stale, never
+ * fatal to the node update itself.
+ */
+function maybeRefreshSchemaPlugin(node: Node): void {
+  if (node.nodeType !== 'schema') return;
+  registerSchemaPlugin(node.id).catch((err) =>
+    log.error('Failed to refresh schema plugin on node event:', err)
+  );
 }
 
 /** Route a node fetch through the Pro coalescer, or apply immediately in the
@@ -329,6 +354,7 @@ async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<vo
     if (node) {
       const normalizedNode = normalizeNodeData(node);
       sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'domain-event' }, true);
+      maybeRefreshSchemaPlugin(normalizedNode);
       log.info(`${eventType}: store updated for node`, nodeId);
     } else {
       log.warn(`${eventType}: node not found`, nodeId);

@@ -330,6 +330,25 @@ class MembershipStore {
 		this.joinableError = null;
 		this.joinableLoaded = false;
 	}
+
+	/**
+	 * Drop the per-collection roster/invite/request cache and the joinable
+	 * list on a database switch, without clearing the caller's identity.
+	 *
+	 * `has_role` edges (and therefore membership) are per-database (ADR-053),
+	 * so `byCollection` — keyed by collection id, which is name-derived and
+	 * can collide across databases — must not keep serving the previous
+	 * database's roster under a same-named collection in the new one.
+	 * `currentPerson` is left alone: identity is per Pro sign-in, not
+	 * per-database, so re-fetching it on every switch would be both wasteful
+	 * and (briefly) wrong while it re-resolves.
+	 */
+	invalidateForDatabaseSwitch(): void {
+		this.byCollection = {};
+		this.joinable = [];
+		this.joinableError = null;
+		this.joinableLoaded = false;
+	}
 }
 
 /** Shared singleton — import this, not the class. */

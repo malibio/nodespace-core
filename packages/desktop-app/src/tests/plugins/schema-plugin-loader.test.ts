@@ -12,7 +12,8 @@ import {
   createPluginFromSchema,
   registerSchemaPlugin,
   unregisterSchemaPlugin,
-  initializeSchemaPluginSystem
+  initializeSchemaPluginSystem,
+  resyncSchemaPluginsForDatabaseSwitch
 } from '$lib/plugins/schema-plugin-loader';
 import type { SchemaNode } from '$lib/types/schema-node';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
@@ -248,6 +249,28 @@ describe('Schema Plugin Loader - registerSchemaPlugin()', () => {
 
     expect(pluginRegistry.hasPlugin('task-123')).toBe(false);
   });
+
+  it('refreshes an already-registered plugin instead of leaving it stale (core#2219)', async () => {
+    // First registration: no title_template yet.
+    vi.mocked(backendAdapter.getSchema).mockResolvedValue(
+      createMockSchemaNode('customer', { description: 'Customer' })
+    );
+    await registerSchemaPlugin('customer');
+    expect(pluginRegistry.hasTitleTemplate('customer')).toBe(false);
+
+    // update_schema adds a title_template mid-session — a second call for the
+    // SAME already-registered id must pick it up. Before the fix,
+    // registerSchemaPlugin's `hasPlugin` early-return made this a no-op and
+    // hasTitleTemplate stayed stuck at `false`.
+    vi.mocked(backendAdapter.getSchema).mockResolvedValue({
+      ...createMockSchemaNode('customer', { description: 'Customer' }),
+      titleTemplate: '{first_name} {last_name}'
+    });
+    await registerSchemaPlugin('customer');
+
+    expect(pluginRegistry.hasTitleTemplate('customer')).toBe(true);
+    expect(pluginRegistry.getTitleTemplate('customer')).toBe('{first_name} {last_name}');
+  });
 });
 
 describe('Schema Plugin Loader - unregisterSchemaPlugin()', () => {
@@ -348,5 +371,90 @@ describe('Schema Plugin Loader - initializeSchemaPluginSystem()', () => {
 
     expect(result.success).toBe(true);
     expect(result.registeredCount).toBe(0);
+  });
+});
+
+describe('Schema Plugin Loader - resyncSchemaPluginsForDatabaseSwitch() (core#2219)', () => {
+  beforeEach(() => {
+    pluginRegistry.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    pluginRegistry.clear();
+  });
+
+  it('unregisters a custom type absent from the newly-active database and registers a new one', async () => {
+    // Simulate database A: 'invoice' was registered while A was active.
+    vi.mocked(backendAdapter.getSchema).mockResolvedValue(
+      createMockSchemaNode('invoice', { description: 'Invoice' })
+    );
+    await registerSchemaPlugin('invoice');
+    expect(pluginRegistry.hasPlugin('invoice')).toBe(true);
+
+    // Switch to database B, whose custom schemas are just 'customer'.
+    const dbBSchemas = [createMockSchemaNode('customer', { description: 'Customer' })];
+    vi.mocked(backendAdapter.getAllSchemas).mockResolvedValue(dbBSchemas);
+    vi.mocked(backendAdapter.getSchema).mockImplementation(
+      async (id) => dbBSchemas.find((s) => s.id === id)!
+    );
+
+    await resyncSchemaPluginsForDatabaseSwitch();
+
+    // 'invoice' doesn't exist in B — must not keep resolving with A's metadata.
+    expect(pluginRegistry.hasPlugin('invoice')).toBe(false);
+    // 'customer' is unique to B and must now be registered.
+    expect(pluginRegistry.hasPlugin('customer')).toBe(true);
+  });
+
+  it('refreshes a same-id type whose title template differs between databases', async () => {
+    vi.mocked(backendAdapter.getSchema).mockResolvedValue({
+      ...createMockSchemaNode('customer', { description: 'Customer' }),
+      titleTemplate: '{name_a}'
+    });
+    await registerSchemaPlugin('customer');
+    expect(pluginRegistry.getTitleTemplate('customer')).toBe('{name_a}');
+
+    const dbBSchemas = [
+      {
+        ...createMockSchemaNode('customer', { description: 'Customer' }),
+        titleTemplate: '{name_b}'
+      }
+    ];
+    vi.mocked(backendAdapter.getAllSchemas).mockResolvedValue(dbBSchemas);
+    vi.mocked(backendAdapter.getSchema).mockImplementation(
+      async (id) => dbBSchemas.find((s) => s.id === id)!
+    );
+
+    await resyncSchemaPluginsForDatabaseSwitch();
+
+    // Same id in both databases, but the new database's template must win —
+    // a stale-but-present registration is exactly what the removed
+    // `hasPlugin` early-return in `registerSchemaPlugin` used to block.
+    expect(pluginRegistry.getTitleTemplate('customer')).toBe('{name_b}');
+  });
+
+  it('never unregisters a hardcoded core-type plugin it did not itself register', async () => {
+    // core-plugins.ts registers core types directly against the same
+    // singleton registry — simulate that here without going through
+    // registerSchemaPlugin (which is what keeps `task` out of this module's
+    // own bookkeeping in the first place).
+    pluginRegistry.register({
+      id: 'task',
+      name: 'Task',
+      description: 'Core task type',
+      version: '1.0.0',
+      config: { slashCommands: [], canHaveChildren: true, canBeChild: true }
+    });
+    expect(pluginRegistry.hasPlugin('task')).toBe(true);
+
+    // The new database's custom schema list doesn't include 'task' (core
+    // types never appear there), which is exactly the condition a naive
+    // "unregister anything not in the new list" resync would misuse to drop it.
+    vi.mocked(backendAdapter.getAllSchemas).mockResolvedValue([]);
+
+    await resyncSchemaPluginsForDatabaseSwitch();
+
+    expect(pluginRegistry.hasPlugin('task')).toBe(true);
   });
 });

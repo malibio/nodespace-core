@@ -1038,9 +1038,18 @@ impl SqliteStore {
             bind_values.push(libsql::Value::Text(search_lower));
         }
 
+        // "*" is the codebase-wide wildcard convention for "all types" (see
+        // `ExecuteQueryInput::target_type` and `QueryService::build_query`'s
+        // identical `!= "*"` guard) — filtering for the *literal* node_type
+        // '*' would never match a real row (no stored type name can be '*';
+        // `validate_identifier` reserves it), so a caller-supplied wildcard
+        // must skip the condition entirely rather than add one that can only
+        // ever produce zero rows.
         if let Some(ref nt) = query.node_type {
-            conditions.push(format!("node_type = ?{}", bind_values.len() + 1));
-            bind_values.push(libsql::Value::Text(nt.clone()));
+            if nt != "*" {
+                conditions.push(format!("node_type = ?{}", bind_values.len() + 1));
+                bind_values.push(libsql::Value::Text(nt.clone()));
+            }
         }
 
         // id-scoping (e.g. a collection's members). Build `id IN (…)` and
@@ -3377,6 +3386,74 @@ mod query_nodes_order_and_scoping_tests {
 
         let ids: Vec<String> = nodes.into_iter().map(|n| n.id).collect();
         assert_eq!(ids, vec![matching_id]);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod query_nodes_wildcard_type_tests {
+    use super::*;
+    use crate::models::NodeQuery;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    async fn bare_store() -> Result<(Arc<SqliteStore>, TempDir)> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let store = Arc::new(SqliteStore::new(db_path).await?);
+        Ok((store, temp_dir))
+    }
+
+    async fn make_node(store: &SqliteStore, node_type: &str, content: &str) -> Result<String> {
+        let node = Node::new(node_type.to_string(), content.to_string(), json!({}));
+        let id = node.id.clone();
+        store.create_node(node, None, None).await?;
+        Ok(id)
+    }
+
+    /// A saved query's `node_type: "*"` must return nodes of every type, not
+    /// zero rows — the same "all types" meaning `QueryService::build_query`
+    /// already gives `target_type == "*"` for the agent-facing query engine.
+    #[tokio::test]
+    async fn wildcard_node_type_returns_every_type() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let task_id = make_node(&store, "task", "Buy milk").await?;
+        let text_id = make_node(&store, "text", "Some note").await?;
+        let date_id = make_node(&store, "date", "2026-08-27").await?;
+
+        let nodes = store
+            .query_nodes(NodeQuery {
+                node_type: Some("*".to_string()),
+                limit: Some(50),
+                ..Default::default()
+            })
+            .await?;
+
+        let ids: std::collections::HashSet<_> = nodes.iter().map(|n| n.id.clone()).collect();
+        assert!(ids.contains(&task_id));
+        assert!(ids.contains(&text_id));
+        assert!(ids.contains(&date_id));
+        Ok(())
+    }
+
+    /// A concrete type still filters normally — the wildcard skip must not
+    /// leak into the ordinary, non-"*" path.
+    #[tokio::test]
+    async fn concrete_node_type_still_filters() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let task_id = make_node(&store, "task", "Buy milk").await?;
+        make_node(&store, "text", "Some note").await?;
+
+        let nodes = store
+            .query_nodes(NodeQuery {
+                node_type: Some("task".to_string()),
+                limit: Some(50),
+                ..Default::default()
+            })
+            .await?;
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, task_id);
         Ok(())
     }
 }

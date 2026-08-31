@@ -330,6 +330,16 @@ class BrowserSyncService {
         const normalizedNode = normalizeNodeData(node);
         // Use database source with sse-sync reason to indicate external change via SSE
         sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'sse-sync' }, true);
+        // `nodeUpdated` SSE events never carry `nodeType` (mirrors the Tauri
+        // `node:updated` payload), so a schema's `title_template` edit is only
+        // detectable here, after the full node is fetched. Refresh is a no-op
+        // for anything that isn't a non-core schema. Fire-and-forget: a failure
+        // only leaves that type's title stale.
+        if (normalizedNode.nodeType === 'schema') {
+          registerSchemaPlugin(normalizedNode.id).catch((err) =>
+            log.error('Failed to refresh schema plugin on node event:', err)
+          );
+        }
         log.debug(`${eventType}: updated store for node`, nodeId);
       } else {
         log.warn(`${eventType}: node not found`, nodeId);
