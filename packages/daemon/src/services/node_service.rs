@@ -92,6 +92,17 @@ pub struct NodeServiceImpl {
     /// Process-global embedding scheduler (ADR-053). A live `WatchNodes` stream
     /// marks this database active so its embedding batches take priority.
     scheduler: Arc<EmbeddingScheduler>,
+    /// Cancelled when this database's service set is torn down — idle
+    /// eviction, deliberate close, or daemon shutdown (see
+    /// `DatabaseServices::shutdown`). A live `WatchNodes` stream selects on
+    /// this alongside its event receiver so teardown actually ends the
+    /// stream instead of leaving it a zombie: the stream's own cloned
+    /// `node_service` owns the event sender its receiver reads from, so
+    /// absent this signal `rx.recv()` can never observe the channel as
+    /// closed on its own once the database that opened it is gone. Defaults
+    /// to a token nobody ever cancels, so a caller that doesn't wire one up
+    /// (tests, a directly-constructed instance) is unaffected.
+    shutdown_token: tokio_util::sync::CancellationToken,
 }
 
 impl NodeServiceImpl {
@@ -105,6 +116,7 @@ impl NodeServiceImpl {
             embedding_state,
             database_id: String::new(),
             scheduler,
+            shutdown_token: tokio_util::sync::CancellationToken::new(),
         }
     }
 
@@ -113,6 +125,15 @@ impl NodeServiceImpl {
     /// through the registry; left empty for the single-database Pro daemon.
     pub fn with_database_id(mut self, database_id: String) -> Self {
         self.database_id = database_id;
+        self
+    }
+
+    /// Wire this database's teardown signal (see the `shutdown_token` field's
+    /// doc comment). Set by [`crate::build_database_services`] so every
+    /// `WatchNodes` stream this impl opens ends when the database is
+    /// evicted/closed, instead of surviving as a zombie.
+    pub fn with_shutdown_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.shutdown_token = token;
         self
     }
 
@@ -170,6 +191,30 @@ fn client_id_header<T>(request: &Request<T>) -> Result<Option<String>, Box<Statu
             })
         })
         .transpose()
+}
+
+/// RAII release of a `WatchNodes` stream's scheduler active-database claim
+/// (see `EmbeddingScheduler::clear_active_if`).
+///
+/// Held as a local inside the stream's `async_stream::stream!` generator so
+/// the claim is retracted on EVERY exit path — the loop's own `break`s
+/// (shutdown-token cancellation, `RecvError::Closed`), AND the generator
+/// being dropped without ever reaching a `break` at all, which is exactly
+/// what happens when the client disconnects: `tonic` drops the response
+/// stream, which drops this generator mid-suspension at whatever `.await`
+/// it was parked on. A call placed after the loop instead of in a `Drop`
+/// impl would never run in that case, leaving the claim (and the eviction
+/// immunity it grants — see `EmbeddingScheduler::is_active`) stuck on this
+/// database forever.
+struct ActiveDbGuard {
+    scheduler: Arc<EmbeddingScheduler>,
+    database_id: String,
+}
+
+impl Drop for ActiveDbGuard {
+    fn drop(&mut self) {
+        self.scheduler.clear_active_if(&self.database_id);
+    }
 }
 
 #[tonic::async_trait]
@@ -517,6 +562,7 @@ impl GrpcNodeService for NodeServiceImpl {
             content_contains: req.content_contains,
             title_contains: req.title_contains,
             node_type: req.node_type,
+            order_by: None,
             limit: if req.limit == 0 {
                 None
             } else {
@@ -1619,10 +1665,40 @@ impl GrpcNodeService for NodeServiceImpl {
         let node_service = this.node_service.clone();
         // The database this stream serves (ADR-053) — stamped onto every event.
         let database_id = this.database_id.clone();
+        // Cancelled when this database's service set is torn down (idle
+        // eviction, deliberate close, or daemon shutdown) — see the
+        // `shutdown_token` field's doc comment. Selected against `rx.recv()`
+        // below so the stream actually ends instead of surviving as a zombie:
+        // the stream's own `node_service` clone above owns the event sender
+        // `rx` reads from, so absent this signal `rx.recv()` could never
+        // observe the channel as closed on its own once the database that
+        // opened it is gone — it would just silently receive nothing forever
+        // once that database is evicted and reopened as a fresh instance with
+        // its own bus.
+        let shutdown_token = this.shutdown_token.clone();
+        let scheduler = this.scheduler.clone();
 
         let stream = async_stream::stream! {
+            // Retracts the active-database claim taken above on every exit
+            // path from this generator — see `ActiveDbGuard`'s doc comment.
+            let _active_guard = ActiveDbGuard {
+                scheduler,
+                database_id: database_id.clone(),
+            };
+
             loop {
-                match rx.recv().await {
+                let envelope_result = tokio::select! {
+                    biased;
+                    () = shutdown_token.cancelled() => {
+                        tracing::debug!(
+                            database_id = %database_id,
+                            "WatchNodes stream ending: database service set torn down"
+                        );
+                        break;
+                    }
+                    result = rx.recv() => result,
+                };
+                match envelope_result {
                     Ok(envelope) => {
                         // Same-origin echo suppression (ADR-026 C5 extension):
                         // the daemon is the sole authority on "is this my own
@@ -2940,6 +3016,99 @@ mod tests {
         assert!(
             next_event(&mut alice_stream).await.is_some(),
             "an untagged write must still reach a client-id-tagged subscriber"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // WatchNodes teardown (zombie-stream cleanup + scheduler active-id release)
+    // -----------------------------------------------------------------------
+
+    /// A `WatchNodes` stream must actually END when its database's teardown
+    /// signal fires, not survive as a zombie parked forever on `rx.recv()`.
+    /// This is the exact failure this test guards: the stream's own
+    /// `node_service` clone owns the event sender `rx` reads from, so absent
+    /// the shutdown-token select, cancelling the token would have no effect
+    /// at all on this stream and it would hang — indistinguishable from a
+    /// database that's simply quiet.
+    #[tokio::test]
+    async fn watch_nodes_stream_ends_when_shutdown_token_is_cancelled() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let core_svc = Arc::new(CoreNodeService::new(&mut store).await.unwrap());
+        let shutdown_token = tokio_util::sync::CancellationToken::new();
+        let svc = Arc::new(
+            NodeServiceImpl::new(
+                core_svc,
+                Arc::new(tokio::sync::RwLock::new(None)),
+                Arc::new(EmbeddingScheduler::new()),
+            )
+            .with_database_id("db-a".into())
+            .with_shutdown_token(shutdown_token.clone()),
+        );
+
+        let mut stream = watch_as(&svc, None).await;
+
+        // Simulate the database being torn down (idle eviction, deliberate
+        // close, daemon shutdown) — exactly what `DatabaseServices::shutdown`
+        // does.
+        shutdown_token.cancel();
+
+        let next = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect(
+                "the stream must end promptly once its database is torn down, \
+                 not hang forever as a zombie",
+            );
+        assert!(
+            next.is_none(),
+            "a cancelled shutdown token must end the WatchNodes stream cleanly (no more items)"
+        );
+    }
+
+    /// Opening a `WatchNodes` stream marks its database active (ADR-053); that
+    /// claim must be retracted once the stream ends — here, by the caller
+    /// simply dropping it (e.g. a client disconnect), which is the path a
+    /// `break` at the bottom of the loop can never cover. Without the RAII
+    /// guard, a database that silently lost its only stream would stay
+    /// scheduler-active, and therefore idle-eviction-immune, forever.
+    #[tokio::test]
+    async fn watch_nodes_clears_active_database_when_stream_is_dropped() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await.unwrap());
+        let core_svc = Arc::new(CoreNodeService::new(&mut store).await.unwrap());
+        let scheduler = Arc::new(EmbeddingScheduler::new());
+        let svc = Arc::new(
+            NodeServiceImpl::new(
+                core_svc,
+                Arc::new(tokio::sync::RwLock::new(None)),
+                scheduler.clone(),
+            )
+            .with_database_id("db-a".into()),
+        );
+
+        let mut stream = watch_as(&svc, None).await;
+        assert!(
+            scheduler.is_active("db-a"),
+            "opening the stream must mark its database active"
+        );
+
+        // Drive the stream generator to its first suspension point (parked in
+        // the `tokio::select!`) so the RAII guard inside it actually gets
+        // constructed — an unpolled `async_stream::stream!` never runs any of
+        // its body, active-guard construction included.
+        assert!(
+            next_event(&mut stream).await.is_none(),
+            "no write happened; nothing should have arrived"
+        );
+
+        drop(stream);
+
+        assert!(
+            !scheduler.is_active("db-a"),
+            "dropping the stream must retract its active-database claim, not leave the \
+             database stuck eviction-immune forever"
         );
     }
 }

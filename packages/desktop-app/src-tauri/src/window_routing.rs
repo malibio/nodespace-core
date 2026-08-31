@@ -34,6 +34,8 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 
+use crate::window_state::WindowGeometry;
+
 /// Tauri-managed state: maps an open window's label to the database id it is
 /// currently pinned to. See the module doc for why this is the source of
 /// truth for routing rather than the literal window label.
@@ -226,6 +228,101 @@ pub fn resolve_focus_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWin
     windows.get(&label).cloned()
 }
 
+/// A monitor's bounds in physical pixels, decoupled from `tauri::Monitor` so
+/// [`geometry_is_onscreen`]/[`resolve_restore_geometry`] below are
+/// unit-testable without a mock app or a real display.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonitorBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl From<&tauri::Monitor> for MonitorBounds {
+    fn from(monitor: &tauri::Monitor) -> Self {
+        let position = monitor.position();
+        let size = monitor.size();
+        Self {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        }
+    }
+}
+
+/// How much of a restored window's bounds must land on a currently
+/// connected monitor, in each axis, for its saved position to count as
+/// on-screen. Small enough that a window mostly off one edge of its
+/// original monitor — a legitimate, if awkward, position the user chose —
+/// is still accepted; large enough that a one-pixel sliver (not usable —
+/// there's nothing there to grab and drag back) doesn't count.
+const MIN_ONSCREEN_OVERLAP_PX: i32 = 50;
+
+/// Whether `geometry`'s saved position would place at least
+/// [`MIN_ONSCREEN_OVERLAP_PX`] of the restored window on ANY of `monitors`
+/// — i.e. whether the position is still usable against the CURRENT display
+/// layout, which can differ from whatever was connected when the position
+/// was saved (a monitor unplugged, a laptop undocked, a resolution change).
+/// [`WindowGeometry::is_plausible`] only guards a degenerate saved SIZE;
+/// this is the separate check for a saved POSITION that is well-formed but
+/// now points at a monitor that no longer exists.
+///
+/// Fails open (returns `true`) when `monitors` is empty — no monitor
+/// information at all is a query failure, not evidence the position is
+/// off-screen, so every restore should not be forced through the fallback
+/// path on a query hiccup. `geometry`'s `width`/`height` are inner-size
+/// pixels (see [`WindowGeometry`]'s doc) checked against outer monitor
+/// bounds — a deliberately coarse approximation, since a decoration
+/// height's worth of slack does not change whether a window is roughly on
+/// or off screen, which is all this guards against.
+pub fn geometry_is_onscreen(geometry: &WindowGeometry, monitors: &[MonitorBounds]) -> bool {
+    if monitors.is_empty() {
+        return true;
+    }
+    monitors.iter().any(|m| {
+        let overlap_w =
+            (geometry.x + geometry.width as i32).min(m.x + m.width as i32) - geometry.x.max(m.x);
+        let overlap_h =
+            (geometry.y + geometry.height as i32).min(m.y + m.height as i32) - geometry.y.max(m.y);
+        overlap_w >= MIN_ONSCREEN_OVERLAP_PX && overlap_h >= MIN_ONSCREEN_OVERLAP_PX
+    })
+}
+
+/// `geometry` re-centered on `monitor`, keeping its saved size — the
+/// fallback [`resolve_restore_geometry`] applies when the saved position is
+/// off-screen against the current monitor layout, so the window is
+/// recoverable without the user having to plug the old monitor back in or
+/// hand-edit the state file.
+fn centered_on(geometry: &WindowGeometry, monitor: &MonitorBounds) -> WindowGeometry {
+    WindowGeometry {
+        width: geometry.width,
+        height: geometry.height,
+        x: monitor.x + (monitor.width as i32 - geometry.width as i32) / 2,
+        y: monitor.y + (monitor.height as i32 - geometry.height as i32) / 2,
+    }
+}
+
+/// The geometry [`pin_window_database`] should actually restore: `geometry`
+/// unchanged when [`geometry_is_onscreen`], otherwise `geometry` re-centered
+/// on `primary` (falling back to `monitors`'s first entry when the primary
+/// monitor itself couldn't be identified, and to `geometry` unchanged when
+/// no monitor at all is known — nothing to center on).
+pub fn resolve_restore_geometry(
+    geometry: WindowGeometry,
+    monitors: &[MonitorBounds],
+    primary: Option<MonitorBounds>,
+) -> WindowGeometry {
+    if geometry_is_onscreen(&geometry, monitors) {
+        return geometry;
+    }
+    match primary.or_else(|| monitors.first().copied()) {
+        Some(fallback_monitor) => centered_on(&geometry, &fallback_monitor),
+        None => geometry,
+    }
+}
+
 /// Declare (or update) which database `window` is showing. Called by the
 /// frontend once `databaseStore` resolves its active database — on initial
 /// load and on every `switchTo` — so [`WindowDatabaseRegistry`] reflects
@@ -239,7 +336,10 @@ pub fn resolve_focus_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWin
 /// [`WindowGeometry::is_plausible`] (e.g. a degenerate `0x0` that a corrupt
 /// write or a future bug could produce) is treated as if nothing were saved
 /// — applying it directly could leave the window invisible or unusable, with
-/// no in-app way to recover its size short of deleting the state file.
+/// no in-app way to recover its size short of deleting the state file. A
+/// plausible size whose saved POSITION is off-screen against the current
+/// monitor layout (see [`resolve_restore_geometry`]) is re-centered on the
+/// primary monitor instead of applied as-is, for the same reason.
 #[tauri::command]
 pub async fn pin_window_database(
     window: tauri::WebviewWindow,
@@ -256,14 +356,35 @@ pub async fn pin_window_database(
             if !geometry.is_plausible() {
                 tracing::warn!(?geometry, "ignoring implausible saved window geometry");
             } else {
-                if let Err(e) =
-                    window.set_size(tauri::PhysicalSize::new(geometry.width, geometry.height))
-                {
+                let monitors: Vec<MonitorBounds> = window
+                    .available_monitors()
+                    .map(|monitors| monitors.iter().map(MonitorBounds::from).collect())
+                    .unwrap_or_default();
+                let primary = window
+                    .primary_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|m| MonitorBounds::from(&m));
+                let restore_geometry = resolve_restore_geometry(geometry, &monitors, primary);
+                if restore_geometry != geometry {
+                    tracing::warn!(
+                        saved = ?geometry,
+                        restoring = ?restore_geometry,
+                        "saved window position is off-screen against the current monitor \
+                         layout; centering on the primary monitor instead"
+                    );
+                }
+
+                if let Err(e) = window.set_size(tauri::PhysicalSize::new(
+                    restore_geometry.width,
+                    restore_geometry.height,
+                )) {
                     tracing::warn!(error = %e, "failed to restore saved window size");
                 }
-                if let Err(e) =
-                    window.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y))
-                {
+                if let Err(e) = window.set_position(tauri::PhysicalPosition::new(
+                    restore_geometry.x,
+                    restore_geometry.y,
+                )) {
                     tracing::warn!(error = %e, "failed to restore saved window position");
                 }
             }
@@ -502,5 +623,119 @@ mod tests {
         // No windows exist at all — must be a harmless no-op, not a panic.
         emit_routed(&handle, "test-event", "payload", Some("db-nowhere"));
         emit_routed(&handle, "test-event", "payload", None);
+    }
+
+    // --- geometry_is_onscreen / resolve_restore_geometry (#2205) ---
+
+    fn geom(width: u32, height: u32, x: i32, y: i32) -> WindowGeometry {
+        WindowGeometry {
+            width,
+            height,
+            x,
+            y,
+        }
+    }
+
+    fn monitor(x: i32, y: i32, width: u32, height: u32) -> MonitorBounds {
+        MonitorBounds {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_position_fully_within_a_current_monitor_is_onscreen() {
+        let g = geom(1200, 800, 100, 100);
+        let monitors = [monitor(0, 0, 1920, 1080)];
+        assert!(geometry_is_onscreen(&g, &monitors));
+    }
+
+    #[test]
+    fn a_position_on_a_disconnected_monitor_is_not_onscreen() {
+        // Saved while an external display sat left of the primary
+        // (x = -1920); that display has since been unplugged, leaving only
+        // the primary at the origin.
+        let g = geom(1200, 800, -1920, 0);
+        let monitors = [monitor(0, 0, 1920, 1080)];
+        assert!(!geometry_is_onscreen(&g, &monitors));
+    }
+
+    #[test]
+    fn a_position_matching_one_of_several_monitors_is_onscreen() {
+        let g = geom(1200, 800, -1920, 0);
+        let monitors = [monitor(0, 0, 1920, 1080), monitor(-1920, 0, 1920, 1080)];
+        assert!(geometry_is_onscreen(&g, &monitors));
+    }
+
+    #[test]
+    fn only_a_sliver_of_overlap_does_not_count_as_onscreen() {
+        // Only the last few pixels of the window's left edge touch the
+        // monitor — not enough to be usable.
+        let g = geom(1200, 800, 1910, 0);
+        let monitors = [monitor(0, 0, 1920, 1080)];
+        assert!(!geometry_is_onscreen(&g, &monitors));
+    }
+
+    #[test]
+    fn no_monitor_information_fails_open_rather_than_forcing_the_fallback() {
+        let g = geom(1200, 800, -9999, -9999);
+        assert!(geometry_is_onscreen(&g, &[]));
+    }
+
+    #[test]
+    fn resolve_restore_geometry_leaves_an_onscreen_geometry_unchanged() {
+        let g = geom(1200, 800, 100, 100);
+        let monitors = [monitor(0, 0, 1920, 1080)];
+        assert_eq!(resolve_restore_geometry(g, &monitors, Some(monitors[0])), g);
+    }
+
+    #[test]
+    fn resolve_restore_geometry_centers_an_offscreen_geometry_on_the_primary_monitor() {
+        let g = geom(1200, 800, -1920, 0); // saved on a now-disconnected monitor
+        let primary = monitor(0, 0, 1920, 1080);
+        let monitors = [primary];
+
+        let restored = resolve_restore_geometry(g, &monitors, Some(primary));
+
+        // Size is preserved; position is centered on the primary monitor.
+        assert_eq!(restored.width, 1200);
+        assert_eq!(restored.height, 800);
+        assert_eq!(restored.x, (1920 - 1200) / 2);
+        assert_eq!(restored.y, (1080 - 800) / 2);
+    }
+
+    #[test]
+    fn resolve_restore_geometry_falls_back_to_the_first_monitor_when_no_primary_is_identified() {
+        let g = geom(1200, 800, 9999, 9999); // off every monitor below
+        let only_monitor = monitor(0, 0, 1920, 1080);
+        let monitors = [only_monitor];
+
+        let restored = resolve_restore_geometry(g, &monitors, None);
+
+        assert_eq!(restored.x, (1920 - 1200) / 2);
+        assert_eq!(restored.y, (1080 - 800) / 2);
+    }
+
+    #[test]
+    fn resolve_restore_geometry_applies_the_saved_geometry_unchanged_when_no_monitor_is_known_at_all(
+    ) {
+        // Nothing to center on — apply as saved rather than lose the
+        // position entirely (matches the fail-open behavior of
+        // `geometry_is_onscreen` with no monitor data).
+        let g = geom(1200, 800, -9999, -9999);
+        assert_eq!(resolve_restore_geometry(g, &[], None), g);
+    }
+
+    #[test]
+    fn centered_on_centers_within_the_monitor_bounds_including_a_nonzero_origin() {
+        let g = geom(800, 600, 0, 0);
+        let m = monitor(-1920, 0, 1920, 1080);
+        let centered = centered_on(&g, &m);
+        assert_eq!(centered.x, -1920 + (1920 - 800) / 2);
+        assert_eq!(centered.y, (1080 - 600) / 2);
+        assert_eq!(centered.width, 800);
+        assert_eq!(centered.height, 600);
     }
 }

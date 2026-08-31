@@ -482,6 +482,15 @@ impl DatabaseManager {
     /// the file must already exist — a registry entry pointing at nothing would
     /// report [`DatabaseStatus::Missing`] forever. Use
     /// [`DatabaseManager::create`] for a new database.
+    ///
+    /// Deduplicates by canonical path: if an existing entry already resolves
+    /// to the same file (a literal re-registration, a different relative
+    /// path, or a symlink to the same target), that entry is returned as-is
+    /// instead of minting a second one. Without this, one SQLite file could
+    /// be served as two independent open databases — two `SqliteStore`/
+    /// `NodeService`/event-bus/embedding-processor graphs racing each other
+    /// on shared on-disk state, with writes through one id invisible to the
+    /// other's `WatchNodes` subscribers.
     pub async fn register(&self, path: PathBuf) -> Result<DatabaseEntry> {
         if !path.exists() {
             return Err(anyhow!(
@@ -489,13 +498,36 @@ impl DatabaseManager {
                 path.display()
             ));
         }
+        // Safe to canonicalize now — `path.exists()` above already guarantees
+        // this resolves; a relative path or a symlink is normalized to the
+        // same absolute, symlink-resolved form an already-registered entry
+        // for the same underlying file would also resolve to.
+        let canonical = tokio::fs::canonicalize(&path)
+            .await
+            .with_context(|| format!("failed to resolve path {}", path.display()))?;
+
+        // Hold the write lock across the duplicate check AND the insert
+        // below — see `insert_entry_locked`'s doc comment for why a
+        // read-then-separately-acquired-write pattern would leave a race.
+        let registry = self.registry.write().await;
+        for entry in &registry.databases {
+            // An existing entry whose file no longer exists (status
+            // `Missing`) can't canonicalize and is skipped — it can't be the
+            // same file as `path`, which does exist.
+            if let Ok(existing_canonical) = tokio::fs::canonicalize(&entry.path).await {
+                if existing_canonical == canonical {
+                    return Ok(entry.clone());
+                }
+            }
+        }
+
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
             .map(str::to_owned)
             .unwrap_or_else(|| "database".to_owned());
         let id = DatabaseId::generate();
-        self.insert_entry(id, name, path).await
+        self.insert_entry_locked(registry, id, name, path).await
     }
 
     /// Compute a candidate registry, persist it, and only then splice it into
@@ -1044,6 +1076,26 @@ impl DatabaseManager {
         name: String,
         path: PathBuf,
     ) -> Result<DatabaseEntry> {
+        let registry = self.registry.write().await;
+        self.insert_entry_locked(registry, id, name, path).await
+    }
+
+    /// Same as [`Self::insert_entry`], but taking a write guard the caller
+    /// already holds instead of acquiring its own.
+    ///
+    /// [`Self::register`] needs this: it must decide whether to insert a new
+    /// entry based on a check (does any existing entry already resolve to
+    /// this file?) that has to hold the write lock continuously through the
+    /// insert, otherwise two concurrent `register` calls for the same path
+    /// could both pass the check before either has inserted, minting two
+    /// registry entries over one file anyway.
+    async fn insert_entry_locked(
+        &self,
+        registry: RwLockWriteGuard<'_, Registry>,
+        id: DatabaseId,
+        name: String,
+        path: PathBuf,
+    ) -> Result<DatabaseEntry> {
         let entry = DatabaseEntry {
             id: id.clone(),
             name,
@@ -1053,7 +1105,6 @@ impl DatabaseManager {
             bound_tenant_schema: None,
             bound_tenant_collection: None,
         };
-        let registry = self.registry.write().await;
         self.mutate_and_save(registry, {
             let entry = entry.clone();
             move |registry| {
@@ -1794,6 +1845,83 @@ mod tests {
         assert_eq!(snap.databases[0].status, DatabaseStatus::Closed);
         assert_eq!(snap.databases[0].entry.name, "present");
         assert!(snap.databases[0].is_default);
+    }
+
+    /// Registering the exact same path twice must not create a second
+    /// registry entry over the same file — the failure mode this guards
+    /// against is two independent open databases (two `SqliteStore`/
+    /// `NodeService`/event-bus/embedding-processor graphs) racing each other
+    /// on one underlying SQLite file. `register` is idempotent instead:
+    /// re-registering an already-registered file returns the SAME entry.
+    #[tokio::test]
+    async fn register_deduplicates_a_literal_repeat_of_the_same_path() {
+        let (mgr, dir, _registry_path) = temp_manager().await;
+
+        let present = dir.path().join("present.db");
+        std::fs::write(&present, b"").unwrap();
+
+        let first = mgr.register(present.clone()).await.unwrap();
+        let second = mgr.register(present).await.unwrap();
+
+        assert_eq!(
+            first.id, second.id,
+            "registering the same file twice must return the SAME registry entry, not mint a \
+             fresh id for a second one"
+        );
+        assert_eq!(
+            mgr.list().await.databases.len(),
+            1,
+            "the registry must hold exactly one entry for one underlying file"
+        );
+    }
+
+    /// Same guarantee as the literal-repeat case above, but reached through a
+    /// DIFFERENT string path that still resolves to the same underlying file
+    /// (relative vs. absolute) — proving the dedup check compares canonical
+    /// paths, not raw path strings, so a caller can't route around it with an
+    /// equivalent-but-differently-spelled path.
+    #[tokio::test]
+    async fn register_deduplicates_by_canonical_path_not_literal_string() {
+        let (mgr, dir, _registry_path) = temp_manager().await;
+
+        let present = dir.path().join("present.db");
+        std::fs::write(&present, b"").unwrap();
+
+        let canonical = tokio::fs::canonicalize(&present).await.unwrap();
+        let first = mgr.register(canonical).await.unwrap();
+
+        // A `./`-relative path is a different string but the same file.
+        let relative = dir.path().join(".").join("present.db");
+        let second = mgr.register(relative).await.unwrap();
+
+        assert_eq!(
+            first.id, second.id,
+            "two different (but equivalent) path spellings for the same file must dedupe to \
+             the same registry entry"
+        );
+        assert_eq!(mgr.list().await.databases.len(), 1);
+    }
+
+    /// Registering two genuinely DIFFERENT files must still create two
+    /// separate entries — the dedup check must not over-match and refuse
+    /// legitimate multi-database registration.
+    #[tokio::test]
+    async fn register_does_not_deduplicate_different_files() {
+        let (mgr, dir, _registry_path) = temp_manager().await;
+
+        let first_path = dir.path().join("first.db");
+        let second_path = dir.path().join("second.db");
+        std::fs::write(&first_path, b"").unwrap();
+        std::fs::write(&second_path, b"").unwrap();
+
+        let first = mgr.register(first_path).await.unwrap();
+        let second = mgr.register(second_path).await.unwrap();
+
+        assert_ne!(
+            first.id, second.id,
+            "two distinct files must get two distinct registry entries"
+        );
+        assert_eq!(mgr.list().await.databases.len(), 2);
     }
 
     #[tokio::test]

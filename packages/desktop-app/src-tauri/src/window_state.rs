@@ -40,10 +40,17 @@ const WINDOW_STATE_FILE: &str = "window_state.json";
 /// a save, only to make concurrent saves correct rather than racy.
 static SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// One window's saved outer size + position, in physical pixels — the same
-/// units `WindowEvent::Resized`/`Moved` and `WebviewWindow::outer_size`/
-/// `outer_position`/`set_size`/`set_position` use, so no logical-vs-physical
-/// (DPI) conversion is needed on either side of the round trip.
+/// One window's saved content (inner) size + frame (outer) position, in
+/// physical pixels — no logical-vs-physical (DPI) conversion is needed on
+/// either side of the round trip. Size and position are deliberately
+/// different halves of the inner/outer distinction: `width`/`height` are
+/// captured via `WebviewWindow::inner_size()` and restored via
+/// `set_size()`, which `tauri-runtime-wry` dispatches to `Window::
+/// set_inner_size` — so both sides of that round trip must be inner, not
+/// outer, or every restore inflates the window by the decoration height.
+/// `x`/`y` are captured via `outer_position()` and restored via
+/// `set_position()` (-> `Window::set_outer_position`), so both sides of
+/// that round trip are outer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowGeometry {
     pub width: u32,
@@ -75,13 +82,26 @@ impl WindowGeometry {
 type GeometryMap = HashMap<String, WindowGeometry>;
 
 async fn load_all_at(dir: &Path) -> GeometryMap {
+    try_load_all_at(dir).await.unwrap_or_default()
+}
+
+/// Like [`load_all_at`], but distinguishes the file genuinely not existing
+/// yet (nothing has ever been saved — an expected, harmless empty-state
+/// case) from any OTHER read failure: EMFILE under fd pressure (e.g. many
+/// active PTY/agent sessions holding descriptors open), a transient EPERM
+/// from an AV scanner briefly locking the file on Windows, and the like.
+///
+/// [`save_geometry_at`]'s read-modify-write needs that distinction —
+/// [`load_geometry_at`] (a pure read, never destructive) does not, and
+/// keeps collapsing both cases to "nothing saved" via [`load_all_at`]
+/// above, same as before.
+async fn try_load_all_at(dir: &Path) -> std::io::Result<GeometryMap> {
     let path = dir.join(WINDOW_STATE_FILE);
-    let Ok(contents) = fs::read_to_string(&path).await else {
-        // Missing file (never saved yet) or unreadable — either way, no
-        // saved state is not an error, just an empty map.
-        return GeometryMap::default();
-    };
-    serde_json::from_str(&contents).unwrap_or_default()
+    match fs::read_to_string(&path).await {
+        Ok(contents) => Ok(serde_json::from_str(&contents).unwrap_or_default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(GeometryMap::default()),
+        Err(e) => Err(e),
+    }
 }
 
 /// The database's saved geometry, if any was ever recorded for it.
@@ -93,6 +113,15 @@ pub async fn load_geometry_at(dir: &Path, database_id: &str) -> Option<WindowGeo
 /// shared per-database map so windows on different databases never clobber
 /// each other's entries — serialized by [`SAVE_LOCK`] so concurrent callers
 /// can't race that read-modify-write cycle or the underlying atomic write.
+///
+/// The read half of that cycle refuses to proceed on a genuine (non-missing)
+/// read failure rather than falling back to an empty map the way a pure
+/// read does: silently treating a transient failure as "nothing was ever
+/// saved" would insert only `database_id`'s entry into that empty map and
+/// atomically rename it over the real file, discarding every other
+/// database's saved geometry for good. A file that simply doesn't exist yet
+/// is not such a failure — the very first save for a fresh install must
+/// still succeed and create it.
 pub async fn save_geometry_at(
     dir: &Path,
     database_id: &str,
@@ -100,7 +129,12 @@ pub async fn save_geometry_at(
 ) -> Result<(), String> {
     let _guard = SAVE_LOCK.lock().await;
 
-    let mut all = load_all_at(dir).await;
+    let mut all = try_load_all_at(dir).await.map_err(|e| {
+        format!(
+            "refusing to save window geometry: {WINDOW_STATE_FILE} could not be read ({e}) — \
+             saving now would silently discard every other database's saved geometry"
+        )
+    })?;
     all.insert(database_id.to_string(), geometry);
 
     atomic_file::write_json(dir, WINDOW_STATE_FILE, &all).await
@@ -216,6 +250,85 @@ mod tests {
             .await
             .expect("write failed");
         assert_eq!(load_geometry_at(dir.path(), "db-1").await, None);
+    }
+
+    /// A transient, non-missing read failure (EMFILE under fd pressure,
+    /// EPERM from an AV scanner briefly locking the file on Windows) must
+    /// refuse the save outright rather than silently treating it as "no
+    /// saved state" and clobbering the real file with a single-entry map —
+    /// discarding every other database's saved geometry.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_transient_non_missing_read_failure_refuses_to_save_rather_than_wiping_the_file() {
+        // SAFETY: geteuid() is always safe to call and takes no arguments.
+        if unsafe { libc::geteuid() } == 0 {
+            // Root ignores Unix permission bits, so the chmod(0) below
+            // wouldn't actually induce a read failure under a root test
+            // runner — skip rather than false-fail.
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let geom_a = WindowGeometry {
+            width: 800,
+            height: 600,
+            x: 0,
+            y: 0,
+        };
+        let geom_b = WindowGeometry {
+            width: 1024,
+            height: 768,
+            x: 10,
+            y: 10,
+        };
+        save_geometry_at(dir.path(), "db-a", geom_a)
+            .await
+            .expect("save a failed");
+        save_geometry_at(dir.path(), "db-b", geom_b)
+            .await
+            .expect("save b failed");
+
+        let state_path = dir.path().join(WINDOW_STATE_FILE);
+        // Reproduce a real transient read failure with a Unix permission
+        // bit: `rename` — what the write side of a save uses, via
+        // `atomic_file::write_json` — only needs write+execute permission
+        // on the *directory*, not read permission on the target file being
+        // replaced, so this blocks reads without blocking a would-be
+        // clobbering write. That gap is exactly what the fix closes.
+        fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o000))
+            .await
+            .expect("chmod failed");
+
+        let result = save_geometry_at(
+            dir.path(),
+            "db-c",
+            WindowGeometry {
+                width: 640,
+                height: 480,
+                x: 0,
+                y: 0,
+            },
+        )
+        .await;
+
+        // Restore permissions before any assertion can bail the test out
+        // early and leave an unreadable temp file behind.
+        fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o644))
+            .await
+            .expect("chmod restore failed");
+
+        assert!(
+            result.is_err(),
+            "a non-missing read failure must refuse to save, not silently succeed"
+        );
+        // Both earlier databases' data must have survived completely
+        // untouched — proving the refusal happened before any write was
+        // attempted, not after a write that merely happened to fail too.
+        assert_eq!(load_geometry_at(dir.path(), "db-a").await, Some(geom_a));
+        assert_eq!(load_geometry_at(dir.path(), "db-b").await, Some(geom_b));
+        assert_eq!(load_geometry_at(dir.path(), "db-c").await, None);
     }
 
     #[tokio::test]

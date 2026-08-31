@@ -19,7 +19,7 @@
 #   APPLE_TEAM_ID              — 10-char team ID
 #
 # Optional:
-#   PKG_VERSION                — defaults to Cargo workspace version
+#   PKG_VERSION                — defaults to the canonical app version (tauri.conf.json)
 #   SKIP_NOTARIZATION          — set to "1" to skip notarytool (local testing)
 
 set -euo pipefail
@@ -36,12 +36,36 @@ BUILD_DIR="${REPO_ROOT}/target/pkg-build"
 PAYLOAD_ROOT="${BUILD_DIR}/payload"
 OUTPUT_DIR="${REPO_ROOT}/target/pkg-output"
 
-# Derive version from Cargo.toml if not overridden
+# ---------------------------------------------------------------------------
+# Prereqs check
+# ---------------------------------------------------------------------------
+for tool in jq pkgbuild productbuild codesign xcrun; do
+    if ! command -v "${tool}" &>/dev/null; then
+        echo "error: '${tool}' not found — install Xcode Command Line Tools" >&2
+        exit 1
+    fi
+done
+
+# --- BEGIN pkg-version-derivation (verified by scripts/build-pkg-version.test.ts) ---
+# Derive version from the canonical app-version source if not overridden. tauri.conf.json
+# is the file scripts/check-version-sync.ts treats as canonical, and the one
+# `release:bump` (scripts/release.ts) keeps in sync on every version bump.
+#
+# This used to read packages/daemon/Cargo.toml instead — a file `release:bump` never
+# touches — so the .pkg's filename (and its own pkgbuild/productbuild version metadata)
+# silently drifted to a stale hardcoded value across releases while every other release
+# artifact correctly tracked the bumped version (nodespace-core#2310).
 if [[ -z "${PKG_VERSION:-}" ]]; then
-    PKG_VERSION=$(grep '^version' "${REPO_ROOT}/packages/daemon/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+    TAURI_CONFIG="${REPO_ROOT}/packages/desktop-app/src-tauri/tauri.conf.json"
+    PKG_VERSION=$(jq -r '.version' "${TAURI_CONFIG}")
+    if [[ -z "${PKG_VERSION}" || "${PKG_VERSION}" == "null" ]]; then
+        echo "error: could not read .version from ${TAURI_CONFIG}" >&2
+        exit 1
+    fi
 fi
 
 PKG_NAME="NodeSpace_${PKG_VERSION}_${TRIPLE}.pkg"
+# --- END pkg-version-derivation ---
 COMPONENT_PKG="${BUILD_DIR}/NodeSpace-component.pkg"
 FINAL_PKG="${OUTPUT_DIR}/${PKG_NAME}"
 
@@ -49,16 +73,6 @@ echo "==> Building NodeSpace .pkg installer"
 echo "    Version : ${PKG_VERSION}"
 echo "    Triple  : ${TRIPLE}"
 echo "    Output  : ${FINAL_PKG}"
-
-# ---------------------------------------------------------------------------
-# Prereqs check
-# ---------------------------------------------------------------------------
-for tool in pkgbuild productbuild codesign xcrun; do
-    if ! command -v "${tool}" &>/dev/null; then
-        echo "error: '${tool}' not found — install Xcode Command Line Tools" >&2
-        exit 1
-    fi
-done
 
 if [[ ! -d "${TAURI_APP_PATH}" ]]; then
     echo "error: NodeSpace.app not found at ${TAURI_APP_PATH}" >&2

@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 // nodespace-core adds the core-only types below (NodeFilter, NodeRelationship, etc.)
 // that are not part of the shared wire surface.
 pub use nodespace_types::{
-    DeleteResult, Node, NodeQuery, NodeReference, NodeUpdate, ValidationError,
+    DeleteResult, Node, NodeQuery, NodeReference, NodeUpdate, OrderBy, ValidationError,
 };
 
 /// Direction to traverse an edge relative to a node
@@ -221,27 +221,6 @@ impl PropertyFilter {
             value,
         })
     }
-}
-
-/// Sort order specification for query results
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum OrderBy {
-    /// Sort by creation time, oldest first
-    CreatedAsc,
-    /// Sort by creation time, newest first
-    CreatedDesc,
-    /// Sort by modification time, oldest first
-    ModifiedAsc,
-    /// Sort by modification time, newest first
-    ModifiedDesc,
-    /// Sort by content alphabetically, A-Z
-    ContentAsc,
-    /// Sort by content alphabetically, Z-A
-    ContentDesc,
-    /// Sort by node type alphabetically
-    NodeTypeAsc,
-    /// Sort by node type reverse alphabetically
-    NodeTypeDesc,
 }
 
 /// Node filter for query operations

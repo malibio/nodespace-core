@@ -233,6 +233,56 @@ class DatabaseStore {
   }
 
   /**
+   * Refresh just the registry list (id/name/status/etc for every registered
+   * database), without `load()`'s `activeDatabaseId`/`loading`/`error`
+   * side effects. Used by `switchTo`'s unregistered-id guard as a
+   * last-resort re-check before rejecting an id: the frontend's `databases`
+   * list is loaded once at boot (and only otherwise refreshed by an
+   * explicit registry mutation here in this store), so it can be stale
+   * relative to the daemon's registry — e.g. a database registered via the
+   * CLI after boot, whose tray submenu entry (populated from the daemon,
+   * which live-refreshes it) is legitimately switchable even though this
+   * store has never heard of it yet.
+   */
+  private async refreshDatabaseList(): Promise<void> {
+    if (!isTauriBridgePresent()) return;
+    try {
+      const listing = await invoke<DatabaseListing>('list_databases');
+      this.databases = listing.databases;
+      this.defaultDatabaseId = listing.defaultDatabaseId || null;
+    } catch (err) {
+      log.debug('Failed to refresh database registry', err);
+    }
+  }
+
+  /**
+   * Pull-based fallback for a tray database pick that arrived before this
+   * window's `tray:select-database` listener finished registering. Tauri
+   * does not buffer or replay an event emitted while it has zero current
+   * listeners, and the listener only exists once `app-shell.svelte`'s
+   * `listen()` IPC round-trip has resolved — a relaunch in that narrow
+   * window (webview still booting) would otherwise focus the window but
+   * silently drop the switch, since the Rust side's `emit_to` call reaches
+   * nobody. The backend stashes the id for exactly this gap
+   * (`take_pending_tray_database_selection`); call this once, right after
+   * the `tray:select-database` listener's `listen()` promise resolves, so a
+   * pick that raced boot still lands. A no-op when nothing was stashed —
+   * `switchTo` is also idempotent against a value the live event happened
+   * to deliver in addition to (or instead of) this pull.
+   */
+  async applyPendingTraySelection(): Promise<void> {
+    if (!isTauriBridgePresent()) return;
+    try {
+      const pendingId = await invoke<string | null>('take_pending_tray_database_selection');
+      if (pendingId) {
+        await this.switchTo(pendingId);
+      }
+    } catch (err) {
+      log.debug('Failed to read pending tray database selection', err);
+    }
+  }
+
+  /**
    * The database this launch was told to open, if any.
    *
    * Set by the daemon tray when the user picks a database from its submenu.
@@ -265,12 +315,25 @@ class DatabaseStore {
    * per-request `NOT_FOUND` ever surfaced, leaving the user on a blank
    * workspace pointed at nothing with no rollback. Mirrors the `registered()`
    * guard `load()` already applies to this exact same untrusted input.
+   *
+   * An id missing from `this.databases` is re-checked against a fresh
+   * registry pull before being rejected outright: that list is loaded once
+   * at boot and otherwise only refreshed by a mutation made through this
+   * store, so it goes stale the moment a database is registered by another
+   * path (the shipped CLI, another window) — while the daemon tray's
+   * submenu live-refreshes from the registry directly and legitimately
+   * offers ids this store hasn't heard of yet. The same gap catches a tray
+   * pick that arrives after this listener registers but before the very
+   * first `load()` resolves, when `databases` is still `[]`.
    */
   async switchTo(id: string): Promise<void> {
     if (id === this.activeDatabaseId) return;
     if (!this.databases.some((db) => db.id === id)) {
-      log.warn('switchTo called with an unregistered database id; ignoring', { id });
-      return;
+      await this.refreshDatabaseList();
+      if (!this.databases.some((db) => db.id === id)) {
+        log.warn('switchTo called with an unregistered database id; ignoring', { id });
+        return;
+      }
     }
     this.error = null;
     const seq = ++this.switchSeq;
