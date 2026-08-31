@@ -341,27 +341,54 @@ impl SqliteStore {
 
         let now = Utc::now().to_rfc3339();
 
-        // One guard across all three statements: an update spread over several
-        // `execute`s must not interleave with another writer's, and must not be
-        // absorbed into another task's open transaction.
+        // One guard across the whole update, AND every statement below runs
+        // inside one SQL transaction (not just under the guard): the guard alone
+        // only serializes this store's own callers against each other — it does
+        // nothing for a concurrent READER, which runs on a separate pooled
+        // connection (see `read()`) that isn't gated by this mutex at all. Absent
+        // a real transaction, each `execute` below autocommits the instant it
+        // runs, so a reader landing between them (or a crash / driver error
+        // landing between them) would see — or durably persist — content and
+        // properties already updated but title or lifecycle_status still stale.
+        // Wrapping them in `db.transaction()` + `commit()` makes the whole
+        // update atomic and invisible to readers until it lands as one unit; an
+        // error on any statement drops `tx` without committing, which rolls the
+        // whole thing back rather than leaving a half-updated row.
         let db = self.write().await;
+        let tx = db
+            .transaction()
+            .await
+            .context("Failed to begin update_node transaction")?;
 
         if let Some(ref props) = properties_update {
             let props_json =
                 serde_json::to_string(props).context("Failed to serialize properties")?;
-            db.execute(
-                "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, version = version + 1, modified_at = ?4 WHERE id = ?5",
-                libsql::params![updated_content.clone(), updated_node_type.clone(), props_json, now.clone(), id.to_string()],
-            ).await.context("Failed to update node")?;
+            tx.execute(
+                "UPDATE node SET content = ?1, node_type = ?2, properties = ?3 WHERE id = ?4",
+                libsql::params![
+                    updated_content.clone(),
+                    updated_node_type.clone(),
+                    props_json,
+                    id.to_string()
+                ],
+            )
+            .await
+            .context("Failed to update node")?;
         } else {
-            db.execute(
-                "UPDATE node SET content = ?1, node_type = ?2, version = version + 1, modified_at = ?3 WHERE id = ?4",
-                libsql::params![updated_content.clone(), updated_node_type.clone(), now.clone(), id.to_string()],
-            ).await.context("Failed to update node")?;
+            tx.execute(
+                "UPDATE node SET content = ?1, node_type = ?2 WHERE id = ?3",
+                libsql::params![
+                    updated_content.clone(),
+                    updated_node_type.clone(),
+                    id.to_string()
+                ],
+            )
+            .await
+            .context("Failed to update node")?;
         }
 
         if let Some(title) = update.title {
-            db.execute(
+            tx.execute(
                 "UPDATE node SET title = ?1 WHERE id = ?2",
                 libsql::params![title, id.to_string()],
             )
@@ -370,13 +397,29 @@ impl SqliteStore {
         }
 
         if let Some(status) = update.lifecycle_status {
-            db.execute(
+            tx.execute(
                 "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
                 libsql::params![status, id.to_string()],
             )
             .await
             .context("Failed to update lifecycle_status")?;
         }
+
+        // Exactly one version/modified_at bump per call, in its own statement
+        // decoupled from which of the field groups above actually ran — so a
+        // title-only or lifecycle_status-only update bumps OCC state the same
+        // way a content/properties update does, instead of that guarantee
+        // depending on the content statement happening to always execute.
+        tx.execute(
+            "UPDATE node SET version = version + 1, modified_at = ?1 WHERE id = ?2",
+            libsql::params![now.clone(), id.to_string()],
+        )
+        .await
+        .context("Failed to bump node version")?;
+
+        tx.commit()
+            .await
+            .context("Failed to commit update_node transaction")?;
 
         // Released before the read-back and before `mark_collection_name_
         // collision`, which takes the guard itself (it is not re-entrant).

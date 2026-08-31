@@ -109,6 +109,17 @@ pub struct DatabaseServices {
     /// Held so we can drain GPU resources after the server shuts down.
     /// Populated by the background embedding-wiring task.
     pub embedding_state: Arc<RwLock<Option<EmbeddingReady>>>,
+    /// Cancelled by [`DatabaseServices::shutdown`] so every `WatchNodes`
+    /// stream this database's `node_service_grpc` has open ends instead of
+    /// surviving as a zombie (ADR-053: idle eviction reopens an evicted
+    /// database as a fresh instance with its own event bus, which an
+    /// already-open stream from before eviction can never observe on its
+    /// own — see `NodeServiceImpl::shutdown_token`'s doc comment). The same
+    /// `tokio_util::sync::CancellationToken` is cloned into
+    /// `node_service_grpc` by [`build_database_services`]; kept here too so
+    /// `shutdown` has a handle to cancel without reaching back into the
+    /// gRPC impl.
+    shutdown_token: tokio_util::sync::CancellationToken,
 }
 
 impl DatabaseServices {
@@ -134,6 +145,13 @@ impl DatabaseServices {
         if let Some(ready) = self.embedding_state.write().await.take() {
             drop(ready.processor);
         }
+        // End every live `WatchNodes` stream on this database rather than
+        // leaving them as zombies once the database is gone. Idempotent —
+        // cancelling an already-cancelled token is a no-op — which is what
+        // makes this safe to call from every retirement path (idle eviction,
+        // deliberate close, daemon shutdown, a set discarded for losing an
+        // open race) without tracking whether shutdown already ran.
+        self.shutdown_token.cancel();
     }
 }
 
@@ -240,12 +258,18 @@ pub async fn build_database_services(
 
     let node_service = Arc::new(node_service);
 
+    // See `DatabaseServices::shutdown_token`'s doc comment: cancelled when
+    // this database's service set is retired, so every `WatchNodes` stream
+    // `node_service_grpc` has open ends instead of surviving as a zombie.
+    let shutdown_token = tokio_util::sync::CancellationToken::new();
+
     let node_service_grpc = NodeServiceImpl::new(
         node_service.clone(),
         embedding_state.clone(),
         shared.scheduler.clone(),
     )
-    .with_database_id(database_id.to_string());
+    .with_database_id(database_id.to_string())
+    .with_shutdown_token(shutdown_token.clone());
 
     // EmbeddingsService is only registered when a model file exists at startup
     // (the shared model). If the model appears later, the endpoint is absent
@@ -305,6 +329,7 @@ pub async fn build_database_services(
             local_agent,
             embeddings_service_grpc,
             embedding_state,
+            shutdown_token,
         },
         embedding_task,
     ))
