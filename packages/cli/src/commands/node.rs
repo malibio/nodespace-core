@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{
     CreateNodeRequest, DeleteNodeRequest, ExportMarkdownRequest, GetChildrenRequest,
-    GetNodeRequest, GetNodesBatchRequest, QueryNodesSimpleRequest, UpdateNodeRequest,
-    UpdateNodesBatchRequest,
+    GetNodeRequest, GetNodesBatchRequest, NodeSortOrder, QueryNodesSimpleRequest,
+    UpdateNodeRequest, UpdateNodesBatchRequest,
 };
 use serde_json::json;
 
@@ -305,6 +305,9 @@ async fn query(client: &mut NodeClient, args: QueryArgs, json: bool) -> Result<(
             node_type: args.node_type,
             limit: args.limit,
             offset: args.offset,
+            // No CLI flag for this yet — the server's deterministic default
+            // (created ascending) is fine for ad hoc querying.
+            order_by: NodeSortOrder::Unspecified as i32,
         })
         .await
         .context("QueryNodesSimple RPC failed")?

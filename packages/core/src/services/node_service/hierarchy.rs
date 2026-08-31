@@ -51,6 +51,16 @@ impl NodeService {
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))
     }
 
+    /// Count root nodes without listing them — the O(1)-response-size
+    /// counterpart to `get_roots`, for callers (e.g. `nodespace diagnostics`)
+    /// that only need a total.
+    pub async fn count_roots(&self) -> Result<i64, NodeServiceError> {
+        self.store
+            .count_roots()
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
+    }
+
     /// Get all descendants of a node (recursive children)
     ///
     /// Fetches all nodes in the subtree rooted at the specified node,

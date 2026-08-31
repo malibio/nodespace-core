@@ -10,7 +10,7 @@
 use anyhow::Result;
 use clap::Args;
 use nodespace_daemon::nodespace::{
-    GetAllSchemasRequest, GetRootsRequest, ListDatabasesRequest, QueryNodesSimpleRequest,
+    Empty, GetAllSchemasRequest, ListDatabasesRequest, NodeSortOrder, QueryNodesSimpleRequest,
 };
 use nodespace_daemon::DatabaseServiceClient;
 use serde_json::json;
@@ -20,13 +20,6 @@ use tonic::transport::Channel;
 
 use super::database::status_str;
 use crate::NodeClient;
-
-/// Upper bound on the per-query fetch when counting nodes. Diagnostics is a
-/// developer tool, not a hot path — keeping this generous avoids surprise
-/// truncation in any realistic dev database while still bounding memory.
-/// If a database ever exceeds this, `collect()` surfaces a notice via the
-/// `warnings` field so the operator knows counts are undercounts.
-const QUERY_LIMIT: u32 = 100_000;
 
 /// How many recent node IDs to report.
 const RECENT_LIMIT: usize = 10;
@@ -72,8 +65,12 @@ pub struct DiagnosticsReport {
     /// and `run` exits non-zero rather than presenting a partial report as a
     /// success.
     pub errors: Vec<String>,
-    /// Conditions that don't invalidate the report but qualify it — currently
-    /// only result truncation at [`QUERY_LIMIT`].
+    /// Conditions that don't invalidate the report but qualify it. Currently
+    /// unused: `total_node_count`/`root_node_count` come from count-only
+    /// RPCs (exact regardless of database size) and `recent_node_ids` from a
+    /// small server-ordered page, so there is no truncation case left to
+    /// warn about. Kept as an extension point and because `run`/`print_*`
+    /// already surface it.
     pub warnings: Vec<String>,
 }
 
@@ -117,7 +114,11 @@ pub async fn collect(
     target_id: Option<&str>,
 ) -> DiagnosticsReport {
     let mut errors: Vec<String> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
+    // No longer mutated: total_node_count/root_node_count come from
+    // count-only RPCs (exact regardless of database size) and
+    // recent_node_ids from a small server-ordered page, so there is no
+    // truncation case left to warn about. See the `warnings` field doc.
+    let warnings: Vec<String> = Vec::new();
 
     // Enumerate the registry.
     let (databases, default_id) = match db_client.list(ListDatabasesRequest {}).await {
@@ -174,78 +175,72 @@ pub async fn collect(
         None
     };
 
-    // Pull all nodes once (bounded by QUERY_LIMIT) to compute total count
-    // and surface the most-recently-created IDs from a single snapshot.
-    let all_nodes = match node_client
+    // Total node count via the count-only RPC: O(1) response size regardless
+    // of database size, unlike the old approach of pulling up to 100,000 full
+    // records purely to call `.len()` on the result.
+    let total_node_count = match node_client
+        .count_nodes(QueryNodesSimpleRequest {
+            id: None,
+            mentioned_by: None,
+            content_contains: None,
+            title_contains: None,
+            node_type: None,
+            limit: 0,
+            offset: 0,
+            order_by: NodeSortOrder::Unspecified as i32,
+        })
+        .await
+    {
+        Ok(response) => Some(response.into_inner().count as usize),
+        Err(e) => {
+            errors.push(format!("CountNodes failed: {e}"));
+            None
+        }
+    };
+
+    let root_node_count = match node_client.count_roots(Empty {}).await {
+        Ok(response) => Some(response.into_inner().count as usize),
+        Err(e) => {
+            errors.push(format!("CountRoots failed: {e}"));
+            None
+        }
+    };
+
+    // Fetch only the RECENT_LIMIT most-recently-created nodes, server-sorted
+    // (order_by=CREATED_DESC applied — and enforced — before LIMIT), rather
+    // than pulling a large batch and sorting it client-side. This is both
+    // cheaper and more correct: a client-side sort over a limit-truncated
+    // batch can miss genuinely recent nodes if the database has more rows
+    // than the batch size, which a server-side ORDER BY + LIMIT cannot.
+    let recent_node_ids = match node_client
         .query_nodes_simple(QueryNodesSimpleRequest {
             id: None,
             mentioned_by: None,
             content_contains: None,
             title_contains: None,
             node_type: None,
-            limit: QUERY_LIMIT,
+            limit: RECENT_LIMIT as u32,
             offset: 0,
+            order_by: NodeSortOrder::CreatedDesc as i32,
         })
         .await
     {
-        Ok(response) => Some(response.into_inner().nodes),
+        Ok(response) => Some(
+            response
+                .into_inner()
+                .nodes
+                .into_iter()
+                .map(|n| n.id)
+                .collect::<Vec<String>>(),
+        ),
         Err(e) => {
             errors.push(format!("QueryNodesSimple failed: {e}"));
-            // Deliberately NOT an empty Vec: every figure derived from this
-            // query stays `None` so the report says "unknown" rather than
-            // reporting a failed query as a zero-node database.
+            // Deliberately NOT an empty Vec: stays `None` so the report says
+            // "unknown" rather than reporting a failed query as a zero-node
+            // database.
             None
         }
     };
-
-    // QueryNodesSimple has no LIMIT-overflow signal in its response shape;
-    // a full batch is the only hint of truncation. Surface it so operators
-    // know counts and recency lists may be undercounts rather than ground
-    // truth.
-    if all_nodes
-        .as_ref()
-        .is_some_and(|n| n.len() == QUERY_LIMIT as usize)
-    {
-        warnings.push(format!(
-            "Result truncated at QUERY_LIMIT={QUERY_LIMIT}; counts may be undercounts and recent IDs may miss nodes."
-        ));
-    }
-
-    let total_node_count = all_nodes.as_ref().map(Vec::len);
-
-    let root_node_count = match node_client
-        .get_roots(GetRootsRequest {
-            limit: 0,
-            offset: 0,
-        })
-        .await
-    {
-        Ok(response) => Some(response.into_inner().count as usize),
-        Err(e) => {
-            errors.push(format!("GetRoots failed: {e}"));
-            None
-        }
-    };
-
-    // QueryNodesSimple doesn't expose ORDER BY, so we sort the in-memory
-    // batch by created_at descending before slicing. O(n log n) on n ≤
-    // QUERY_LIMIT is fine for a developer tool; doing it here keeps the
-    // user-visible "recent" label honest.
-    //
-    // Invariant: `created_at` is an RFC3339 string emitted by chrono's
-    // `DateTime<Utc>::to_rfc3339()` in `node_to_proto` (daemon). All values
-    // share the `+00:00` suffix and consistent variable-precision format,
-    // so lexicographic comparison is equivalent to chronological order. If
-    // a second serialization path appears (e.g. `Z` suffix, local TZ),
-    // parse to `DateTime` here instead.
-    let recent_node_ids = all_nodes.map(|mut nodes| {
-        nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        nodes
-            .iter()
-            .take(RECENT_LIMIT)
-            .map(|n| n.id.clone())
-            .collect::<Vec<String>>()
-    });
 
     let schema_count = match node_client.get_all_schemas(GetAllSchemasRequest {}).await {
         Ok(response) => Some(response.into_inner().count),

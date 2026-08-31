@@ -17,7 +17,7 @@ use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
     create_node_request::Position as CreatePos, node_event::Event as NodeEventKind,
     reorder_node_request::Position as ReorderPos, CreateCollectionRequest, CreateNodeRequest,
-    DeleteNodeRequest, GetChildrenRequest, GetNodeRequest, NodeCollectionsRequest,
+    DeleteNodeRequest, Empty, GetChildrenRequest, GetNodeRequest, NodeCollectionsRequest,
     ReorderNodeRequest, SearchRequest, UpdateNodeRequest, WatchRequest,
 };
 use nodespace_daemon::services::embeddings_service::EmbeddingReady;
@@ -1251,6 +1251,231 @@ async fn move_node_to_root_when_new_parent_id_empty_string() {
     assert!(
         root_ids.contains(&child.node_id.as_str()),
         "child should be a root node after move with new_parent_id=''"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Fetch one `QueryNodesSimple` page scoped to nodes whose content contains
+/// `marker`, returning just the node ids in response order.
+async fn fetch_marked_page(
+    client: &mut NodeServiceClient<tonic::transport::Channel>,
+    marker: &str,
+    limit: u32,
+    offset: u32,
+) -> Vec<String> {
+    use nodespace_daemon::nodespace::QueryNodesSimpleRequest;
+
+    client
+        .query_nodes_simple(QueryNodesSimpleRequest {
+            id: None,
+            mentioned_by: None,
+            content_contains: Some(marker.to_string()),
+            title_contains: None,
+            node_type: Some("text".to_string()),
+            limit,
+            offset,
+            // Unspecified — exercises the daemon's deterministic default
+            // rather than an explicitly client-chosen order.
+            order_by: 0,
+        })
+        .await
+        .expect("query_nodes_simple failed")
+        .into_inner()
+        .nodes
+        .into_iter()
+        .map(|n| n.id)
+        .collect()
+}
+
+/// Regression test for core#2289: the daemon's `query_nodes_simple` handler
+/// used to hardcode `order_by: None` on every `NodeQuery` it built, so even
+/// though `SqliteStore::query_nodes` gained a real `ORDER BY` (core#2211/
+/// #2212), the gRPC surface never actually used it. Offset-based pagination
+/// through this RPC could therefore return duplicate or skipped rows across
+/// pages — the exact failure mode `order_by`/`limit`/`offset` are supposed to
+/// prevent. The daemon now always applies a deterministic default order
+/// (`order_by_from_proto`), so repeated calls with the same filter and
+/// advancing `offset` must tile the full matching set exactly once each, and
+/// repeating an identical page must return identical rows every time.
+#[tokio::test]
+async fn query_nodes_simple_pages_tile_full_set_exactly_once_with_default_ordering() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    const TOTAL: usize = 47;
+    const PAGE: u32 = 20;
+    const MARKER: &str = "pagination-tiling-probe";
+
+    let mut created_ids = std::collections::HashSet::with_capacity(TOTAL);
+    for i in 0..TOTAL {
+        let node = client
+            .create_node(CreateNodeRequest {
+                node_type: "text".into(),
+                content: format!("{MARKER} {i:03}"),
+                parent_id: None,
+                properties: String::new(),
+                collection: None,
+                lifecycle_status: None,
+                id: None,
+                position: None,
+            })
+            .await
+            .expect("create probe node")
+            .into_inner();
+        created_ids.insert(node.node_id);
+    }
+
+    let page1 = fetch_marked_page(&mut client, MARKER, PAGE, 0).await;
+    let page2 = fetch_marked_page(&mut client, MARKER, PAGE, PAGE).await;
+    let page3 = fetch_marked_page(&mut client, MARKER, PAGE, PAGE * 2).await;
+
+    assert_eq!(page1.len(), 20, "page 1 must be full");
+    assert_eq!(page2.len(), 20, "page 2 must be full");
+    assert_eq!(page3.len(), TOTAL - 40, "page 3 holds the remainder");
+
+    let mut combined = page1.clone();
+    combined.extend(page2.clone());
+    combined.extend(page3.clone());
+
+    let combined_set: std::collections::HashSet<String> = combined.iter().cloned().collect();
+    assert_eq!(
+        combined_set.len(),
+        combined.len(),
+        "no row may appear on more than one page — got duplicates across page boundaries"
+    );
+    assert_eq!(
+        combined_set, created_ids,
+        "the tiled pages must reconstruct exactly the created set — no gaps"
+    );
+
+    // Stability: repeating the same page must return the identical rows in
+    // the identical order every time, not just an internally-consistent-but-
+    // different subset.
+    for attempt in 0..3 {
+        let repeat = fetch_marked_page(&mut client, MARKER, PAGE, PAGE).await;
+        assert_eq!(
+            repeat, page2,
+            "attempt {attempt}: repeated identical page must return the identical page"
+        );
+    }
+
+    let _ = shutdown.send(());
+}
+
+/// Regression test for core#2289: `QueryNodesSimple` used to pass a
+/// client-requested `limit` straight through to the store with no ceiling,
+/// so a large enough request returned every matching row in one unary
+/// message and relied on the gRPC message-size limit (raised in core#2286)
+/// to badly fail anything larger still. The daemon now clamps `limit` to a
+/// maximum page size regardless of what the client asks for — seed a dataset
+/// larger than that clamp and confirm the response never exceeds it even
+/// when the request asks for far more.
+#[tokio::test]
+async fn query_nodes_simple_clamps_an_oversized_limit_to_the_max_page_size() {
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    // Strictly more than the daemon's max page size (500 at the time of
+    // writing) so an unclamped response would be observably larger than the
+    // clamp — if this ever fails because the constant changed, that's the
+    // point: the test pins the exact ceiling.
+    const SEEDED: usize = 505;
+    const EXPECTED_MAX_PAGE_SIZE: usize = 500;
+    const MARKER: &str = "clamp-probe";
+
+    for i in 0..SEEDED {
+        client
+            .create_node(CreateNodeRequest {
+                node_type: "text".into(),
+                content: format!("{MARKER} {i:03}"),
+                parent_id: None,
+                properties: String::new(),
+                collection: None,
+                lifecycle_status: None,
+                id: None,
+                position: None,
+            })
+            .await
+            .expect("create probe node");
+    }
+
+    let page = fetch_marked_page(&mut client, MARKER, 100_000, 0).await;
+
+    assert_eq!(
+        page.len(),
+        EXPECTED_MAX_PAGE_SIZE,
+        "a request for far more than the max page size must be clamped, not \
+         let through unbounded — {SEEDED} matching rows exist but the \
+         response must cap at {EXPECTED_MAX_PAGE_SIZE}"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// `CountNodes`/`CountRoots` (core#2289) must report exact totals without
+/// requiring the caller to fetch (and page through) the matching records —
+/// the count-only path the issue asked for so a caller like `nodespace
+/// diagnostics` doesn't pay to transfer records it only calls `.len()` on.
+#[tokio::test]
+async fn count_nodes_and_count_roots_report_totals_without_transferring_records() {
+    use nodespace_daemon::nodespace::QueryNodesSimpleRequest;
+
+    let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
+
+    let roots_before = client
+        .count_roots(Empty {})
+        .await
+        .expect("count_roots failed")
+        .into_inner()
+        .count;
+
+    const SEEDED: i64 = 7;
+    const MARKER: &str = "count-probe";
+    for i in 0..SEEDED {
+        client
+            .create_node(CreateNodeRequest {
+                node_type: "text".into(),
+                content: format!("{MARKER} {i}"),
+                parent_id: None,
+                properties: String::new(),
+                collection: None,
+                lifecycle_status: None,
+                id: None,
+                position: None,
+            })
+            .await
+            .expect("create probe node");
+    }
+
+    let count = client
+        .count_nodes(QueryNodesSimpleRequest {
+            id: None,
+            mentioned_by: None,
+            content_contains: Some(MARKER.to_string()),
+            title_contains: None,
+            node_type: Some("text".to_string()),
+            limit: 0,
+            offset: 0,
+            order_by: 0,
+        })
+        .await
+        .expect("count_nodes failed")
+        .into_inner()
+        .count;
+    assert_eq!(
+        count, SEEDED,
+        "count_nodes must report the exact matching total"
+    );
+
+    let roots_after = client
+        .count_roots(Empty {})
+        .await
+        .expect("count_roots failed")
+        .into_inner()
+        .count;
+    assert_eq!(
+        roots_after,
+        roots_before + SEEDED,
+        "every probe node is a root (no parent_id) — count_roots must reflect all of them"
     );
 
     let _ = shutdown.send(());

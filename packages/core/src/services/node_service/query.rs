@@ -315,6 +315,32 @@ impl NodeService {
 
         Ok(migrated_nodes)
     }
+
+    /// Count nodes matching `query` without fetching (or migrating) the
+    /// matching records — the O(1)-response-size counterpart to
+    /// `query_nodes_simple`, for callers (e.g. `nodespace diagnostics`) that
+    /// only need a total. Mirrors `query_nodes_simple`'s id-lookup priority
+    /// tier so the two never disagree on what an `id`-only query means, then
+    /// delegates the rest to `store.count_nodes`. `limit`/`offset`/`order_by`
+    /// on `query` are ignored — meaningless for a scalar count.
+    pub async fn count_nodes(
+        &self,
+        query: crate::models::NodeQuery,
+    ) -> Result<i64, NodeServiceError> {
+        // Priority 1: Query by ID (exact match) — mirrors query_nodes_simple.
+        if let Some(ref id) = query.id {
+            return Ok(if self.get_node(id).await?.is_some() {
+                1
+            } else {
+                0
+            });
+        }
+
+        self.store
+            .count_nodes(&query)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))
+    }
 }
 
 impl NodeService {
