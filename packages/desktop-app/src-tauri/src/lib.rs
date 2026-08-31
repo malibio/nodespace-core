@@ -230,6 +230,20 @@ fn take_pending_tray_database_selection() -> Option<String> {
 fn handle_relaunch<R: tauri::Runtime>(app: &tauri::AppHandle<R>, argv: &[String]) {
     use tauri::Emitter;
 
+    // Stash the requested database *before* resolving a window to focus —
+    // deliberately ahead of (and independent from) the early-return below.
+    // `resolve_focus_window` returning `None` means there is no window to
+    // raise right now (e.g. every window was closed while the app kept
+    // running in the tray), not that the pick should be discarded: a window
+    // created later still needs to pull this via
+    // `take_pending_tray_database_selection` once it registers its listener.
+    // Stashing only after the early return would silently drop exactly the
+    // case the pull-based fallback exists to catch.
+    let pending_id = parse_relaunch_database_arg(argv);
+    if let Some(id) = &pending_id {
+        *PENDING_TRAY_DATABASE_SELECTION.lock().unwrap() = Some(id.clone());
+    }
+
     let Some(window) = window_routing::resolve_focus_window(app) else {
         tracing::warn!("single-instance relaunch: no window to focus");
         return;
@@ -244,8 +258,7 @@ fn handle_relaunch<R: tauri::Runtime>(app: &tauri::AppHandle<R>, argv: &[String]
         tracing::warn!(error = %e, "failed to focus the main window on relaunch");
     }
 
-    if let Some(id) = parse_relaunch_database_arg(argv) {
-        *PENDING_TRAY_DATABASE_SELECTION.lock().unwrap() = Some(id.clone());
+    if let Some(id) = pending_id {
         // Scoped to exactly the window just focused above via `emit_to`, NOT
         // a bare `window.emit(...)` — `Emitter::emit` is never scoped to the
         // object it's called on (confirmed against the `tauri` 2.11 source;
@@ -862,14 +875,26 @@ fn handle_run_event<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, event: 
     }
 }
 
-/// Best-effort persist `label`'s current outer size/position, keyed by the
-/// database it is pinned to. Re-queries the window live rather than
-/// threading the `Resized`/`Moved` event's own payload through, since either
-/// event alone only carries half the geometry (size XOR position) — querying
-/// both fresh avoids reasoning about stitching a partial update onto stale
-/// state. No-ops (nothing to key the save by) for a window that hasn't
-/// pinned a database yet — the bootstrap window, in the brief window between
-/// being shown and the frontend's first `pin_window_database` call.
+/// Best-effort persist `label`'s current content size + frame position,
+/// keyed by the database it is pinned to. Re-queries the window live rather
+/// than threading the `Resized`/`Moved` event's own payload through, since
+/// either event alone only carries half the geometry (size XOR position) —
+/// querying both fresh avoids reasoning about stitching a partial update
+/// onto stale state. No-ops (nothing to key the save by) for a window that
+/// hasn't pinned a database yet — the bootstrap window, in the brief window
+/// between being shown and the frontend's first `pin_window_database` call.
+///
+/// Captures `inner_size()`, NOT `outer_size()` — [`window_routing::
+/// pin_window_database`]'s restore path applies the saved width/height via
+/// `WebviewWindow::set_size`, which `tauri-runtime-wry` dispatches as
+/// `WindowMessage::SetSize` -> `Window::set_inner_size` (confirmed against
+/// the vendored source). Saving the outer (decoration-inclusive) size here
+/// while the restore path applies it as an inner size would inflate the
+/// window by the decoration height on every restore, and the `Resized`
+/// event that restore itself triggers would persist the inflated value,
+/// compounding the error on every subsequent boot/switch. Position has no
+/// such mismatch — `set_position` dispatches to `Window::set_outer_position`
+/// — so `outer_position()` is captured and restored unchanged.
 fn persist_window_geometry<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, label: &str) {
     use tauri::Manager;
 
@@ -882,7 +907,7 @@ fn persist_window_geometry<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, 
     let Some(window) = app_handle.get_webview_window(label) else {
         return;
     };
-    let (Ok(size), Ok(position)) = (window.outer_size(), window.outer_position()) else {
+    let (Ok(size), Ok(position)) = (window.inner_size(), window.outer_position()) else {
         return;
     };
 
@@ -898,6 +923,58 @@ fn persist_window_geometry<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, 
             tracing::warn!(error = %e, "failed to persist window geometry");
         }
     });
+}
+
+/// Pins the fix for the outer-vs-inner size mismatch (#2204) at the call
+/// site itself, since it cannot be exercised behaviorally: `tauri::test::
+/// MockRuntime` — the only window-backed test double available in this
+/// workspace (no real display in CI/this environment) — stubs both
+/// `inner_size()` and `outer_size()` to the identical `PhysicalSize { 0, 0
+/// }`, so a black-box unit test through `persist_window_geometry` cannot
+/// distinguish which accessor actually ran; a real OS window is the only
+/// thing that would report them differently. Saving `outer_size()` (the
+/// original bug) while the restore path in `window_routing::
+/// pin_window_database` applies the saved width/height via `set_size` —
+/// which dispatches to `Window::set_inner_size`, confirmed against the
+/// vendored `tauri-runtime-wry` source — inflates the window by the
+/// decoration height on every restore, compounding on every subsequent
+/// boot/switch since the restore's own `Resized` event re-persists the
+/// inflated value.
+#[cfg(test)]
+mod window_geometry_capture_tests {
+    #[test]
+    fn persist_window_geometry_captures_inner_size_not_outer_size_for_width_and_height() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("fn persist_window_geometry")
+            .expect("persist_window_geometry not found in lib.rs");
+        let end = source[start..]
+            .find("fn graceful_shutdown")
+            .map(|offset| start + offset)
+            .expect("graceful_shutdown not found after persist_window_geometry in lib.rs");
+        let function_source = &source[start..end];
+
+        assert!(
+            function_source.contains("window.inner_size()"),
+            "persist_window_geometry must capture width/height via window.inner_size() — \
+             the restore path (set_size) applies the saved value as an inner size"
+        );
+        assert!(
+            !function_source.contains("window.outer_size()"),
+            "persist_window_geometry must NOT capture width/height via window.outer_size() — \
+             saving the outer (decoration-inclusive) size while the restore path applies it as \
+             an inner size inflates the window by the decoration height on every restore (#2204)"
+        );
+        // Position is the other half of the round trip and must stay outer on
+        // both sides (set_position -> Window::set_outer_position) — pinned here
+        // too so a well-intentioned future "fix" doesn't flip position to inner
+        // by the same mistaken symmetry reasoning that caused #2204.
+        assert!(
+            function_source.contains("window.outer_position()"),
+            "persist_window_geometry must capture x/y via window.outer_position() — the \
+             restore path (set_position) applies the saved value as an outer position"
+        );
+    }
 }
 
 /// Perform graceful shutdown: cancel background tasks.
@@ -986,36 +1063,41 @@ mod relaunch_tests {
         );
     }
 
-    /// `handle_relaunch`'s early-return branch (no "main" window to focus)
-    /// must not panic — this is the same shape of guard `graceful_shutdown`
-    /// and `handle_run_event` already use `MockRuntime` to exercise. Doesn't
-    /// touch `PENDING_TRAY_DATABASE_SELECTION` (the function returns before
-    /// ever reaching it), so it's safe to run in parallel with the test below
-    /// that does.
-    #[test]
-    fn handle_relaunch_without_a_main_window_does_not_panic() {
-        let app = tauri::test::mock_app();
-        super::handle_relaunch(
-            &app.handle().clone(),
-            &["--database".to_string(), "x".to_string()],
-        );
-    }
-
-    /// Both halves of the pull-based-fallback contract live in one test:
-    /// `PENDING_TRAY_DATABASE_SELECTION` is a process-wide `static`, so a
-    /// separate "stashes nothing" test would race with a separate "stashes
-    /// and is consumed" test under the default parallel test runner and
-    /// flake (mirrors `resolve_ui_binary_honors_env_var` in the daemon
-    /// crate's tray tests, which does the same for its own process-wide env
-    /// var). Covers: a plain relaunch (no `--database` — the "Open
-    /// NodeSpace" case) stashes nothing, so an unrelated later pull never
-    /// sees a stale "open nothing in particular" mistaken for a real
-    /// request; a relaunch naming a database stashes it (in addition to
-    /// emitting the live event, not exercised here — that needs a real
-    /// listener); a first pull observes it; a second pull observes nothing
-    /// (consumed, not re-delivered).
+    /// Both halves of the pull-based-fallback contract live in ONE test:
+    /// `PENDING_TRAY_DATABASE_SELECTION` is a process-wide `static`, so
+    /// separate tests touching it would race under the default parallel
+    /// test runner and flake (mirrors `resolve_ui_binary_honors_env_var` in
+    /// the daemon crate's tray tests, which does the same for its own
+    /// process-wide env var). Covers: a relaunch with no window to focus at
+    /// all (every window closed while the app kept running in the tray)
+    /// must not panic, AND must still stash the requested database — the
+    /// early return must not skip stashing, since a window created later
+    /// still needs to pull it; a plain relaunch (no `--database` — the
+    /// "Open NodeSpace" case) stashes nothing, so an unrelated later pull
+    /// never sees a stale "open nothing in particular" mistaken for a real
+    /// request; a relaunch naming a database (with a window to focus)
+    /// stashes it (in addition to emitting the live event, not exercised
+    /// here — that needs a real listener); a first pull observes it; a
+    /// second pull observes nothing (consumed, not re-delivered).
     #[test]
     fn handle_relaunch_pull_based_fallback_stash_and_consume_cycle() {
+        // No window exists yet — the early-return branch must still stash
+        // before bailing out, not lose the pick.
+        let windowless_app = tauri::test::mock_app();
+        super::handle_relaunch(
+            &windowless_app.handle().clone(),
+            &[
+                "/path/to/nodespace-app".to_string(),
+                "--database".to_string(),
+                "x".to_string(),
+            ],
+        );
+        assert_eq!(
+            super::take_pending_tray_database_selection(),
+            Some("x".to_string()),
+            "a relaunch with no window to focus must still stash the requested database"
+        );
+
         let app = tauri::test::mock_app();
         tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
