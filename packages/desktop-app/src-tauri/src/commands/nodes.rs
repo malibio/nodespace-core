@@ -14,9 +14,10 @@ use nodespace_proto::nodespace::{
     DeleteMentionRequest, DeleteNodeRequest, DeleteRelationshipRequest, FindDuplicateRequest,
     GetChildrenRequest, GetChildrenTreeRequest, GetNodeRelationshipsRequest, GetNodeRequest,
     GetSchemaDefinitionRequest, MentionAutocompleteRequest, MentionTargetRequest,
-    MoveChildrenToParentRequest, MoveNodeRequest, NodeData, NodeResponse, OptionalStringClear,
-    OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest, UpdateNodeRequest,
-    UpdateRelationshipPropertiesRequest, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
+    MoveChildrenToParentRequest, MoveNodeRequest, NodeData, NodeResponse, NodeSortOrder,
+    OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest, ReorderNodeRequest,
+    UpdateNodeRequest, UpdateRelationshipPropertiesRequest, UpdateTaskNodeRequest,
+    UpsertNodeWithParentRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -735,6 +736,11 @@ pub async fn query_nodes_simple(
             node_type: query.node_type,
             limit: query.limit.unwrap_or(0) as u32,
             offset: query.offset.unwrap_or(0) as u32,
+            // No frontend order-by control yet — the server's deterministic
+            // default (created ascending) still makes limit/offset paging
+            // stable, which is a strict improvement over the prior
+            // unordered behavior.
+            order_by: NodeSortOrder::Unspecified as i32,
         }))
         .await
         .map_err(status_to_command_error)?;

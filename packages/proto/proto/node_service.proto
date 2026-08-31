@@ -26,6 +26,12 @@ service NodeService {
   rpc GetChildrenTree(GetChildrenTreeRequest) returns (NodeTreeResponse);
   rpc SearchNodes(SearchRequest) returns (NodeListResponse);
   rpc QueryNodesSimple(QueryNodesSimpleRequest) returns (NodeListResponse);
+  // Count nodes matching the same filter shape as QueryNodesSimple, without
+  // paying to transfer the matching records. `limit`/`offset` on the request
+  // are ignored — meaningless for a scalar count. Use this instead of
+  // QueryNodesSimple + counting the response when only a total is needed
+  // (e.g. `nodespace diagnostics`'s node count).
+  rpc CountNodes(QueryNodesSimpleRequest) returns (CountNodesResponse);
   // Suggest-don't-block uniqueness check (ADR-065): return the existing node
   // whose `field` matches `value` for `node_type`, or an empty NodeResponse
   // (empty node_id, no node_data) when the field isn't flagged unique, the value
@@ -52,6 +58,10 @@ service NodeService {
 
   // Roots
   rpc GetRoots(GetRootsRequest) returns (NodeListResponse);
+  // Count root nodes without listing them. Use instead of GetRoots + counting
+  // the response when only a total is needed (e.g. `nodespace diagnostics`'s
+  // root count).
+  rpc CountRoots(Empty) returns (CountNodesResponse);
 
   // Markdown export
   rpc ExportMarkdown(ExportMarkdownRequest) returns (ExportMarkdownResponse);
@@ -237,8 +247,11 @@ message GetChildrenRequest {
 }
 
 message GetRootsRequest {
-  // 0 = no limit/offset; all roots are returned.
   // limit/offset are pushed into SQLite (LIMIT/OFFSET) for efficiency.
+  // 0 = server default page size; the server also clamps any explicit value
+  // to its own maximum, so this can never be used to pull an unbounded
+  // number of roots in one response. Callers that only need a count (not
+  // the records) should use CountRoots instead.
   uint32 limit = 1;
   uint32 offset = 2;
 }
@@ -390,6 +403,26 @@ message NodeTreeResponse {
 // QueryNodesSimple — flexible filter queries
 // ---------------------------------------------------------------------------
 
+// Mirrors packages/core/src/models/node.rs NodeQuery::order_by. Determines
+// both the SQL `ORDER BY` applied before `limit`/`offset` slice the result
+// and, therefore, whether repeated paged calls (same filter, advancing
+// `offset`) tile the full matching set exactly once each rather than
+// skipping or repeating rows at page boundaries.
+enum NodeSortOrder {
+  // The server applies its own deterministic default (created ascending) —
+  // NOT "unordered". QueryNodesSimple always sorts before paging; there is
+  // no way to get SQLite's undefined table-scan order back over this RPC.
+  NODE_SORT_ORDER_UNSPECIFIED = 0;
+  NODE_SORT_ORDER_CREATED_ASC = 1;
+  NODE_SORT_ORDER_CREATED_DESC = 2;
+  NODE_SORT_ORDER_MODIFIED_ASC = 3;
+  NODE_SORT_ORDER_MODIFIED_DESC = 4;
+  NODE_SORT_ORDER_CONTENT_ASC = 5;
+  NODE_SORT_ORDER_CONTENT_DESC = 6;
+  NODE_SORT_ORDER_NODE_TYPE_ASC = 7;
+  NODE_SORT_ORDER_NODE_TYPE_DESC = 8;
+}
+
 // Mirrors packages/core/src/models/node.rs NodeQuery. All fields optional;
 // query selection is priority-based as documented in NodeService::query_nodes_simple.
 message QueryNodesSimpleRequest {
@@ -399,9 +432,20 @@ message QueryNodesSimpleRequest {
   optional string title_contains = 4;
   optional string node_type = 5;
   // limit/offset use 0 as the "unset" sentinel (matches the Rust Option<usize>
-  // None case where the store layer applies its own default).
+  // None case where the store layer applies its own default). The server
+  // also clamps any explicit value to its own maximum, so this can never be
+  // used to pull an unbounded number of records in one response — bound the
+  // request with repeated limit/offset pages, not a single very large limit.
   uint32 limit = 6;
   uint32 offset = 7;
+  // See NodeSortOrder. Only meaningful for QueryNodesSimple (ignored by
+  // CountNodes, which shares this request shape but returns no rows to
+  // order).
+  NodeSortOrder order_by = 8;
+}
+
+message CountNodesResponse {
+  int64 count = 1;
 }
 
 // ---------------------------------------------------------------------------

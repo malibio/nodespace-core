@@ -371,6 +371,28 @@ impl SqliteStore {
         }
         Ok(nodes)
     }
+
+    /// Run a scalar `SELECT COUNT(*) ...` and return the single result column.
+    /// The counting counterpart to `query_nodes_from_sql`: used wherever a
+    /// caller needs a total without materializing (or transferring) full
+    /// `Node` rows.
+    async fn count_from_sql(
+        &self,
+        sql: &str,
+        params: impl libsql::params::IntoParams,
+    ) -> Result<i64> {
+        let mut rows = self
+            .read()
+            .await?
+            .query(sql, params)
+            .await
+            .context("Failed to count nodes")?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No result for count"))?;
+        Ok(row.get::<i64>(0).unwrap_or(0))
+    }
 }
 
 // The remaining `impl SqliteStore` methods are split by concern into these

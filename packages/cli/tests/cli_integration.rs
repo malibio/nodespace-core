@@ -27,7 +27,7 @@ use nodespace_cli::{commands, connect, connect_database, DatabaseIdInterceptor};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{
     CreateDatabaseRequest, CreateNodeRequest, GetNodeRequest, GetRelatedNodesRequest,
-    ListDatabasesRequest, QueryNodesSimpleRequest,
+    ListDatabasesRequest, NodeSortOrder, QueryNodesSimpleRequest,
 };
 use nodespace_daemon::{
     DatabaseManager, DatabaseServiceImpl, DatabaseServiceServer, DbManagerLayer, NodeServiceImpl,
@@ -1544,6 +1544,7 @@ async fn database_routing_isolates_writes() {
         node_type: None,
         limit: 0,
         offset: 0,
+        order_by: NodeSortOrder::Unspecified as i32,
     };
 
     // Visible from the second database...
@@ -1601,8 +1602,14 @@ async fn query_nodes_simple_handles_response_over_the_default_grpc_limit() {
         content_contains: None,
         title_contains: None,
         node_type: None,
+        // Requesting far more than MAX_QUERY_NODES_SIMPLE_LIMIT is
+        // deliberate: the server clamps the row count, not this test's
+        // point (a large-CONTENT response still exceeds tonic's default
+        // decode limit well under that row cap — see NODE_COUNT/CONTENT_BYTES
+        // above).
         limit: 100_000,
         offset: 0,
+        order_by: NodeSortOrder::Unspecified as i32,
     };
 
     // The daemon bootstraps its own nodes (schemas and friends), so count what

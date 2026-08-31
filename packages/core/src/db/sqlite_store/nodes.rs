@@ -1015,42 +1015,10 @@ impl SqliteStore {
         // Collect every scalar condition (content/title/type) into one shared
         // AND-chain so `content_contains` composes with `node_type`,
         // `title_contains`, and (below) `ids` instead of one filter silently
-        // dropping the others. Each placeholder number is derived from
-        // `bind_values.len() + 1` at the point it's pushed (the same idiom
-        // the `ids` chunk loop below uses via `binds.len()`), so conditions
-        // can be added, removed, or reordered without a separate counter to
-        // keep in sync.
-        let mut conditions = Vec::new();
-        let mut bind_values: Vec<libsql::Value> = Vec::new();
-
-        if let Some(ref search_q) = query.content_contains {
-            let search_lower = format!("%{}%", search_q.to_lowercase());
-            conditions.push(format!("LOWER(content) LIKE ?{}", bind_values.len() + 1));
-            bind_values.push(libsql::Value::Text(search_lower));
-        }
-
-        if let Some(ref search_q) = query.title_contains {
-            let search_lower = format!("%{}%", search_q.to_lowercase());
-            conditions.push(format!(
-                "title IS NOT NULL AND LOWER(title) LIKE ?{}",
-                bind_values.len() + 1
-            ));
-            bind_values.push(libsql::Value::Text(search_lower));
-        }
-
-        // "*" is the codebase-wide wildcard convention for "all types" (see
-        // `ExecuteQueryInput::target_type` and `QueryService::build_query`'s
-        // identical `!= "*"` guard) — filtering for the *literal* node_type
-        // '*' would never match a real row (no stored type name can be '*';
-        // `validate_identifier` reserves it), so a caller-supplied wildcard
-        // must skip the condition entirely rather than add one that can only
-        // ever produce zero rows.
-        if let Some(ref nt) = query.node_type {
-            if nt != "*" {
-                conditions.push(format!("node_type = ?{}", bind_values.len() + 1));
-                bind_values.push(libsql::Value::Text(nt.clone()));
-            }
-        }
+        // dropping the others. Shared with `count_nodes` via
+        // `build_scalar_conditions` so a filter added here composes the same
+        // way in both.
+        let (conditions, bind_values) = Self::build_scalar_conditions(&query);
 
         // id-scoping (e.g. a collection's members). Build `id IN (…)` and
         // CHUNK it under SQLite's bound-parameter ceiling so a large member set
@@ -1152,6 +1120,140 @@ impl SqliteStore {
             }
         }
         Ok(nodes)
+    }
+
+    /// Build the shared AND-chain of scalar conditions (content/title/type)
+    /// used by both `query_nodes` and `count_nodes`, so a filter added to one
+    /// automatically composes the same way in the other. Deliberately
+    /// excludes `id`/`ids`/`mentioned_by`, which have their own dedicated
+    /// handling (early-return / id-chunking / join) in both callers. Returns
+    /// the SQL condition fragments plus their positional bind values,
+    /// numbered from `?1`.
+    fn build_scalar_conditions(query: &NodeQuery) -> (Vec<String>, Vec<libsql::Value>) {
+        let mut conditions = Vec::new();
+        let mut bind_values: Vec<libsql::Value> = Vec::new();
+
+        if let Some(ref search_q) = query.content_contains {
+            let search_lower = format!("%{}%", search_q.to_lowercase());
+            conditions.push(format!("LOWER(content) LIKE ?{}", bind_values.len() + 1));
+            bind_values.push(libsql::Value::Text(search_lower));
+        }
+
+        if let Some(ref search_q) = query.title_contains {
+            let search_lower = format!("%{}%", search_q.to_lowercase());
+            conditions.push(format!(
+                "title IS NOT NULL AND LOWER(title) LIKE ?{}",
+                bind_values.len() + 1
+            ));
+            bind_values.push(libsql::Value::Text(search_lower));
+        }
+
+        // "*" is the codebase-wide wildcard convention for "all types" (see
+        // `ExecuteQueryInput::target_type` and `QueryService::build_query`'s
+        // identical `!= "*"` guard) — filtering for the *literal* node_type
+        // '*' would never match a real row (no stored type name can be '*';
+        // `validate_identifier` reserves it), so a caller-supplied wildcard
+        // must skip the condition entirely rather than add one that can only
+        // ever produce zero rows.
+        if let Some(ref nt) = query.node_type {
+            if nt != "*" {
+                conditions.push(format!("node_type = ?{}", bind_values.len() + 1));
+                bind_values.push(libsql::Value::Text(nt.clone()));
+            }
+        }
+
+        (conditions, bind_values)
+    }
+
+    /// Count nodes matching `query` without materializing full records — the
+    /// counting counterpart to `query_nodes` for callers (e.g. `nodespace
+    /// diagnostics`) that only need a total, not the rows themselves. A
+    /// `SELECT COUNT(*)` over a table too large to page through in full is
+    /// still O(1) in response size, unlike listing every row up to some
+    /// generous limit purely to call `.len()` on the result.
+    ///
+    /// Mirrors `query_nodes`'s priority order (`mentioned_by` > `ids` >
+    /// scalar conditions) and the same AND-chain composition via
+    /// `build_scalar_conditions`, but issues `SELECT COUNT(*)` instead of
+    /// `SELECT *` and ignores `order_by`/`limit`/`offset` — meaningless for a
+    /// scalar count. Does NOT handle `query.id` (exact id lookup); that
+    /// priority tier is handled by `NodeService::count_nodes` via
+    /// `get_node`, mirroring how `query_nodes_simple` handles it above the
+    /// store layer.
+    ///
+    /// Does NOT replicate `query_nodes`'s title-stem fallback: a
+    /// `title_contains` value with zero exact-substring matches counts as
+    /// zero here even though `query_nodes` would then retry with stem
+    /// matching. No current caller sets `title_contains` when counting; if
+    /// one starts to, this is the place to add the same fallback.
+    pub async fn count_nodes(&self, query: &NodeQuery) -> Result<i64> {
+        if let Some(ref mentioned_node_id) = query.mentioned_by {
+            return self
+                .count_from_sql(
+                    "SELECT COUNT(*) FROM node n JOIN relationship r ON r.in_node = n.id WHERE r.out_node = ?1 AND r.relationship_type = 'mentions'",
+                    libsql::params![mentioned_node_id.clone()],
+                )
+                .await
+                .context("Failed to count mentioned_by nodes");
+        }
+
+        let (conditions, bind_values) = Self::build_scalar_conditions(query);
+
+        // Same id-chunking as `query_nodes` (SQLite's bound-parameter
+        // ceiling), summing the per-chunk counts. Chunks are disjoint slices
+        // of `ids`, so this only double-counts a row if `ids` itself
+        // contains a duplicate id — matching `query_nodes`'s existing
+        // (also non-deduplicating) behavior for the same input.
+        if let Some(ref ids) = query.ids {
+            if ids.is_empty() {
+                return Ok(0);
+            }
+            const ID_CHUNK: usize = 900;
+            let mut total: i64 = 0;
+            for chunk in ids.chunks(ID_CHUNK) {
+                let mut conds = conditions.clone();
+                let mut binds = bind_values.clone();
+                let start = binds.len();
+                let placeholders: Vec<String> = chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", start + i + 1))
+                    .collect();
+                conds.push(format!("id IN ({})", placeholders.join(", ")));
+                for id in chunk {
+                    binds.push(libsql::Value::Text(id.clone()));
+                }
+                let sql = format!("SELECT COUNT(*) FROM node WHERE {}", conds.join(" AND "));
+                total += self
+                    .count_from_sql(&sql, binds)
+                    .await
+                    .context("Failed to count nodes by id set")?;
+            }
+            return Ok(total);
+        }
+
+        let where_clause = if !conditions.is_empty() {
+            format!("WHERE {}", conditions.join(" AND "))
+        } else {
+            String::new()
+        };
+        let sql = format!("SELECT COUNT(*) FROM node {}", where_clause);
+        self.count_from_sql(&sql, bind_values)
+            .await
+            .context("Failed to count nodes")
+    }
+
+    /// Count root nodes (nodes with no parent edge) without listing them —
+    /// the counting counterpart to `get_roots`. Mirrors `get_roots`'s
+    /// `WHERE` clause exactly, so the two never disagree on which rows
+    /// qualify.
+    pub async fn count_roots(&self) -> Result<i64> {
+        self.count_from_sql(
+            "SELECT COUNT(*) FROM node WHERE id NOT IN (SELECT out_node FROM relationship WHERE relationship_type = 'has_child')",
+            (),
+        )
+        .await
+        .context("Failed to count roots")
     }
 
     /// Map an `OrderBy` value to a SQL `ORDER BY` fragment (column list only,
@@ -3386,6 +3488,143 @@ mod query_nodes_order_and_scoping_tests {
 
         let ids: Vec<String> = nodes.into_iter().map(|n| n.id).collect();
         assert_eq!(ids, vec![matching_id]);
+        Ok(())
+    }
+
+    /// `count_nodes` must agree with `query_nodes(...).len()` for the same
+    /// filter across every priority tier (scalar AND-chain, `ids` scoping,
+    /// `mentioned_by`) — it shares `build_scalar_conditions` with
+    /// `query_nodes` specifically so the two can't drift apart.
+    #[tokio::test]
+    async fn count_nodes_agrees_with_query_nodes_len_across_filter_shapes() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+        let now = Utc::now();
+
+        let task_a = make_node_at(&store, "task", "schedule the team meeting", now).await?;
+        let _task_b = make_node_at(&store, "task", "reschedule the client meeting", now).await?;
+        let text_c = make_node_at(&store, "text", "notes from the meeting", now).await?;
+        make_node_at(&store, "collection", "meeting rooms", now).await?;
+
+        // Plain node_type filter.
+        let by_type = NodeQuery {
+            node_type: Some("task".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            store.count_nodes(&by_type).await?,
+            store.query_nodes(by_type).await?.len() as i64
+        );
+
+        // content_contains + node_type AND-chain.
+        let content_and_type = NodeQuery {
+            content_contains: Some("meeting".to_string()),
+            node_type: Some("task".to_string()),
+            ..Default::default()
+        };
+        let count = store.count_nodes(&content_and_type).await?;
+        assert_eq!(count, 2, "only the two tasks match content AND type");
+        assert_eq!(
+            count,
+            store.query_nodes(content_and_type).await?.len() as i64
+        );
+
+        // ids scoping, combined with a scalar condition.
+        let ids_scoped = NodeQuery {
+            content_contains: Some("meeting".to_string()),
+            ids: Some(vec![task_a.clone(), text_c.clone()]),
+            ..Default::default()
+        };
+        assert_eq!(
+            store.count_nodes(&ids_scoped).await?,
+            store.query_nodes(ids_scoped).await?.len() as i64
+        );
+
+        // Empty ids set: count_nodes must short-circuit to 0, mirroring
+        // query_nodes's "empty id set ⇒ no rows can match".
+        let empty_ids = NodeQuery {
+            ids: Some(vec![]),
+            ..Default::default()
+        };
+        assert_eq!(store.count_nodes(&empty_ids).await?, 0);
+
+        // mentioned_by (join-based path, bypasses build_scalar_conditions
+        // entirely).
+        let mentioner = Node::new(
+            "text".to_string(),
+            "mentions someone".to_string(),
+            json!({}),
+        );
+        let mentioner_id = mentioner.id.clone();
+        store.create_node(mentioner, None, None).await?;
+        // mentioned_by semantics (see query_nodes's mentioned_by branch):
+        // `in_node` is the returned/target node, `out_node` is the "by" node.
+        store
+            .create_generic_relationship(&task_a, &mentioner_id, "mentions", &json!({}))
+            .await?;
+        let mentioned_by_query = NodeQuery {
+            mentioned_by: Some(mentioner_id.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            store.count_nodes(&mentioned_by_query).await?,
+            1,
+            "task_a is the only node mentioned by mentioner_id"
+        );
+        assert_eq!(
+            store.count_nodes(&mentioned_by_query).await?,
+            store.query_nodes(mentioned_by_query).await?.len() as i64
+        );
+
+        // Query with no conditions at all must count every row in the table —
+        // agreeing with an unfiltered query_nodes.
+        let all = NodeQuery::default();
+        assert_eq!(
+            store.count_nodes(&all).await?,
+            store.query_nodes(all).await?.len() as i64
+        );
+
+        Ok(())
+    }
+
+    /// `count_roots` must agree with `get_roots(None, None).await?.len()` —
+    /// they share the same `WHERE` clause by construction, but this pins the
+    /// contract so the two can never silently diverge.
+    #[tokio::test]
+    async fn count_roots_agrees_with_get_roots_len() -> Result<()> {
+        let (store, _t) = bare_store().await?;
+
+        assert_eq!(store.count_roots().await?, 0, "a fresh store has no nodes");
+
+        let root_a = store
+            .create_node(
+                Node::new("text".to_string(), "root a".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .create_node(
+                Node::new("text".to_string(), "root b".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        let child = store
+            .create_node(
+                Node::new("text".to_string(), "child of a".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        // has_child semantics (see get_children/get_roots): `in_node` is the
+        // parent, `out_node` is the child.
+        store
+            .create_generic_relationship(&root_a.id, &child.id, "has_child", &json!({"order": 0.0}))
+            .await?;
+
+        let roots = store.get_roots(None, None).await?;
+        assert_eq!(roots.len(), 2, "child should not count as a root");
+        assert_eq!(store.count_roots().await?, roots.len() as i64);
         Ok(())
     }
 }

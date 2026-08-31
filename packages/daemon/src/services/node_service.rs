@@ -14,7 +14,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use nodespace_core::db::events::DomainEvent;
 use nodespace_core::models::{
-    Node, NodeQuery, NodeUpdate, TaskNodeUpdate, TaskPriority, TaskStatus,
+    Node, NodeQuery, NodeUpdate, OrderBy, TaskNodeUpdate, TaskPriority, TaskStatus,
 };
 use nodespace_core::ops::{
     collection_ops::{
@@ -42,7 +42,7 @@ use crate::nodespace::{
     node_event::Event as NodeEventKind, node_service_server::NodeService as GrpcNodeService,
     AddNodeToCollectionByPathRequest, AddNodeToCollectionRequest, BatchUpdateFailure, ChatRequest,
     ChatResponse, CollectionIdResponse, CollectionIdsResponse, CollectionInfo,
-    CollectionListResponse, CollectionMembersRequest, CreateCollectionRequest,
+    CollectionListResponse, CollectionMembersRequest, CountNodesResponse, CreateCollectionRequest,
     CreateMentionRequest, CreateNodeRequest, CreateRelationshipRequest, CreateRelationshipResponse,
     DeleteCollectionRequest, DeleteMentionRequest, DeleteNodeRequest, DeleteNodeResponse,
     DeleteRelationshipRequest, DeleteRelationshipResponse, Empty, ExecuteQueryRequest,
@@ -55,7 +55,7 @@ use crate::nodespace::{
     MentionAutocompleteRequest, MentionIdsResponse, MentionResponse, MentionTargetRequest,
     MoveChildrenToParentRequest, MoveChildrenToParentResponse, MoveNodeRequest,
     NodeCollectionsRequest, NodeData, NodeDeleted, NodeEvent, NodeListResponse, NodeReference,
-    NodeReferenceListResponse, NodeResponse, NodeTreeResponse, OptionalNodeResponse,
+    NodeReferenceListResponse, NodeResponse, NodeSortOrder, NodeTreeResponse, OptionalNodeResponse,
     OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
     RelationshipDeletedPayload, RelationshipPayload, RemoveNodeFromCollectionRequest,
     RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SchemaParamsRequest,
@@ -433,11 +433,19 @@ impl GrpcNodeService for NodeServiceImpl {
     ) -> Result<Response<NodeListResponse>, Status> {
         let this = self.route(&request).await?;
         let req = request.into_inner();
-        let limit = if req.limit == 0 {
-            None
+
+        // Bound like QueryNodesSimple/CountNodes: 0 means "server default",
+        // not "unlimited" — an explicit large value is clamped rather than
+        // allowed to return every root node in one response. A caller that
+        // only needs a total, not the records, should use CountRoots
+        // instead of GetRoots + counting the response.
+        const DEFAULT_GET_ROOTS_LIMIT: usize = 100;
+        const MAX_GET_ROOTS_LIMIT: usize = 500;
+        let limit = Some(if req.limit == 0 {
+            DEFAULT_GET_ROOTS_LIMIT
         } else {
-            Some(req.limit as usize)
-        };
+            (req.limit as usize).min(MAX_GET_ROOTS_LIMIT)
+        });
         let offset = if req.offset == 0 {
             None
         } else {
@@ -458,6 +466,25 @@ impl GrpcNodeService for NodeServiceImpl {
             count,
             collection_id: String::new(),
         }))
+    }
+
+    /// Count root nodes without listing them (see `NodeSortOrder`/`CountNodes`
+    /// doc comments in the proto for the rationale — a count-only path so a
+    /// caller like `nodespace diagnostics` doesn't pay to transfer records it
+    /// only intends to call `.len()` on).
+    async fn count_roots(
+        &self,
+        request: Request<Empty>,
+    ) -> Result<Response<CountNodesResponse>, Status> {
+        let this = self.route(&request).await?;
+
+        let count = this
+            .node_service
+            .count_roots()
+            .await
+            .map_err(service_error_to_status)?;
+
+        Ok(Response::new(CountNodesResponse { count }))
     }
 
     async fn search_nodes(
@@ -555,6 +582,13 @@ impl GrpcNodeService for NodeServiceImpl {
         let this = self.route(&request).await?;
         let req = request.into_inner();
 
+        // Cap at MAX_QUERY_NODES_SIMPLE_LIMIT regardless of client-requested
+        // value — same clamp shape as ExecuteQuery's MAX_EXECUTE_QUERY_LIMIT.
+        // Combined with order_by_from_proto's always-deterministic default
+        // ordering, this is what makes repeated limit/offset calls tile the
+        // full matching set exactly once each instead of relying on the gRPC
+        // message-size ceiling to (badly) fail an unbounded response.
+        const MAX_QUERY_NODES_SIMPLE_LIMIT: usize = 500;
         let query = NodeQuery {
             id: req.id,
             ids: None,
@@ -562,11 +596,11 @@ impl GrpcNodeService for NodeServiceImpl {
             content_contains: req.content_contains,
             title_contains: req.title_contains,
             node_type: req.node_type,
-            order_by: None,
+            order_by: Some(order_by_from_proto(req.order_by)),
             limit: if req.limit == 0 {
                 None
             } else {
-                Some(req.limit as usize)
+                Some((req.limit as usize).min(MAX_QUERY_NODES_SIMPLE_LIMIT))
             },
             offset: if req.offset == 0 {
                 None
@@ -589,6 +623,42 @@ impl GrpcNodeService for NodeServiceImpl {
             count,
             collection_id: String::new(),
         }))
+    }
+
+    /// Count nodes matching the same filter shape as `QueryNodesSimple`
+    /// without transferring the matching records — a caller like `nodespace
+    /// diagnostics` that only needs a total should use this instead of
+    /// `QueryNodesSimple` + counting the response, which pays to materialize
+    /// and transfer up to `MAX_QUERY_NODES_SIMPLE_LIMIT` full records purely
+    /// to call `.len()`.
+    async fn count_nodes(
+        &self,
+        request: Request<QueryNodesSimpleRequest>,
+    ) -> Result<Response<CountNodesResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        // limit/offset/order_by are meaningless for a scalar count —
+        // deliberately dropped here rather than threaded through.
+        let query = NodeQuery {
+            id: req.id,
+            ids: None,
+            mentioned_by: req.mentioned_by,
+            content_contains: req.content_contains,
+            title_contains: req.title_contains,
+            node_type: req.node_type,
+            order_by: None,
+            limit: None,
+            offset: None,
+        };
+
+        let count = this
+            .node_service
+            .count_nodes(query)
+            .await
+            .map_err(service_error_to_status)?;
+
+        Ok(Response::new(CountNodesResponse { count }))
     }
 
     async fn execute_query(
@@ -1792,6 +1862,29 @@ pub(crate) fn node_to_proto(node: Node) -> NodeData {
         lifecycle_status: node.lifecycle_status,
         created_at: node.created_at.to_rfc3339(),
         modified_at: node.modified_at.to_rfc3339(),
+    }
+}
+
+/// Map the wire `NodeSortOrder` to the core `OrderBy` the store applies as a
+/// SQL `ORDER BY`. `NODE_SORT_ORDER_UNSPECIFIED` — the zero value, also what
+/// an unrecognized raw value decodes to — maps to a deterministic default
+/// rather than "no order": `QueryNodesSimple` always sorts before paging, so
+/// repeated calls with the same filter and advancing `offset` tile the full
+/// matching set exactly once each instead of skipping or repeating rows at
+/// page boundaries, which is exactly what an unordered `LIMIT`/`OFFSET`
+/// could get wrong.
+fn order_by_from_proto(raw: i32) -> OrderBy {
+    match NodeSortOrder::try_from(raw) {
+        Ok(NodeSortOrder::CreatedDesc) => OrderBy::CreatedDesc,
+        Ok(NodeSortOrder::ModifiedAsc) => OrderBy::ModifiedAsc,
+        Ok(NodeSortOrder::ModifiedDesc) => OrderBy::ModifiedDesc,
+        Ok(NodeSortOrder::ContentAsc) => OrderBy::ContentAsc,
+        Ok(NodeSortOrder::ContentDesc) => OrderBy::ContentDesc,
+        Ok(NodeSortOrder::NodeTypeAsc) => OrderBy::NodeTypeAsc,
+        Ok(NodeSortOrder::NodeTypeDesc) => OrderBy::NodeTypeDesc,
+        Ok(NodeSortOrder::CreatedAsc) | Ok(NodeSortOrder::Unspecified) | Err(_) => {
+            OrderBy::CreatedAsc
+        }
     }
 }
 
