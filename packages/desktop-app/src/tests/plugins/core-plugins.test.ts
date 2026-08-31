@@ -7,7 +7,7 @@
  * Tests follow the official NodeSpace testing guide patterns.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { PluginRegistry } from '$lib/plugins/plugin-registry';
 import {
   textNodePlugin,
@@ -201,6 +201,29 @@ describe('Core Plugins Integration', () => {
     beforeEach(() => {
       registerCorePlugins(registry);
     });
+
+    // date-node-viewer.svelte and task-node-viewer.svelte both pull in
+    // BaseNodeViewer (packages/desktop-app/src/lib/design/components/base-node-viewer.svelte,
+    // ~1500 lines with ~20 direct imports of its own). The first dynamic
+    // import() of either component pays the one-time cost of transforming
+    // that whole subtree; every import() after that resolves from Vite's
+    // module cache in well under a millisecond, since `date`/`task`'s
+    // `viewer.lazyLoad` closures (registered by reference via
+    // registerCorePlugins) are the exact same import() calls made here.
+    // Measured locally: ~2.1-2.3s idle, up to ~4.5s under heavy concurrent
+    // CPU load (8-way contention on a 10-core machine) — i.e. genuine,
+    // load-sensitive compile work, not a hang. Warming it here means the
+    // assertions below measure only the (already-warm) resolution itself,
+    // so the default 5s testTimeout stays a meaningful regression guard
+    // instead of racing a one-time compile cost that has no headroom left
+    // under load. The 30s hook timeout is generous on purpose: this warm-up
+    // is explicitly the place that absorbs the compile cost, not the test.
+    beforeAll(async () => {
+      await Promise.all([
+        dateNodePlugin.viewer?.lazyLoad?.(),
+        taskNodePlugin.viewer?.lazyLoad?.()
+      ]);
+    }, 30000);
 
     it('should resolve viewer components for plugins with viewers', async () => {
       // date and task have custom viewers (TaskNodeViewer)
