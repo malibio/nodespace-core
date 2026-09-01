@@ -443,6 +443,10 @@ class DatabaseStore {
       // membership roster/invites/requests cache (has_role edges are
       // per-database — ADR-053).
       membership.invalidateForDatabaseSwitch();
+      // As with collectionsData.forgetLocallyCreated() above: invalidate any
+      // in-flight loadSchemas before reloading, so its result can't land in
+      // a store that now represents a different database.
+      schemasData.invalidateForDatabaseSwitch();
       schemasData.loadSchemas();
       // As with collectionsData.forgetLocallyCreated() above: invalidate any
       // in-flight "+ New chat" create before reloading, so its result can't

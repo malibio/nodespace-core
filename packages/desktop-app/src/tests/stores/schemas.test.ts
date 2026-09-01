@@ -34,7 +34,6 @@ vi.mock('$lib/services/daemon-status', () => ({
 }));
 
 import { schemasStore } from '$lib/stores/schemas.svelte';
-import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 
 function makeSchema(id: string, isCore: boolean): SchemaNode {
   return {
@@ -112,19 +111,22 @@ describe('schemasStore.builtInSchemas — sidenav core types', () => {
 // core#2220: unlike every other cross-switch read in the codebase
 // (loadChildrenForParent, doLoadChildrenTree, refreshDatabaseSettings,
 // createChat, createCollection), loadSchemas committed its fetched array into
-// state without re-checking the database generation after the await — a
+// state without re-checking the store generation after the await — a
 // response issued against the previous database could land after a switch and
-// get committed as if it belonged to the new one. schemasStore has no private
-// generation counter of its own (unlike collectionsData/aiChatsData), so it
-// shares the cross-store `sharedNodeStore` epoch the same way
-// `refreshDatabaseSettings`/`loadChildrenForParent` do.
+// get committed as if it belonged to the new one. schemasStore now carries
+// its own private `#generation` counter (mirroring
+// collectionsData/aiChatsData) rather than the cross-store `sharedNodeStore`
+// epoch, so this store stays free of the heavy shared-node-store/
+// reactive-structure-tree import chain — it is loaded in lightweight,
+// non-Tauri test contexts (e.g. the daemon-readiness e2e harness) that never
+// construct that machinery.
 describe('schemasStore.loadSchemas stale-response guard across a database switch (core#2220)', () => {
   beforeEach(() => {
     schemasStore.schemas = [];
     mockGetAllSchemas.mockReset();
   });
 
-  it('discards a load that resolves after the database switched, without writing into the store', async () => {
+  it('discards a load that resolves after invalidateForDatabaseSwitch, without writing into the store', async () => {
     let resolveLoad: (schemas: SchemaNode[]) => void = () => {};
     mockGetAllSchemas.mockReturnValue(
       new Promise<SchemaNode[]>((resolve) => {
@@ -135,7 +137,7 @@ describe('schemasStore.loadSchemas stale-response guard across a database switch
     const loadPromise = schemasStore.loadSchemas();
 
     // The active database switches while the load is still in flight.
-    sharedNodeStore.clearAll();
+    schemasStore.invalidateForDatabaseSwitch();
 
     resolveLoad([makeSchema('stale-db-schema', false)]);
     await loadPromise;
@@ -156,7 +158,7 @@ describe('schemasStore.loadSchemas stale-response guard across a database switch
 
     const firstLoad = schemasStore.loadSchemas(); // issued against DB A
 
-    sharedNodeStore.clearAll(); // switch to DB B
+    schemasStore.invalidateForDatabaseSwitch(); // switch to DB B
     mockGetAllSchemas.mockResolvedValueOnce([makeSchema('b-schema', false)]);
     const secondLoad = schemasStore.loadSchemas(); // issued against DB B
     await secondLoad;

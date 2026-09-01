@@ -14,7 +14,6 @@
 import { backendAdapter } from '$lib/services/backend-adapter';
 import { createLogger } from '$lib/utils/logger';
 import { onDaemonReconnect } from '$lib/services/daemon-status';
-import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import type { SchemaNode } from '$lib/types/schema-node';
 
 const log = createLogger('SchemasStore');
@@ -28,6 +27,23 @@ class SchemasStore {
   /** Raw schema list */
   schemas = $state<SchemaNode[]>([]);
 
+  /**
+   * Bumped whenever the store stops representing the database it did —
+   * `invalidateForDatabaseSwitch()`. An in-flight `loadSchemas` captures this
+   * before awaiting and drops its result if the value changed, so a load
+   * issued against the previous database cannot write its rows into the
+   * store representing the newly-active one (mirrors
+   * `collectionsData.forgetLocallyCreated()` / `aiChatsData`'s
+   * `#generation` guard around `loadCollections`/`loadAiChats`).
+   *
+   * Deliberately a store-local counter rather than reading
+   * `sharedNodeStore.currentEpoch()`: this store must stay import-light (it
+   * is loaded in lightweight, non-Tauri test contexts — e.g. the daemon
+   * readiness e2e harness — that never construct the full shared-node-store/
+   * reactive-structure-tree machinery).
+   */
+  #generation = 0;
+
   /** Core schemas shown in sidenav (only user-queryable ones like "task") */
   get builtInSchemas(): SchemaNode[] {
     return this.schemas.filter((s) => s.isCore && SIDENAV_CORE_TYPES.has(s.id));
@@ -40,17 +56,14 @@ class SchemasStore {
 
   /** Load all schemas from the backend and update the store. */
   async loadSchemas(): Promise<void> {
-    // ADR-053: capture the database generation before the daemon read so a
-    // switch mid-flight is detectable below and the response is dropped
-    // rather than written into the now-active database's store (this store
-    // has no private generation counter of its own, so it shares the
-    // cross-store epoch the same way `refreshDatabaseSettings` and
-    // `loadChildrenForParent` do).
-    const epoch = sharedNodeStore.currentEpoch();
+    // A database switch landed while this load was in flight: the fetched
+    // rows belong to the database we just left, so drop them rather than
+    // writing them into a store that now represents a different database.
+    const generation = this.#generation;
     try {
       const schemas = await backendAdapter.getAllSchemas();
-      if (sharedNodeStore.currentEpoch() !== epoch) {
-        log.debug('Discarding schemas load that resolved after the database switched');
+      if (generation !== this.#generation) {
+        log.debug('Discarding schemas load that resolved after the store moved on');
         return;
       }
       this.schemas = schemas;
@@ -59,6 +72,17 @@ class SchemasStore {
       log.error('Failed to load schemas', err);
     }
   }
+
+  /**
+   * Invalidate any load issued against a database this store no longer
+   * represents. Call before reloading for a newly-active database (mirrors
+   * `collectionsData.forgetLocallyCreated()` / `aiChatsData
+   * .invalidateForDatabaseSwitch()`); `loadSchemas` itself overwrites
+   * `schemas` wholesale so no separate list reset is needed.
+   */
+  invalidateForDatabaseSwitch(): void {
+    this.#generation++;
+  }
 }
 
 export const schemasStore = new SchemasStore();
@@ -66,7 +90,10 @@ export const schemasStore = new SchemasStore();
 /** Load all schemas from the backend and update the store. */
 export const loadSchemas = (): Promise<void> => schemasStore.loadSchemas();
 
-export const schemasData = { loadSchemas };
+export const schemasData = {
+  loadSchemas,
+  invalidateForDatabaseSwitch: (): void => schemasStore.invalidateForDatabaseSwitch()
+};
 
 // Registered once at module load (this file is a singleton — ES modules only
 // evaluate once), not per component mount. Retries loadSchemas whenever the
