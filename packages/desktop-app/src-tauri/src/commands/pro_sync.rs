@@ -140,7 +140,7 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
                 }
                 Ok(Err(status)) => {
                     tracing::debug!(error = %status, "sync-status subscribe failed");
-                    let database_id = pro_client.active_database_id().await.unwrap_or_default();
+                    let database_id = pro_client.attributed_database_id().await;
                     emit_disconnected(
                         &app_handle,
                         format!("sync-status subscribe failed: {status}"),
@@ -180,8 +180,7 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
                             // (ADR-053 single-active session: the daemon runs exactly one
                             // sync session at a time, so this locally-tracked id is
                             // authoritative for "which database is this about").
-                            let database_id =
-                                pro_client.active_database_id().await.unwrap_or_default();
+                            let database_id = pro_client.attributed_database_id().await;
                             let payload = serde_json::json!({
                                 "state": evt.state,
                                 "detail": evt.detail,
@@ -210,7 +209,7 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
             // Ended/errored on the same channel: grey the pill, back off, retry —
             // waking immediately if the channel is rebuilt meanwhile.
             tracing::info!("sync-status stream ended; reconnecting");
-            let database_id = pro_client.active_database_id().await.unwrap_or_default();
+            let database_id = pro_client.attributed_database_id().await;
             emit_disconnected(&app_handle, "sync-status stream ended".into(), database_id);
             tokio::select! {
                 _ = generation.changed() => {}

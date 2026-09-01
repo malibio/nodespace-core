@@ -136,6 +136,14 @@ impl ProClient {
         self.inner.read().await.active_database_id.clone()
     }
 
+    /// [`ProClient::active_database_id`], defaulted to `""` — the convention
+    /// every outgoing `database_id` payload field uses (matching
+    /// `ActivateDatabaseRequest`'s own "empty = no/unknown target"
+    /// convention) so every emit site shares one place to change it.
+    pub async fn attributed_database_id(&self) -> String {
+        self.active_database_id().await.unwrap_or_default()
+    }
+
     /// Record the database id the desktop just activated. Empty string is
     /// normalized to `None` (deactivate / local-only), mirroring
     /// `ActivateDatabaseRequest.database_id`'s "empty = deactivate" convention.
@@ -150,7 +158,20 @@ impl ProClient {
     /// and leaves `last_status` alone — that's `load()`'s first resolution
     /// declaring what the daemon most likely already has active (ADR-053: the
     /// last-active database persists across restarts), so the probe-time
-    /// snapshot is still valid and re-hydration (#1647) must not be broken.
+    /// snapshot is still valid and a webview reload can re-hydrate the
+    /// signed-in state from it deterministically instead of appearing
+    /// signed out.
+    ///
+    /// This is a best-effort local approximation of the daemon's real
+    /// session target, not a guaranteed atomic view of it: the
+    /// `WatchSyncStatus` forwarding task reads/writes this same state
+    /// independently (see its call sites), so a status event racing a
+    /// concurrent re-target can still land tagged with the previous id in a
+    /// narrow window, and a failed `ActivateDatabase` call leaves this
+    /// unchanged even though the caller may have already persisted a
+    /// different intended selection. Both are narrow, self-correcting via
+    /// the next genuine `sync:status` event — closing them fully would need
+    /// daemon-side coordination, not just local bookkeeping.
     pub async fn set_active_database_id(&self, database_id: String) {
         let next = normalize_active_database_id(database_id);
         let mut inner = self.inner.write().await;
@@ -292,9 +313,8 @@ mod tests {
         assert!(pro.last_status().await.is_some());
 
         // Switching to a DIFFERENT database must drop the now-stale status —
-        // it belonged to db-a, not db-b (core#2322's finding: attributing a
-        // stale status to the newly-active database is worse than reporting
-        // no snapshot at all).
+        // it belonged to db-a, not db-b, and attributing it to the
+        // newly-active database is worse than reporting no snapshot at all.
         pro.set_active_database_id("db-b".to_string()).await;
 
         assert_eq!(pro.active_database_id().await, Some("db-b".to_string()));

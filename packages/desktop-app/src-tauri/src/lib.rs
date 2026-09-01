@@ -573,7 +573,7 @@ pub fn run() {
                     // attributes an empty database_id to whichever database it
                     // currently considers active (see `isActiveDatabaseEvent`'s
                     // convention, mirrored in `pro-sync.svelte.ts`).
-                    let database_id = pro.active_database_id().await.unwrap_or_default();
+                    let database_id = pro.attributed_database_id().await;
                     let payload = serde_json::json!({
                         "tier": tier,
                         "initial_status": last_status.as_ref().map(|s| {

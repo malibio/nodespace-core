@@ -314,9 +314,9 @@ describe('Database Store', () => {
       expect(flushAllPendingSaves).toHaveBeenCalledOnce();
       expect(mockInvoke).toHaveBeenCalledWith('set_active_database', { id: 'b' });
       // The switch also re-targets Pro cloud-sync to the new database (ADR-053).
-      // Dispatched via a serialized chain (core#2322: prevents a rapid A->B->A
-      // switch from resolving out of send order) rather than synchronously
-      // within switchTo, so it lands a microtask or two after switchTo resolves.
+      // Dispatched via a serialized chain (prevents a rapid A->B->A switch
+      // from resolving out of send order) rather than synchronously within
+      // switchTo, so it lands a microtask or two after switchTo resolves.
       await vi.waitFor(() =>
         expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' })
       );
@@ -375,8 +375,8 @@ describe('Database Store', () => {
       expect(databaseStore.activeDatabaseId).toBe('b');
       expect(clearAll).toHaveBeenCalledOnce();
       expect(clearAllTabs).toHaveBeenCalledOnce();
-      // Dispatched via a serialized chain (core#2322), so it lands a microtask
-      // or two after switchTo resolves — and its rejection must not surface.
+      // Dispatched via a serialized chain, so it lands a microtask or two
+      // after switchTo resolves — and its rejection must not surface.
       await vi.waitFor(() =>
         expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' })
       );

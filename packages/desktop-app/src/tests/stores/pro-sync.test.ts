@@ -414,6 +414,52 @@ describe('ProSync store — per-database status (ADR-053: per-database sync/auth
     expect(proSync.dismissedReloginEpisode).not.toBe(proSync.authRequiredEpisode);
   });
 
+  it('does not bump the global signedInEpisode for a BACKGROUNDED database\'s own sign-in event', () => {
+    // Regression: a background database's sign-in must not re-arm the first-Pro
+    // consent modal's auto-open for whatever OTHER database is currently active
+    // (first-pro-consent-slot.svelte compares signedInEpisode against
+    // consentDeclinedEpisode — both global — to decide whether to auto-pop).
+    databaseStore.databases = [
+      db('db-active', { boundTenantSchema: 'tenant_active' }),
+      db('db-background', { boundTenantSchema: 'tenant_background' })
+    ];
+    databaseStore.activeDatabaseId = 'db-active';
+
+    const before = proSync.signedInEpisode;
+    // db-background (NOT active) signs in for the first time.
+    emit('sync:status', {
+      state: 6,
+      detail: '',
+      user_email: 'background@example.com',
+      database_id: 'db-background'
+    });
+
+    expect(proSync.signedInEpisode).toBe(before);
+    // The active database's own userEmail is untouched by the background event.
+    expect(proSync.userEmail).toBe('');
+
+    // But db-background's OWN sign-in did land in its own entry — switching to
+    // it later shows the real state, it just didn't fire the global episode
+    // bump while backgrounded.
+    databaseStore.activeDatabaseId = 'db-background';
+    expect(proSync.userEmail).toBe('background@example.com');
+  });
+
+  it('bumps the global signedInEpisode for the ACTIVE database\'s own sign-in event', () => {
+    databaseStore.databases = [db('db-active', { boundTenantSchema: 'tenant_active' })];
+    databaseStore.activeDatabaseId = 'db-active';
+
+    const before = proSync.signedInEpisode;
+    emit('sync:status', {
+      state: 6,
+      detail: '',
+      user_email: 'active@example.com',
+      database_id: 'db-active'
+    });
+
+    expect(proSync.signedInEpisode).toBe(before + 1);
+  });
+
   it('an event with no database_id attributes to whichever database is active at receipt time', () => {
     databaseStore.databases = [db('db-gamma', { boundTenantSchema: 'tenant_gamma' })];
     databaseStore.activeDatabaseId = 'db-gamma';

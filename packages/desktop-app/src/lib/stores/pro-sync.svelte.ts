@@ -359,7 +359,7 @@ class ProSyncStore {
     // rather than relying solely on the `node:updated` watch event, which can
     // be lost for good (watcher reconnect backoff, broadcast lag drops, failed
     // coalescer refetch) and would leave the Pro-sync variant permanently
-    // stuck — e.g. at `sign-in` with the consent modal never appearing (#1674).
+    // stuck — e.g. at `sign-in` with the consent modal never appearing.
     if (changed && key === this.activeKey) {
       databaseStore.refreshDatabaseSettings();
     }
@@ -375,10 +375,22 @@ class ProSyncStore {
     }
   }
 
-  /** Set `key`'s userEmail, bumping signedInEpisode on an empty→non-empty (fresh sign-in) edge. */
+  /**
+   * Set `key`'s userEmail, bumping the global `signedInEpisode` on an
+   * empty→non-empty (fresh sign-in) edge — but ONLY when `key` is the
+   * currently-active database, mirroring `setState`'s existing
+   * `key === this.activeKey` guard on its own global side effect
+   * (`refreshDatabaseSettings`). A backgrounded database's own sign-in
+   * transition must not bump this: `first-pro-consent-slot.svelte`'s
+   * auto-open condition compares `signedInEpisode` against
+   * `consentDeclinedEpisode`, and an unrelated bump would re-arm an
+   * already-dismissed consent modal for whatever database happens to be
+   * active at the time — leaking a backgrounded database's sign-in into the
+   * active one's UI, the exact class of bug this store exists to prevent.
+   */
   private setUserEmail(key: string, next: string) {
     const prev = this.entryFor(key);
-    if (next !== '' && prev.userEmail === '') {
+    if (next !== '' && prev.userEmail === '' && key === this.activeKey) {
       this.signedInEpisode++;
     }
     this.patch(key, { userEmail: next });
