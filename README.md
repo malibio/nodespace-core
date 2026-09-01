@@ -32,14 +32,27 @@ You write things down once. Every AI tool you use can find them instantly.
 
 ## Installation
 
-### Download the Desktop App
+### macOS (Apple Silicon) — Homebrew
+
+```bash
+brew install --cask nodespaceai/nodespace/nodespace
+```
+
+Apple Silicon is the only supported macOS target. The cask installs a signed and notarized build — no Gatekeeper prompt to work around.
+
+### Other platforms — manual download
 
 **[Download NodeSpace →](https://github.com/NodeSpaceAI/nodespace-core/releases)**
 
 | Platform | Format |
 |----------|--------|
 | macOS (Apple Silicon) | `.dmg` |
-| Windows | `.exe` or `.msi` |
+| Windows | `.msi` or `.exe` |
+| Linux | `nodespace`/`nodespaced` binaries (CLI + daemon only — no packaged desktop app yet) |
+
+### Pro tier
+
+Pro adds end-to-end encrypted cloud sync — the same local-first graph, kept in sync across your devices, with per-database access control for shared use. It's a separate signed build (`nodespaced-pro`) on top of the same desktop app, currently rolling out to invited tenants; reach out on [Discord](https://discord.gg/UHFZKzH9) for access.
 
 ### Build from Source
 
