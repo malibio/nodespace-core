@@ -14,6 +14,7 @@
 import { backendAdapter } from '$lib/services/backend-adapter';
 import { createLogger } from '$lib/utils/logger';
 import { onDaemonReconnect } from '$lib/services/daemon-status';
+import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import type { SchemaNode } from '$lib/types/schema-node';
 
 const log = createLogger('SchemasStore');
@@ -39,8 +40,19 @@ class SchemasStore {
 
   /** Load all schemas from the backend and update the store. */
   async loadSchemas(): Promise<void> {
+    // ADR-053: capture the database generation before the daemon read so a
+    // switch mid-flight is detectable below and the response is dropped
+    // rather than written into the now-active database's store (this store
+    // has no private generation counter of its own, so it shares the
+    // cross-store epoch the same way `refreshDatabaseSettings` and
+    // `loadChildrenForParent` do).
+    const epoch = sharedNodeStore.currentEpoch();
     try {
       const schemas = await backendAdapter.getAllSchemas();
+      if (sharedNodeStore.currentEpoch() !== epoch) {
+        log.debug('Discarding schemas load that resolved after the database switched');
+        return;
+      }
       this.schemas = schemas;
       log.debug('Schemas loaded', { count: schemas.length });
     } catch (err) {

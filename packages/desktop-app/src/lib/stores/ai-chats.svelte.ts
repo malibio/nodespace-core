@@ -76,6 +76,11 @@ class AiChatsStore {
 
   /** Load ai-chat nodes from the backend, most-recently-modified first. */
   async loadAiChats(): Promise<void> {
+    // A database switch landed while this load was in flight: the fetched
+    // nodes belong to the database we just left, so drop them rather than
+    // writing them into a store that now represents a different database
+    // (mirrors the same guard already around `createChat`).
+    const generation = this.#generation;
     this.state = { ...this.state, loading: true, error: null };
 
     try {
@@ -83,6 +88,10 @@ class AiChatsStore {
       // query has no order-by, so limiting before the client-side sort could
       // silently exclude the true most-recent chats.
       const nodes = await backendAdapter.queryNodes({ nodeType: 'ai-chat' });
+      if (generation !== this.#generation) {
+        log.debug('Discarding AI chats load that resolved after the store moved on');
+        return;
+      }
       const chats = [...nodes]
         .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
         .slice(0, DISPLAY_LIMIT)
@@ -90,6 +99,7 @@ class AiChatsStore {
       log.debug('Loaded AI chats', { count: chats.length, totalFetched: nodes.length });
       this.state = { ...this.state, chats, loading: false };
     } catch (err) {
+      if (generation !== this.#generation) return;
       const message = err instanceof Error ? err.message : 'Failed to load AI chats';
       log.error('Failed to load AI chats', { error: message });
       this.state = { ...this.state, loading: false, error: message };

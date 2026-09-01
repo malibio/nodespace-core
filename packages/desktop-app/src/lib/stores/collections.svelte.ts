@@ -171,10 +171,19 @@ class CollectionsDataStore {
 
   /** Load all collections from backend */
   async loadCollections(): Promise<void> {
+    // A reset or database switch landed while this load was in flight: the
+    // fetched rows belong to the database we just left, so drop them rather
+    // than writing them into a store that now represents a different one
+    // (mirrors the same guard already around `createCollection`).
+    const generation = this.#generation;
     this.state = { ...this.state, loading: true, error: null };
 
     try {
       const fetched = await collectionService.getAllCollections();
+      if (generation !== this.#generation) {
+        log.debug('Discarding collections load that resolved after the store moved on');
+        return;
+      }
       log.debug('Loaded collections', { count: fetched.length });
       // Preserve optimistic entries the backend has not confirmed yet: a reload
       // that raced an in-flight create must not make the new collection blink
@@ -190,6 +199,7 @@ class CollectionsDataStore {
       };
       this.hasLoaded = true;
     } catch (err) {
+      if (generation !== this.#generation) return;
       const message = err instanceof Error ? err.message : 'Failed to load collections';
       log.error('Failed to load collections', { error: message });
       this.state = { ...this.state, loading: false, error: message };

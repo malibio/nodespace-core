@@ -128,6 +128,82 @@ describe('aiChatsData', () => {
       expect(aiChatsData.state.error).toContain('daemon unavailable');
       expect(aiChatsData.state.chats.map((c) => c.id)).toEqual(['a']);
     });
+
+    // core#2220: unlike every other cross-switch read in the codebase
+    // (loadChildrenForParent, doLoadChildrenTree, refreshDatabaseSettings,
+    // createChat, createCollection), loadAiChats committed its fetched array
+    // into state without re-checking the store generation after the await — a
+    // response issued against the previous database could land after a switch
+    // and get committed as if it belonged to the new one.
+    describe('stale-response guard across a database switch (core#2220)', () => {
+      it('discards a load that resolves after invalidateForDatabaseSwitch, without writing into the list', async () => {
+        let resolveLoad: (nodes: Node[]) => void = () => {};
+        mockQueryNodes.mockReturnValue(
+          new Promise<Node[]>((resolve) => {
+            resolveLoad = resolve;
+          })
+        );
+
+        const loadPromise = aiChatsData.loadAiChats();
+
+        // A database switch lands while the load is still in flight.
+        aiChatsData.invalidateForDatabaseSwitch();
+
+        resolveLoad([makeChat('stale-db-chat', 'Stale', '2026-01-01T00:00:00.000Z')]);
+        await loadPromise;
+
+        expect(aiChatsData.state.chats).toEqual([]);
+        expect(aiChatsData.state.error).toBeNull();
+      });
+
+      it('a late-resolving load from the previous database does not clobber a fresh load for the new one', async () => {
+        // Reproduces the exact failure scenario: DB A's loadAiChats is still in
+        // flight when the user switches to DB B. B's fresh load resolves first;
+        // A's late response must not then overwrite it.
+        let resolveFirst: (nodes: Node[]) => void = () => {};
+        mockQueryNodes.mockReturnValueOnce(
+          new Promise<Node[]>((resolve) => {
+            resolveFirst = resolve;
+          })
+        );
+
+        const firstLoad = aiChatsData.loadAiChats(); // issued against DB A
+
+        aiChatsData.invalidateForDatabaseSwitch(); // switch to DB B
+        mockQueryNodes.mockResolvedValueOnce([
+          makeChat('b-chat', 'From DB B', '2026-01-01T00:00:00.000Z')
+        ]);
+        const secondLoad = aiChatsData.loadAiChats(); // issued against DB B
+        await secondLoad;
+
+        expect(aiChatsData.state.chats.map((c) => c.id)).toEqual(['b-chat']);
+
+        // DB A's stale response finally lands.
+        resolveFirst([makeChat('a-chat', 'From DB A', '2026-01-01T00:00:00.000Z')]);
+        await firstLoad;
+
+        // Still DB B's data — the stale DB A response was dropped, not merged
+        // or committed over it.
+        expect(aiChatsData.state.chats.map((c) => c.id)).toEqual(['b-chat']);
+      });
+
+      it('discards a failure that resolves after invalidateForDatabaseSwitch, without surfacing a stale error', async () => {
+        let rejectLoad: (err: Error) => void = () => {};
+        mockQueryNodes.mockReturnValue(
+          new Promise<Node[]>((_resolve, reject) => {
+            rejectLoad = reject;
+          })
+        );
+
+        const loadPromise = aiChatsData.loadAiChats();
+        aiChatsData.invalidateForDatabaseSwitch();
+        rejectLoad(new Error('boom in old database'));
+
+        await loadPromise;
+
+        expect(aiChatsData.state.error).toBeNull();
+      });
+    });
   });
 
   describe('createChat', () => {

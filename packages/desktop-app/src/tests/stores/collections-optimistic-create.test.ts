@@ -317,4 +317,95 @@ describe('optimistic collection creation', () => {
     // collection is filtered like any other.
     expect(collectionsData.collectionsTree).toEqual([]);
   });
+
+  // core#2220: unlike every other cross-switch read in the codebase
+  // (loadChildrenForParent, doLoadChildrenTree, refreshDatabaseSettings,
+  // createChat, createCollection), loadCollections committed its fetched array
+  // into state without re-checking the store generation after the await — a
+  // response issued against the previous database could land after a switch
+  // and get committed as if it belonged to the new one.
+  describe('loadCollections stale-response guard across a database switch (core#2220)', () => {
+    it('discards a load that resolves after forgetLocallyCreated, without writing into the list', async () => {
+      let resolveLoad: (cols: CollectionInfo[]) => void = () => {};
+      mockGetAllCollections.mockReturnValue(
+        new Promise<CollectionInfo[]>((resolve) => {
+          resolveLoad = resolve;
+        })
+      );
+
+      const loadPromise = collectionsData.loadCollections();
+
+      // A database switch lands while the load is still in flight.
+      collectionsData.forgetLocallyCreated();
+
+      resolveLoad([makeCollection('stale-db-col', 'Stale', 3)]);
+      await loadPromise;
+
+      expect(collectionsData.state.collections).toEqual([]);
+    });
+
+    it('discards a load that resolves after reset, without writing into the list', async () => {
+      let resolveLoad: (cols: CollectionInfo[]) => void = () => {};
+      mockGetAllCollections.mockReturnValue(
+        new Promise<CollectionInfo[]>((resolve) => {
+          resolveLoad = resolve;
+        })
+      );
+
+      const loadPromise = collectionsData.loadCollections();
+      collectionsData.reset();
+
+      resolveLoad([makeCollection('stale-db-col', 'Stale', 3)]);
+      await loadPromise;
+
+      expect(collectionsData.state.collections).toEqual([]);
+      expect(collectionsData.hasLoaded).toBe(false);
+    });
+
+    it('a late-resolving load from the previous database does not clobber a fresh load for the new one', async () => {
+      // Reproduces the exact failure scenario: DB A's loadCollections is still
+      // in flight when the user switches to DB B. B's fresh load resolves
+      // first; A's late response must not then overwrite it.
+      let resolveFirst: (cols: CollectionInfo[]) => void = () => {};
+      mockGetAllCollections.mockReturnValueOnce(
+        new Promise<CollectionInfo[]>((resolve) => {
+          resolveFirst = resolve;
+        })
+      );
+
+      const firstLoad = collectionsData.loadCollections(); // issued against DB A
+
+      collectionsData.forgetLocallyCreated(); // switch to DB B
+      mockGetAllCollections.mockResolvedValueOnce([makeCollection('b-col', 'From DB B', 2)]);
+      const secondLoad = collectionsData.loadCollections(); // issued against DB B
+      await secondLoad;
+
+      expect(collectionsData.state.collections.map((c) => c.id)).toEqual(['b-col']);
+
+      // DB A's stale response finally lands.
+      resolveFirst([makeCollection('a-col', 'From DB A', 3)]);
+      await firstLoad;
+
+      // Still DB B's data — the stale DB A response was dropped, not merged or
+      // committed over it.
+      expect(collectionsData.state.collections.map((c) => c.id)).toEqual(['b-col']);
+    });
+
+    it('discards a load failure that resolves after forgetLocallyCreated, without surfacing a stale error', async () => {
+      let rejectLoad: (err: Error) => void = () => {};
+      mockGetAllCollections.mockReturnValue(
+        new Promise<CollectionInfo[]>((_resolve, reject) => {
+          rejectLoad = reject;
+        })
+      );
+
+      const loadPromise = collectionsData.loadCollections();
+      collectionsData.forgetLocallyCreated();
+      rejectLoad(new Error('boom in old database'));
+
+      await loadPromise;
+
+      expect(collectionsData.state.error).toBeNull();
+    });
+  });
 });

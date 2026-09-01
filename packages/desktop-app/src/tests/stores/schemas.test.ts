@@ -18,9 +18,12 @@ vi.mock('$lib/utils/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() })
 }));
 
+const { mockGetAllSchemas } = vi.hoisted(() => ({
+  mockGetAllSchemas: vi.fn(async () => [] as SchemaNode[])
+}));
 vi.mock('$lib/services/backend-adapter', () => ({
   backendAdapter: {
-    getAllSchemas: vi.fn(async () => [])
+    getAllSchemas: mockGetAllSchemas
   }
 }));
 
@@ -31,6 +34,7 @@ vi.mock('$lib/services/daemon-status', () => ({
 }));
 
 import { schemasStore } from '$lib/stores/schemas.svelte';
+import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 
 function makeSchema(id: string, isCore: boolean): SchemaNode {
   return {
@@ -102,5 +106,77 @@ describe('schemasStore.builtInSchemas — sidenav core types', () => {
       expect.arrayContaining(['task', 'project', 'skill', 'person', 'agent-guidance'])
     );
     expect(ids).toHaveLength(5);
+  });
+});
+
+// core#2220: unlike every other cross-switch read in the codebase
+// (loadChildrenForParent, doLoadChildrenTree, refreshDatabaseSettings,
+// createChat, createCollection), loadSchemas committed its fetched array into
+// state without re-checking the database generation after the await — a
+// response issued against the previous database could land after a switch and
+// get committed as if it belonged to the new one. schemasStore has no private
+// generation counter of its own (unlike collectionsData/aiChatsData), so it
+// shares the cross-store `sharedNodeStore` epoch the same way
+// `refreshDatabaseSettings`/`loadChildrenForParent` do.
+describe('schemasStore.loadSchemas stale-response guard across a database switch (core#2220)', () => {
+  beforeEach(() => {
+    schemasStore.schemas = [];
+    mockGetAllSchemas.mockReset();
+  });
+
+  it('discards a load that resolves after the database switched, without writing into the store', async () => {
+    let resolveLoad: (schemas: SchemaNode[]) => void = () => {};
+    mockGetAllSchemas.mockReturnValue(
+      new Promise<SchemaNode[]>((resolve) => {
+        resolveLoad = resolve;
+      })
+    );
+
+    const loadPromise = schemasStore.loadSchemas();
+
+    // The active database switches while the load is still in flight.
+    sharedNodeStore.clearAll();
+
+    resolveLoad([makeSchema('stale-db-schema', false)]);
+    await loadPromise;
+
+    expect(schemasStore.schemas).toEqual([]);
+  });
+
+  it('a late-resolving load from the previous database does not clobber a fresh load for the new one', async () => {
+    // Reproduces the exact failure scenario: DB A's loadSchemas is still in
+    // flight when the user switches to DB B. B's fresh load resolves first;
+    // A's late response must not then overwrite it.
+    let resolveFirst: (schemas: SchemaNode[]) => void = () => {};
+    mockGetAllSchemas.mockReturnValueOnce(
+      new Promise<SchemaNode[]>((resolve) => {
+        resolveFirst = resolve;
+      })
+    );
+
+    const firstLoad = schemasStore.loadSchemas(); // issued against DB A
+
+    sharedNodeStore.clearAll(); // switch to DB B
+    mockGetAllSchemas.mockResolvedValueOnce([makeSchema('b-schema', false)]);
+    const secondLoad = schemasStore.loadSchemas(); // issued against DB B
+    await secondLoad;
+
+    expect(schemasStore.schemas.map((s) => s.id)).toEqual(['b-schema']);
+
+    // DB A's stale response finally lands.
+    resolveFirst([makeSchema('a-schema', false)]);
+    await firstLoad;
+
+    // Still DB B's data — the stale DB A response was dropped, not merged or
+    // committed over it.
+    expect(schemasStore.schemas.map((s) => s.id)).toEqual(['b-schema']);
+  });
+
+  it('a load with no intervening switch still commits normally', async () => {
+    mockGetAllSchemas.mockResolvedValue([makeSchema('task', true)]);
+
+    await schemasStore.loadSchemas();
+
+    expect(schemasStore.schemas.map((s) => s.id)).toEqual(['task']);
   });
 });
