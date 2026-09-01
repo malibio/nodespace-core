@@ -23,6 +23,11 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 nodespace-daemon = { path = "../daemon" }
 nodespace-proto = { workspace = true }
+# Already resolved in the workspace lockfile as a transitive dep of
+# portable-pty (via the `session` PTY commands) — reused here for the same
+# POSIX-shell-style argument splitting, applied to the `mcp` passthrough
+# tool's `args` string.
+shell-words = "1.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

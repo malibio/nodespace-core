@@ -1,6 +1,7 @@
 pub mod database;
 pub mod diagnostics;
 pub mod import;
+pub mod mcp;
 pub mod mention;
 pub mod model;
 pub mod node;
