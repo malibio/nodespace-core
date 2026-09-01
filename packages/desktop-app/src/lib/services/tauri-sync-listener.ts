@@ -28,7 +28,11 @@ import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import { backendAdapter } from './backend-adapter';
 import { createLogger } from '$lib/utils/logger';
-import { scheduleCollectionRefresh, scheduleSchemaRefresh } from '$lib/utils/collection-refresh';
+import {
+  scheduleCollectionRefresh,
+  scheduleSchemaRefresh,
+  scheduleAiChatRefresh
+} from '$lib/utils/collection-refresh';
 import { registerSchemaPlugin, unregisterSchemaPlugin } from '$lib/plugins/schema-plugin-loader';
 import { applyHasChildCreated, applyHasChildUpdated, applyHasChildDeleted } from './hierarchy-sync';
 import { normalizeNodeData } from './node-normalize';
@@ -162,6 +166,7 @@ async function flushPendingNodeFetches(): Promise<void> {
           true
         );
         maybeRefreshSchemaPlugin(normalizedNode);
+        maybeRefreshAiChats(normalizedNode);
         applied++;
       }
     }
@@ -195,6 +200,25 @@ function maybeRefreshSchemaPlugin(node: Node): void {
   registerSchemaPlugin(node.id).catch((err) =>
     log.error('Failed to refresh schema plugin on node event:', err)
   );
+}
+
+/**
+ * If the given (already-fetched) node is an ai-chat, schedule a debounced
+ * refresh of the AI Chats sidebar list.
+ *
+ * Unlike `node:created` (whose payload carries `nodeType`, letting the
+ * collections/schema handlers below branch on the raw event), `node:updated`'s
+ * payload never does (see `NodeEventData`) — so gating on the fetched node's
+ * type here, rather than the event payload, is the only way to detect an
+ * ai-chat *update* at all. It also naturally covers `node:created` for free,
+ * since both event types route through this same fetch-then-apply path
+ * (`fetchAndUpdateNode` / `flushPendingNodeFetches`), so one hook handles both
+ * "an external chat was created" and "background titling updated a chat's
+ * content" (mirrors `maybeRefreshSchemaPlugin`'s reasoning for `node:updated`).
+ */
+function maybeRefreshAiChats(node: Node): void {
+  if (node.nodeType !== 'ai-chat') return;
+  scheduleAiChatRefresh();
 }
 
 /** Route a node fetch through the Pro coalescer, or apply immediately in the
@@ -355,6 +379,7 @@ async function fetchAndUpdateNode(nodeId: string, eventType: string): Promise<vo
       const normalizedNode = normalizeNodeData(node);
       sharedNodeStore.setNode(normalizedNode, { type: 'database', reason: 'domain-event' }, true);
       maybeRefreshSchemaPlugin(normalizedNode);
+      maybeRefreshAiChats(normalizedNode);
       log.info(`${eventType}: store updated for node`, nodeId);
     } else {
       log.warn(`${eventType}: node not found`, nodeId);

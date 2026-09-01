@@ -1,23 +1,34 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockLoadCollections, mockLoadMembers, mockLoadSchemas, mockCollectionsState } = vi.hoisted(
-  () => {
-    const mockLoadCollections = vi.fn().mockResolvedValue(undefined);
-    const mockLoadMembers = vi.fn().mockResolvedValue(undefined);
-    const mockLoadSchemas = vi.fn().mockResolvedValue(undefined);
+const {
+  mockLoadCollections,
+  mockLoadMembers,
+  mockLoadSchemas,
+  mockLoadAiChats,
+  mockCollectionsState
+} = vi.hoisted(() => {
+  const mockLoadCollections = vi.fn().mockResolvedValue(undefined);
+  const mockLoadMembers = vi.fn().mockResolvedValue(undefined);
+  const mockLoadSchemas = vi.fn().mockResolvedValue(undefined);
+  const mockLoadAiChats = vi.fn().mockResolvedValue(undefined);
 
-    // Minimal rune-store-like mock: exposes a reactive-style `state` field.
-    // `set` is a test helper to configure that field.
-    const mockCollectionsState = {
-      state: { selectedCollectionId: null as string | null },
-      set(newValue: { selectedCollectionId: string | null }) {
-        this.state = newValue;
-      }
-    };
+  // Minimal rune-store-like mock: exposes a reactive-style `state` field.
+  // `set` is a test helper to configure that field.
+  const mockCollectionsState = {
+    state: { selectedCollectionId: null as string | null },
+    set(newValue: { selectedCollectionId: string | null }) {
+      this.state = newValue;
+    }
+  };
 
-    return { mockLoadCollections, mockLoadMembers, mockLoadSchemas, mockCollectionsState };
-  }
-);
+  return {
+    mockLoadCollections,
+    mockLoadMembers,
+    mockLoadSchemas,
+    mockLoadAiChats,
+    mockCollectionsState
+  };
+});
 
 vi.mock('$lib/stores/collections.svelte', () => ({
   collectionsData: {
@@ -30,6 +41,12 @@ vi.mock('$lib/stores/collections.svelte', () => ({
 vi.mock('$lib/stores/schemas.svelte', () => ({
   schemasData: {
     loadSchemas: (...args: unknown[]) => mockLoadSchemas(...args)
+  }
+}));
+
+vi.mock('$lib/stores/ai-chats.svelte', () => ({
+  aiChatsData: {
+    loadAiChats: (...args: unknown[]) => mockLoadAiChats(...args)
   }
 }));
 
@@ -46,7 +63,9 @@ import {
   scheduleCollectionRefresh,
   clearCollectionRefreshTimer,
   scheduleSchemaRefresh,
-  clearSchemaRefreshTimer
+  clearSchemaRefreshTimer,
+  scheduleAiChatRefresh,
+  clearAiChatRefreshTimer
 } from '$lib/utils/collection-refresh';
 
 describe('Collection Refresh', () => {
@@ -165,6 +184,50 @@ describe('Collection Refresh', () => {
 
     it('should be safe to call when no timer is pending', () => {
       expect(() => clearSchemaRefreshTimer()).not.toThrow();
+    });
+  });
+
+  // core#2221: the AI Chats sidebar list had no node:created/node:updated
+  // wiring at all — scheduleAiChatRefresh is the missing counterpart to
+  // scheduleCollectionRefresh/scheduleSchemaRefresh above.
+  describe('scheduleAiChatRefresh', () => {
+    afterEach(() => {
+      clearAiChatRefreshTimer();
+    });
+
+    it('should refresh AI chats after debounce delay', async () => {
+      scheduleAiChatRefresh();
+
+      expect(mockLoadAiChats).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(mockLoadAiChats).toHaveBeenCalledTimes(1);
+    });
+
+    it('should debounce multiple calls, resetting the timer', async () => {
+      scheduleAiChatRefresh();
+      scheduleAiChatRefresh();
+      scheduleAiChatRefresh();
+
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(mockLoadAiChats).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('clearAiChatRefreshTimer', () => {
+    it('should cancel a pending AI chats refresh', async () => {
+      scheduleAiChatRefresh();
+      clearAiChatRefreshTimer();
+
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(mockLoadAiChats).not.toHaveBeenCalled();
+    });
+
+    it('should be safe to call when no timer is pending', () => {
+      expect(() => clearAiChatRefreshTimer()).not.toThrow();
     });
   });
 });

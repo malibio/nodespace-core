@@ -10,6 +10,7 @@
 
 import { collectionsData, collectionsState } from '$lib/stores/collections.svelte';
 import { schemasData } from '$lib/stores/schemas.svelte';
+import { aiChatsData } from '$lib/stores/ai-chats.svelte';
 import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('CollectionRefresh');
@@ -88,5 +89,40 @@ export function clearSchemaRefreshTimer(): void {
   if (schemaRefreshTimer) {
     clearTimeout(schemaRefreshTimer);
     schemaRefreshTimer = null;
+  }
+}
+
+// Debounce timer for AI chats refreshes
+let aiChatRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Debounced refresh of the AI Chats sidebar list.
+ *
+ * Called when an ai-chat node is created or updated externally (e.g. via MCP,
+ * an agent tool call, or background titling filling in a chat's title) — the
+ * sidebar's list items are detached snapshots (`AiChatListItem`), not live
+ * `sharedNodeStore` reads, so without this the list never picks up an
+ * externally-created chat or a title change until the next mount, daemon
+ * reconnect, or database switch.
+ */
+export function scheduleAiChatRefresh(): void {
+  if (aiChatRefreshTimer) {
+    clearTimeout(aiChatRefreshTimer);
+  }
+
+  aiChatRefreshTimer = setTimeout(async () => {
+    aiChatRefreshTimer = null;
+    log.debug('Refreshing AI chats after change');
+    await aiChatsData.loadAiChats();
+  }, COLLECTION_REFRESH_DEBOUNCE_MS);
+}
+
+/**
+ * Clear any pending AI chats refresh timer.
+ */
+export function clearAiChatRefreshTimer(): void {
+  if (aiChatRefreshTimer) {
+    clearTimeout(aiChatRefreshTimer);
+    aiChatRefreshTimer = null;
   }
 }

@@ -17,7 +17,11 @@
   import { onMount, onDestroy } from 'svelte';
   import { schemasStore, schemasData } from '$lib/stores/schemas.svelte';
   import { aiChatsData } from '$lib/stores/ai-chats.svelte';
-  import { clearCollectionRefreshTimer, clearSchemaRefreshTimer } from '$lib/utils/collection-refresh';
+  import {
+    clearCollectionRefreshTimer,
+    clearSchemaRefreshTimer,
+    clearAiChatRefreshTimer
+  } from '$lib/utils/collection-refresh';
 
   // Read reactive store state directly (ADR-049)
   let isCollapsed = $derived(layoutStore.state.sidebarCollapsed);
@@ -93,7 +97,10 @@
   let builtInSchemas = $derived(schemasStore.builtInSchemas);
   let customSchemas = $derived(schemasStore.customSchemas);
 
-  // AI Chats list from global store (reactive — updates when chats are created elsewhere)
+  // AI Chats list from global store (reactive — updates when chats are
+  // created/updated elsewhere, via node:created/node:updated wiring in
+  // tauri-sync-listener.ts's scheduleAiChatRefresh, same as Collections/Schema
+  // Types above)
   let aiChats = $derived(aiChatsData.state.chats);
   let createChatBusy = $derived(aiChatsData.createBusy);
   let createChatError = $derived(aiChatsData.createError);
@@ -110,6 +117,7 @@
   onDestroy(() => {
     clearCollectionRefreshTimer();
     clearSchemaRefreshTimer();
+    clearAiChatRefreshTimer();
   });
 
   // Element references for click-outside detection

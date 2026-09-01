@@ -7,6 +7,8 @@ import type { SchemaNode } from '$lib/types/schema-node';
 import * as backendAdapterModule from '$lib/services/backend-adapter';
 import { proSync } from '$lib/stores/pro-sync.svelte';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
+import { aiChatsData } from '$lib/stores/ai-chats.svelte';
+import { clearAiChatRefreshTimer } from '$lib/utils/collection-refresh';
 
 /**
  * Tests for Tauri Domain Event Listener
@@ -136,6 +138,7 @@ describe('TauriSyncListener', () => {
     structureTree.clear();
     mockNodes.clear();
     mockEventListeners.clear();
+    aiChatsData.reset();
 
     // Setup mocks
     setupMockGetNode();
@@ -151,6 +154,8 @@ describe('TauriSyncListener', () => {
     mockNodes.clear();
     mockEventListeners.clear();
     vi.restoreAllMocks();
+    aiChatsData.reset();
+    clearAiChatRefreshTimer();
     // This file installs the Tauri bridge markers; clear them rather than relying on a
     // later file's setup to do it, which only works by accident of ordering.
     Reflect.deleteProperty(window, '__TAURI__');
@@ -336,6 +341,100 @@ describe('TauriSyncListener', () => {
         expect(sharedNodeStore.hasNode('node1')).toBe(true);
       });
       expect(getSchemaSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // core#2221: the AI Chats sidebar list had no node:created/node:updated
+  // wiring at all — unlike collections and schemas (scheduleCollectionRefresh/
+  // scheduleSchemaRefresh), so an externally-created chat never appeared and
+  // background titling's node:updated (which writes the real title into
+  // content) never refreshed the list's "Untitled chat" placeholder.
+  describe('AI chats sidebar refresh on node:created / node:updated (core#2221)', () => {
+    beforeEach(async () => {
+      await initializeTauriSyncListeners();
+    });
+
+    function mockAiChatNode(id: string, content: string): Node {
+      return {
+        id,
+        nodeType: 'ai-chat',
+        content,
+        properties: {},
+        mentions: [],
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+        version: 1
+      };
+    }
+
+    it('refreshes the AI chats list when an ai-chat node is created externally', async () => {
+      const created = mockAiChatNode('chat-1', '');
+      registerMockNode(created);
+      vi.spyOn(backendAdapterModule.backendAdapter, 'queryNodes').mockResolvedValue([created]);
+
+      emitTauriEvent('node:created', { id: 'chat-1', nodeType: 'ai-chat' });
+
+      await vi.waitFor(
+        () => {
+          expect(aiChatsData.state.chats.map((c) => c.id)).toContain('chat-1');
+        },
+        { timeout: 1000 }
+      );
+    });
+
+    it('refreshes the AI chats list when background titling updates a chat via node:updated', async () => {
+      // node:updated's payload never carries nodeType (see NodeEventData) — the
+      // refresh must be gated on the *fetched* node's type, not the event
+      // payload, or this case (the actual #2221 failure scenario) can't work
+      // at all.
+      const titled = mockAiChatNode('chat-2', 'Quarterly Planning');
+      registerMockNode(titled);
+      vi.spyOn(backendAdapterModule.backendAdapter, 'queryNodes').mockResolvedValue([titled]);
+
+      emitTauriEvent('node:updated', { id: 'chat-2' });
+
+      await vi.waitFor(
+        () => {
+          expect(aiChatsData.state.chats.find((c) => c.id === 'chat-2')?.content).toBe(
+            'Quarterly Planning'
+          );
+        },
+        { timeout: 1000 }
+      );
+    });
+
+    it('does not schedule an AI chats refresh for a non-ai-chat node update', async () => {
+      registerMockNode(createTestNode('node1', 'Just a text node'));
+      const queryNodesSpy = vi
+        .spyOn(backendAdapterModule.backendAdapter, 'queryNodes')
+        .mockResolvedValue([]);
+
+      emitTauriEvent('node:updated', { id: 'node1' });
+
+      await vi.waitFor(() => {
+        expect(sharedNodeStore.hasNode('node1')).toBe(true);
+      });
+      // Give the (would-be) debounce window ample time to fire if a refresh
+      // had incorrectly been scheduled.
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(queryNodesSpy).not.toHaveBeenCalled();
+    });
+
+    it('Pro coalesced path also refreshes the AI chats list', async () => {
+      proSync.tier = 'pro';
+      const created = mockAiChatNode('chat-pro', 'From coalesced burst');
+      registerMockNode(created);
+      vi.spyOn(backendAdapterModule.backendAdapter, 'queryNodes').mockResolvedValue([created]);
+
+      emitTauriEvent('node:created', { id: 'chat-pro', nodeType: 'ai-chat' });
+
+      await vi.waitFor(
+        () => {
+          expect(aiChatsData.state.chats.map((c) => c.id)).toContain('chat-pro');
+        },
+        { timeout: 1000 }
+      );
+      proSync.tier = 'unknown';
     });
   });
 

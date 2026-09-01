@@ -63,8 +63,12 @@ vi.mock('$lib/stores/collections.svelte', () => ({
 }));
 
 const loadSchemas = vi.fn((..._a: unknown[]) => undefined);
+const schemasInvalidateForDatabaseSwitch = vi.fn((..._a: unknown[]) => undefined);
 vi.mock('$lib/stores/schemas.svelte', () => ({
-  schemasData: { loadSchemas: (...a: unknown[]) => loadSchemas(...a) }
+  schemasData: {
+    loadSchemas: (...a: unknown[]) => loadSchemas(...a),
+    invalidateForDatabaseSwitch: (...a: unknown[]) => schemasInvalidateForDatabaseSwitch(...a)
+  }
 }));
 
 const membershipInvalidateForDatabaseSwitch = vi.fn((..._a: unknown[]) => undefined);
@@ -341,6 +345,13 @@ describe('Database Store', () => {
       expect(invalidateForDatabaseSwitch).toHaveBeenCalledOnce();
       expect(invalidateForDatabaseSwitch.mock.invocationCallOrder[0]).toBeLessThan(
         loadAiChats.mock.invocationCallOrder[0]
+      );
+      // core#2220: same discipline for schemas — an in-flight loadSchemas must
+      // be invalidated before the reload, so its result can't land in the
+      // store representing the newly-active database.
+      expect(schemasInvalidateForDatabaseSwitch).toHaveBeenCalledOnce();
+      expect(schemasInvalidateForDatabaseSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+        loadSchemas.mock.invocationCallOrder[0]
       );
       // core#2218: the per-collection member cache and the sub-panel selection
       // are both keyed on a collection id that is name-derived and can collide
