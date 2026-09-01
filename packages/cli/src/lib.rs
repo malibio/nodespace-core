@@ -163,6 +163,13 @@ pub enum Command {
     },
     /// Uninstall NodeSpace: stop daemon, remove binaries and service registration.
     Uninstall(commands::uninstall::UninstallArgs),
+    /// Host a stdio MCP server exposing one passthrough tool, for bash-less
+    /// MCP surfaces (e.g. Claude Desktop's Chat tab) that cannot shell this
+    /// CLI directly. Hidden from `--help` and the generated skill CLI
+    /// reference: it is a transport a connector config launches, not a verb
+    /// an agent types — see `commands::mcp` for the architecture.
+    #[command(hide = true)]
+    Mcp,
 }
 
 /// Resolve the socket path from an explicit override or env/default.
@@ -409,6 +416,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             commands::database::run(&mut client, action, json).await
         }
         Command::Uninstall(args) => commands::uninstall::run(args),
+        // `mcp` doesn't connect to the daemon itself — each dispatched call
+        // shells back out to this same binary (see `commands::mcp`), so it
+        // only needs the resolved socket path and raw database selection,
+        // not a client.
+        Command::Mcp => commands::mcp::run(sock.clone(), cli.database.clone()).await,
     }
 }
 
