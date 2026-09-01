@@ -41,7 +41,10 @@
     'auth-required': 'Sign in required',
     syncing: 'Syncing…',
     connected: 'Synced',
-    error: 'Retry sign-in'
+    error: 'Retry sign-in',
+    // Synthetic, frontend-only (ADR-053): the active database has no bound
+    // cloud tenant, so there is structurally no sync session to report on.
+    'local-only': 'Local only'
   };
 
   const tones: Record<SyncState, string> = {
@@ -52,10 +55,14 @@
     'auth-required': 'blue',
     syncing: 'amber',
     connected: 'green',
-    error: 'red'
+    error: 'red',
+    'local-only': 'grey'
   };
 
-  // States where clicking should kick off a fresh sign-in attempt.
+  // States where clicking should kick off a fresh sign-in attempt. 'local-only'
+  // is deliberately excluded: binding a tenant to this database is a separate,
+  // not-yet-wired flow, so the pill stays informational (not clickable) rather
+  // than implying a sign-in click would bind one.
   const SIGN_IN_STATES: SyncState[] = ['unspecified', 'disconnected', 'auth-required', 'error'];
 
   // While an InitiateOAuth call is in flight, disable the pill so a

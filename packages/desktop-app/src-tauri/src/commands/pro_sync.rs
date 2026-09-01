@@ -64,10 +64,12 @@ pub async fn pro_current_status(app: AppHandle) -> Result<Option<SyncStatusSnaps
     let Some(pro) = app.try_state::<ProClient>() else {
         return Ok(None);
     };
+    let database_id = pro.active_database_id().await.unwrap_or_default();
     Ok(pro.last_status().await.map(|s| SyncStatusSnapshot {
         state: s.state,
         detail: s.detail,
         user_email: s.user_email,
+        database_id,
     }))
 }
 
@@ -77,6 +79,10 @@ pub struct SyncStatusSnapshot {
     pub state: i32,
     pub detail: String,
     pub user_email: String,
+    /// The database this status is attributed to — see
+    /// [`crate::services::ProClient::active_database_id`]. Empty when no
+    /// `pro_activate_database` call has landed yet.
+    pub database_id: String,
 }
 
 /// Start a long-lived `WatchSyncStatus` subscription on the daemon
@@ -130,9 +136,11 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
                 }
                 Ok(Err(status)) => {
                     tracing::debug!(error = %status, "sync-status subscribe failed");
+                    let database_id = pro_client.active_database_id().await.unwrap_or_default();
                     emit_disconnected(
                         &app_handle,
                         format!("sync-status subscribe failed: {status}"),
+                        database_id,
                     );
                     // Wait for a channel rebuild or a short backoff, then retry.
                     tokio::select! {
@@ -163,10 +171,18 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
                             // Cache the latest status so a reloaded webview re-hydrates
                             // deterministically instead of appearing signed out.
                             pro_client.set_last_status(evt.clone()).await;
+                            // Attribute the event to whichever database the desktop last
+                            // activated. `SyncStatusEvent` itself carries no database_id
+                            // (ADR-053 single-active session: the daemon runs exactly one
+                            // sync session at a time, so this locally-tracked id is
+                            // authoritative for "which database is this about").
+                            let database_id =
+                                pro_client.active_database_id().await.unwrap_or_default();
                             let payload = serde_json::json!({
                                 "state": evt.state,
                                 "detail": evt.detail,
                                 "user_email": evt.user_email,
+                                "database_id": database_id,
                             });
                             if let Err(e) = app_handle.emit("sync:status", payload) {
                                 tracing::warn!(error = %e, "failed to emit sync:status");
@@ -190,7 +206,8 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
             // Ended/errored on the same channel: grey the pill, back off, retry —
             // waking immediately if the channel is rebuilt meanwhile.
             tracing::info!("sync-status stream ended; reconnecting");
-            emit_disconnected(&app_handle, "sync-status stream ended".into());
+            let database_id = pro_client.active_database_id().await.unwrap_or_default();
+            emit_disconnected(&app_handle, "sync-status stream ended".into(), database_id);
             tokio::select! {
                 _ = generation.changed() => {}
                 _ = tokio::time::sleep(RETRY_BACKOFF) => {}
@@ -207,11 +224,12 @@ pub async fn pro_subscribe_sync_status(app: AppHandle) -> Result<(), String> {
 /// (subscription failure, daemon stream-close, item error). Without
 /// this the UI keeps showing whatever state the daemon last emitted
 /// and there's no signal that the stream is gone.
-fn emit_disconnected(app: &AppHandle, reason: String) {
+fn emit_disconnected(app: &AppHandle, reason: String, database_id: String) {
     let payload = serde_json::json!({
         "state": PbState::Disconnected as i32,
         "detail": reason,
         "user_email": "",
+        "database_id": database_id,
     });
     if let Err(e) = app.emit("sync:status", payload) {
         tracing::warn!(error = %e, "failed to emit synthetic sync:status DISCONNECTED");
@@ -306,10 +324,18 @@ pub async fn pro_activate_database(app: AppHandle, database_id: String) -> Resul
     };
     let mut client = pro.client().await;
     client
-        .activate_database(ActivateDatabaseRequest { database_id })
+        .activate_database(ActivateDatabaseRequest {
+            database_id: database_id.clone(),
+        })
         .await
         .map_err(|e| format!("ActivateDatabase failed: {e}"))?;
     tracing::info!("Pro: ActivateDatabase");
+    // Track which database is now the sync target so subsequent `sync:status`
+    // events (which carry no `database_id` of their own — ADR-053 single-active
+    // session) can be attributed to it for the frontend's per-database store.
+    // Only recorded on success — a failed ActivateDatabase didn't actually
+    // re-target the daemon's session, so the old attribution must stand.
+    pro.set_active_database_id(database_id).await;
     Ok(())
 }
 

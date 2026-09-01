@@ -568,6 +568,12 @@ pub fn run() {
                     let pro = crate::services::ProClient::probe_on_channel(channel).await;
                     let tier = pro.tier().await;
                     let last_status = pro.last_status().await;
+                    // No `pro_activate_database` call has landed yet at probe time, so
+                    // this is always empty — the frontend's per-database sync store
+                    // attributes an empty database_id to whichever database it
+                    // currently considers active (see `isActiveDatabaseEvent`'s
+                    // convention, mirrored in `pro-sync.svelte.ts`).
+                    let database_id = pro.active_database_id().await.unwrap_or_default();
                     let payload = serde_json::json!({
                         "tier": tier,
                         "initial_status": last_status.as_ref().map(|s| {
@@ -575,6 +581,7 @@ pub fn run() {
                                 "state": s.state,
                                 "detail": s.detail,
                                 "user_email": s.user_email,
+                                "database_id": database_id,
                             })
                         }),
                     });

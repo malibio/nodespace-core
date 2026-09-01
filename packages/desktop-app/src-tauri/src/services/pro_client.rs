@@ -46,6 +46,15 @@ struct ProClientInner {
     client: CloudSyncServiceClient<Channel>,
     tier: ProTier,
     last_status: Option<SyncStatusEvent>,
+    /// Registry id of the database the desktop last told the daemon to make the
+    /// active cloud-sync target (via `ActivateDatabase`). `None` until the first
+    /// `pro_activate_database` call succeeds — e.g. immediately after the Pro
+    /// probe, before the frontend has resolved which database it's showing.
+    /// `SyncStatusEvent` carries no `database_id` of its own (ADR-053 single-active
+    /// session: the daemon runs exactly one sync session, so this locally-tracked
+    /// id is what every `WatchSyncStatus` event is attributed to when forwarded to
+    /// the frontend).
+    active_database_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -76,6 +85,7 @@ impl ProClient {
                 client,
                 tier,
                 last_status,
+                active_database_id: None,
             })),
             generation: Arc::new(watch::channel(0u64).0),
         }
@@ -105,6 +115,20 @@ impl ProClient {
 
     pub async fn client(&self) -> CloudSyncServiceClient<Channel> {
         self.inner.read().await.client.clone()
+    }
+
+    /// The database id last told to the daemon via `ActivateDatabase`, or `None`
+    /// before the first activation. Used to attribute `sync:status` events to a
+    /// database (see [`ProClientInner::active_database_id`]).
+    pub async fn active_database_id(&self) -> Option<String> {
+        self.inner.read().await.active_database_id.clone()
+    }
+
+    /// Record the database id the desktop just activated. Empty string is
+    /// normalized to `None` (deactivate / local-only), mirroring
+    /// `ActivateDatabaseRequest.database_id`'s "empty = deactivate" convention.
+    pub async fn set_active_database_id(&self, database_id: String) {
+        self.inner.write().await.active_database_id = normalize_active_database_id(database_id);
     }
 
     /// Point the cached Pro client at a freshly-rebuilt channel after a
@@ -181,5 +205,36 @@ async fn probe(client: &mut CloudSyncServiceClient<Channel>) -> (ProTier, Option
             // subscription.
             (ProTier::Pro, None)
         }
+    }
+}
+
+/// Normalize an `ActivateDatabase` argument for storage as the tracked active
+/// database id: empty string (the proto's "deactivate / local-only"
+/// convention) becomes `None`, anything else is kept as-is. Extracted as a
+/// pure function so the normalization is unit-testable without a live gRPC
+/// channel (see [`ProClient::set_active_database_id`]).
+fn normalize_active_database_id(database_id: String) -> Option<String> {
+    if database_id.is_empty() {
+        None
+    } else {
+        Some(database_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_active_database_id;
+
+    #[test]
+    fn empty_database_id_normalizes_to_none() {
+        assert_eq!(normalize_active_database_id(String::new()), None);
+    }
+
+    #[test]
+    fn non_empty_database_id_is_kept() {
+        assert_eq!(
+            normalize_active_database_id("db-alpha".to_string()),
+            Some("db-alpha".to_string())
+        );
     }
 }
