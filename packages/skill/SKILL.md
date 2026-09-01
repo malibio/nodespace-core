@@ -59,9 +59,9 @@ A NodeSpace collection can be **synced and shared** with a teammate through Node
 
 **This is a soft inference, not an API call.** There is no "do I have Bash?" check to run — decide from the tools you were actually given this turn:
 
-1. **A Bash/shell tool is available** → "Branch 1: Shell" below.
-2. **No Bash, but a `nodespace` tool is available** (its schema takes one `args: string` parameter — the MCP passthrough) → "Branch 2: MCP passthrough" below.
-3. **Neither** → "Branch 3: Unreachable" below.
+1. **A Bash/shell tool is available** → "Branch 1: Shell available" below.
+2. **No Bash, but a `nodespace` tool is available** (its schema takes one `args: string` parameter — the MCP passthrough) → "Branch 2: No shell, `nodespace` MCP tool available" below.
+3. **Neither** → "Branch 3: Neither shell nor MCP tool available" below.
 
 A wrong guess should degrade gracefully, not dead-end: if Branch 1's commands come back as though there's no shell at all, or the `nodespace` tool you expected never appears in your tool list, fall through to the next branch rather than repeating the same failed approach.
 
@@ -99,11 +99,14 @@ args: "diagnostics"
 
 The tool's result text carries the underlying CLI's own output, so read it the way you'd read a shell command's output — but you cannot self-heal by running an installer or starting a daemon; you can only tell the user what's wrong.
 
+#### Failure recovery
+
 | Symptom (in the tool result) | Cause | Recovery |
 |---------|-------|----------|
 | `Failed to run the nodespace CLI at ...` | The CLI binary backing this passthrough is missing or broken | Tell the user NodeSpace needs to be reinstalled — point at the desktop app or `brew install --cask nodespaceai/nodespace/nodespace`. You cannot install it yourself from here; do not propose a command to run. |
 | `Could not connect to nodespaced` | Daemon not running | Tell the user to start it with `nodespaced` on the machine hosting this connector — same fix as Branch 1, but you cannot run it yourself. Do not retry automatically. |
 | `diagnostics` call (`args: "diagnostics"`) shows entries in `errors` | Database issues | Report the specific error messages to the user before continuing — same as Branch 1. |
+| `did not complete within 120s` | The dispatched command streams or blocks (e.g. `session launch`/`session attach`) — this passthrough kills and reports it as a timeout rather than staying open | Do not retry it through this tool. Tell the user this NodeSpace command needs an interactive session and isn't supported through this connector; point them at a shell-capable surface (Branch 1: Claude Code, or Claude Desktop's Code tab) for it. |
 
 ### Branch 3: Neither shell nor MCP tool available
 

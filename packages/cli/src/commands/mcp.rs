@@ -52,7 +52,11 @@ use tokio::process::Command as ChildCommand;
 /// negotiate.
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-const TOOL_NAME: &str = "nodespace";
+/// The one tool this server exposes. `pub` so `packages/skill/SKILL.md`'s
+/// Preflight Check (Branch 2, the MCP passthrough) can be tested against this
+/// value directly (`packages/cli/tests/skill_md_generation.rs`) rather than a
+/// second, hand-typed copy that could silently drift from a future rename.
+pub const TOOL_NAME: &str = "nodespace";
 
 const TOOL_DESCRIPTION: &str = "Run a `nodespace` CLI command. `args` is the exact argument list \
     that would follow `nodespace` on a shell line (e.g. `search \"auth tokens\"`, `node get <id>`). \
@@ -63,7 +67,10 @@ const TOOL_DESCRIPTION: &str = "Run a `nodespace` CLI command. `args` is the exa
 /// but finite: `session launch`/`session attach` are designed to stream and
 /// block indefinitely (interactive PTY attachment), which would otherwise
 /// wedge this server's single-threaded request loop forever.
-const DISPATCH_TIMEOUT: Duration = Duration::from_secs(120);
+///
+/// `pub` for the same reason as [`TOOL_NAME`]: SKILL.md's Branch 2 documents
+/// this exact timeout, and a test pins the two together.
+pub const DISPATCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Hosts the stdio MCP server: reads JSON-RPC requests from stdin, one per
 /// line, dispatches them, and writes JSON-RPC responses to stdout, one per
