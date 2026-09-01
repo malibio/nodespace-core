@@ -48,7 +48,7 @@ Apple Silicon is the only supported macOS target. The cask installs a signed and
 |----------|--------|
 | macOS (Apple Silicon) | `.dmg` |
 | Windows | `.msi` or `.exe` |
-| Linux | `.deb` / `.rpm` / tarball |
+| Linux | `nodespace`/`nodespaced` binaries (CLI + daemon only — no packaged desktop app yet) |
 
 ### Pro tier
 
