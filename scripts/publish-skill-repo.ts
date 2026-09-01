@@ -130,7 +130,7 @@ export function readSkillSource(): { body: string; referenceCli: string } {
 export function renderPublishFiles(version: string): RepoFile[] {
   const v = normalizeVersion(version);
   const frontmatter = buildSkillFrontmatter({
-    compatibility: `Targets NodeSpace app v${v}. Requires the \`nodespace\` CLI on $PATH.`,
+    compatibility: `Targets NodeSpace app v${v}. Requires either a shell with the \`nodespace\` CLI on $PATH, or an MCP client connected to \`nodespace mcp\` (its bash-less passthrough) -- see Preflight Check in SKILL.md.`,
   });
 
   return sharedShimPaths().map((relSrcPath) => {

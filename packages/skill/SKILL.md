@@ -55,7 +55,21 @@ A NodeSpace collection can be **synced and shared** with a teammate through Node
 
 ## Preflight Check
 
-**Before starting any multi-step NodeSpace operation**, run these two commands to confirm the tooling is present and healthy:
+**Before starting any multi-step NodeSpace operation**, work out which of three capability branches you're on, then follow that branch. Check capability first, before running anything — the branches below differ in how (or whether) you can run a `nodespace` command at all, so branching on a command's output only works once you already know you have a way to run commands.
+
+**This is a soft inference, not an API call.** There is no "do I have Bash?" check to run — decide from the tools you were actually given this turn:
+
+1. **A Bash/shell tool is available** → "Branch 1: Shell" below.
+2. **No Bash, but a `nodespace` tool is available** (its schema takes one `args: string` parameter — the MCP passthrough) → "Branch 2: MCP passthrough" below.
+3. **Neither** → "Branch 3: Unreachable" below.
+
+A wrong guess should degrade gracefully, not dead-end: if Branch 1's commands come back as though there's no shell at all, or the `nodespace` tool you expected never appears in your tool list, fall through to the next branch rather than repeating the same failed approach.
+
+**Consent discipline is identical on every branch.** Never run the installer, start the daemon, or delete a node without the user's explicit confirmation — the MCP passthrough is not an exception just because it's a tool call instead of a shell line; see "Delete a node" below, which applies unchanged regardless of which branch dispatched it.
+
+### Branch 1: Shell available
+
+Run these two commands to confirm the tooling is present and healthy:
 
 ```bash
 nodespace --version
@@ -64,13 +78,36 @@ nodespace diagnostics
 
 Run this preflight once per session or task, not before every individual command.
 
-### Failure recovery
+#### Failure recovery
 
 | Symptom | Cause | Recovery |
 |---------|-------|----------|
 | `command not found: nodespace` | CLI not installed or not on `$PATH` | Tell the user NodeSpace CLI is not installed and propose installing it — never run the installer without their explicit confirmation. If they confirm, run `sh -c "$(curl -fsSL https://nodespace.ai/install.sh)" -- --no-gui` (installs the CLI only, non-interactively — the same script the one-line install and `brew install --cask nodespaceai/nodespace/nodespace` both use). Then retry the original command. If it still fails because this shell session hasn't picked up the updated `$PATH`, tell the user to open a new terminal and try again. If they decline the install, stop. |
 | `Could not connect to nodespaced` | Daemon not running | Surface the CLI's own message to the user: start the daemon with `nodespaced`. Do not retry automatically — wait for confirmation. |
 | `diagnostics` shows entries in `errors` | Database issues | Report the specific error messages to the user before continuing. |
+
+### Branch 2: No shell, `nodespace` MCP tool available
+
+There's no shell, but a `nodespace` tool is on your tool list: a passthrough with one `args` parameter — the exact argument list that would follow `nodespace` on a shell line. Every command in this document works verbatim through it, with no separate command set to learn: what Branch 1 runs as `nodespace search "auth tokens"` on a shell line, this branch calls the tool with `args: "search \"auth tokens\""`; `nodespace node get <id>` becomes `args: "node get <id>"`; and so on for every example elsewhere in this file, including "Delete a node" below.
+
+Run the same preflight by calling the tool twice:
+
+```
+args: "--version"
+args: "diagnostics"
+```
+
+The tool's result text carries the underlying CLI's own output, so read it the way you'd read a shell command's output — but you cannot self-heal by running an installer or starting a daemon; you can only tell the user what's wrong.
+
+| Symptom (in the tool result) | Cause | Recovery |
+|---------|-------|----------|
+| `Failed to run the nodespace CLI at ...` | The CLI binary backing this passthrough is missing or broken | Tell the user NodeSpace needs to be reinstalled — point at the desktop app or `brew install --cask nodespaceai/nodespace/nodespace`. You cannot install it yourself from here; do not propose a command to run. |
+| `Could not connect to nodespaced` | Daemon not running | Tell the user to start it with `nodespaced` on the machine hosting this connector — same fix as Branch 1, but you cannot run it yourself. Do not retry automatically. |
+| `diagnostics` call (`args: "diagnostics"`) shows entries in `errors` | Database issues | Report the specific error messages to the user before continuing — same as Branch 1. |
+
+### Branch 3: Neither shell nor MCP tool available
+
+NodeSpace is not reachable from this surface. There is no command to run and nothing to propose running — do not attempt a `nodespace` invocation, and do not fabricate or guess at a result. Tell the user plainly that NodeSpace can't be reached from here, and point them at a surface that can: the NodeSpace desktop app, or a shell- or MCP-capable agent harness (e.g. Claude Code, or Claude Desktop's Code tab). Installing a connector is a step the user takes in their own client, not something you can do on their behalf.
 
 ## Prerequisites
 
