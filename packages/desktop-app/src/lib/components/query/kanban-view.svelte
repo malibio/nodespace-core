@@ -214,8 +214,25 @@
   // field with a value from a completely different vocabulary.
   let chainOrigin = new Map<string, string | null>();
 
-  /** Move a card into the column identified by `toColumn` (UNASSIGNED clears it). */
+  /**
+   * Move a card into the column identified by `toColumn` (UNASSIGNED clears it).
+   *
+   * `id` must be a member of THIS board's `nodeIds` — enforced here, not just
+   * at each call site, so every current and future caller gets the same
+   * guarantee for free. The one path that can hand this an id from *outside*
+   * that set is onDrop's dataTransfer fallback (kanban-view is the only
+   * component that sets node-id drag data, so a split view with two boards on
+   * screen can hand this instance a foreign id via the shared DataTransfer);
+   * the keyboard "Move to" select's id is already sourced from a loop over
+   * this board's own rendered cards, so it can never actually trigger this,
+   * but a defense-in-depth check at the point that reads and writes the node
+   * is worth more than trusting every caller to have filtered correctly —
+   * this is exactly the kind of write a wrong id here would otherwise
+   * silently make onto another board's node, in a vocabulary it may not even
+   * use.
+   */
   function moveCard(id: string, toColumn: string): void {
+    if (!nodeIds.includes(id)) return;
     const node = sharedNodeStore.getNode(id);
     if (!node || !activeGroupBy) return;
     // Captured now, for the onPersistError closure below — activeGroupBy is
@@ -326,18 +343,10 @@
     const id = draggingId ?? e.dataTransfer?.getData('text/plain') ?? null;
     draggingId = null;
     dragOverColumn = null;
-    // `draggingId` is component-local state set only by THIS board's own
-    // onDragStart, so it's always one of this board's own nodeIds. The
-    // dataTransfer fallback has no such guarantee: kanban-view is the only
-    // component that sets node-id drag data, so in a split view with two
-    // boards on screen, a drag that started in the OTHER board's instance
-    // leaves this instance's draggingId null while the browser still hands
-    // this drop handler that other board's text/plain payload. Without this
-    // check, moveCard would resolve that foreign id in the shared store and
-    // write THIS board's activeGroupBy column value onto a node that isn't
-    // even part of this board's result set — silently corrupting a node
-    // that may not use that field's vocabulary at all.
-    if (id && nodeIds.includes(id)) moveCard(id, columnValue);
+    // The dataTransfer fallback below can hand this a foreign id from
+    // another board's drag (see moveCard's doc comment) — moveCard itself
+    // is the trust boundary that rejects it, not this call site.
+    if (id) moveCard(id, columnValue);
   }
 </script>
 

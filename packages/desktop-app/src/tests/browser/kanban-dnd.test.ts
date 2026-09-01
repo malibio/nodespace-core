@@ -513,19 +513,7 @@ describe('KanbanView — cross-board drag isolation (browser mode)', () => {
     // onDragStart never fired), so its onDrop falls back to dataTransfer
     // and must recognize 't1' isn't one of ITS nodeIds (['i1']) before
     // doing anything with it.
-    const dataTransfer = new DataTransfer();
-    sourceCard.dispatchEvent(
-      new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer })
-    );
-    targetColumn.dispatchEvent(
-      new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer })
-    );
-    targetColumn.dispatchEvent(
-      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer })
-    );
-    sourceCard.dispatchEvent(
-      new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer })
-    );
+    await dragAndDrop(sourceCard, targetColumn);
 
     // Give any (wrongly-fired) write a tick to land before asserting its absence.
     await new Promise((resolve) => setTimeout(resolve, 50));
