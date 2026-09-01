@@ -275,9 +275,22 @@ async fn call_tool(exe: &Path, args_str: &str, sock: &Path, database: Option<&st
 /// `kill_on_drop(true)` ensures a child that outlives `timeout` (e.g. a
 /// `session launch` that never exits on its own) is actually killed when the
 /// timed-out future is dropped, rather than left running as an orphan.
+///
+/// `stdin(Stdio::null())` is load-bearing, not cosmetic: unlike
+/// `std::process::Command::output()`, which nulls stdin by default,
+/// `tokio::process::Command::output()` leaves stdin untouched — i.e.
+/// inherited from this `mcp` process, which is this server's real JSON-RPC
+/// transport. Without this call, dispatching a subcommand that itself reads
+/// stdin (`session attach`/`session launch`, which stream a PTY) would race
+/// this function's own stdin loop for bytes off the same pipe, silently
+/// diverting a live client's subsequent JSON-RPC messages into an unrelated
+/// terminal session instead of the request loop. Do not remove it.
 async fn run_child(exe: &Path, argv: &[String], timeout: Duration) -> Value {
     let mut command = ChildCommand::new(exe);
-    command.args(argv).kill_on_drop(true);
+    command
+        .args(argv)
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null());
 
     match tokio::time::timeout(timeout, command.output()).await {
         Ok(Ok(output)) if output.status.success() => {
@@ -634,5 +647,24 @@ mod process_tests {
         assert_eq!(result["isError"], true);
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Failed to run the nodespace CLI"));
+    }
+
+    /// `cat` with no arguments reads its stdin until EOF and echoes it back.
+    /// A null stdin (what `run_child` must give the dispatched process — see
+    /// its doc comment for why) hits EOF immediately, so this returns fast
+    /// with empty output; a real regression (dropping `stdin(Stdio::null())`
+    /// so the child inherits this test process's own stdin) is only
+    /// observable here when that inherited stream is itself open and
+    /// unclosed, which this harness does not control — the primary
+    /// protection against that regression is `run_child`'s explanatory doc
+    /// comment plus the source-level fact that `tokio::process::Command`'s
+    /// `output()`, unlike `std::process::Command`'s, does not null stdin on
+    /// its own. This test still exercises the exact code path and pins the
+    /// intended fast/empty behavior.
+    #[tokio::test]
+    async fn run_child_gives_the_dispatched_process_a_null_stdin() {
+        let result = run_child(Path::new("/bin/cat"), &[], Duration::from_secs(5)).await;
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["content"][0]["text"], "");
     }
 }
