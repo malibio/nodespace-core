@@ -120,6 +120,24 @@ function emptyStatus(): DatabaseSyncStatus {
  */
 const UNSCOPED_KEY = '__unscoped__';
 
+/**
+ * Synthetic status for an active database affirmatively known to be unbound
+ * (ADR-053: no bound tenant => structurally no sync session). Every field is
+ * forced clean, not just `state` — a stray/stale cached entry under that
+ * database's id (e.g. a leftover from before a genuine re-target's status
+ * gets cleared, or any future bug that writes one) must not leak `userEmail`
+ * into `signedIn` on the pill, or a non-`-1` `dismissedReloginEpisode`, while
+ * the pill itself reads 'local-only'. Frozen — shared by every read, never
+ * mutated.
+ */
+const LOCAL_ONLY_ENTRY: DatabaseSyncStatus = Object.freeze({
+  state: 'local-only',
+  detail: '',
+  userEmail: '',
+  authRequiredEpisode: 0,
+  dismissedReloginEpisode: -1
+});
+
 /** Reactive Pro-sync state — Svelte 5 runes via class-based pattern. */
 class ProSyncStore {
   tier = $state<ProTier>('unknown');
@@ -142,7 +160,7 @@ class ProSyncStore {
    * silent-resume path the frontend never sees an OAuth response.
    */
   get userEmail(): string {
-    return this.entryFor(this.activeKey).userEmail;
+    return this.activeEntry.userEmail;
   }
   set userEmail(next: string) {
     this.patch(this.activeKey, { userEmail: next });
@@ -155,7 +173,7 @@ class ProSyncStore {
    * dismissed, without an effect that reads and writes its own dismissal flag.
    */
   get authRequiredEpisode(): number {
-    return this.entryFor(this.activeKey).authRequiredEpisode;
+    return this.activeEntry.authRequiredEpisode;
   }
 
   /**
@@ -168,7 +186,7 @@ class ProSyncStore {
    * that was never made for it. `-1` = nothing dismissed yet for this database.
    */
   get dismissedReloginEpisode(): number {
-    return this.entryFor(this.activeKey).dismissedReloginEpisode;
+    return this.activeEntry.dismissedReloginEpisode;
   }
   set dismissedReloginEpisode(next: number) {
     this.patch(this.activeKey, { dismissedReloginEpisode: next });
@@ -287,20 +305,33 @@ class ProSyncStore {
   }
 
   /**
+   * The status every read-only getter below resolves against: the frozen
+   * {@link LOCAL_ONLY_ENTRY} when the active database is affirmatively known
+   * to be unbound, else its own cached entry. Funneling every getter through
+   * this ONE resolver (rather than only overriding `state`) means a stray or
+   * stale cached entry under an unbound database's id can never leak through
+   * `userEmail`/`detail`/`authRequiredEpisode`/`dismissedReloginEpisode` even
+   * while `state` correctly reads 'local-only'.
+   */
+  private get activeEntry(): DatabaseSyncStatus {
+    if (this.activeIsUnbound) return LOCAL_ONLY_ENTRY;
+    return this.entryFor(this.activeKey);
+  }
+
+  /**
    * Realtime sync state for the ACTIVE database — 'local-only' (synthetic,
    * never from the daemon) when it has no bound tenant, else that database's
    * own last-known `SyncStatusEvent.state`.
    */
   get state(): SyncState {
-    if (this.activeIsUnbound) return 'local-only';
-    return this.entryFor(this.activeKey).state;
+    return this.activeEntry.state;
   }
   set state(next: SyncState) {
     this.patch(this.activeKey, { state: next });
   }
 
   get detail(): string {
-    return this.entryFor(this.activeKey).detail;
+    return this.activeEntry.detail;
   }
   set detail(next: string) {
     this.patch(this.activeKey, { detail: next });

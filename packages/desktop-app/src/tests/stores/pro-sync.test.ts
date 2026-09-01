@@ -317,9 +317,27 @@ describe('ProSync store — per-database status (ADR-053: per-database sync/auth
     databaseStore.activeDatabaseId = 'db-local';
     // A status somehow tagged for this (structurally sync-less) database —
     // must never surface; the unbound check wins over any cached entry.
-    emit('sync:status', { state: 6, detail: '', user_email: 'x@example.com', database_id: 'db-local' });
+    emit('sync:status', {
+      state: 6,
+      detail: 'catching up',
+      user_email: 'x@example.com',
+      database_id: 'db-local'
+    });
+    // Also drive an auth-required episode + a dismissal under this same id,
+    // so authRequiredEpisode/dismissedReloginEpisode have a non-default,
+    // stray value too — not just state/userEmail/detail.
+    emit('sync:status', { state: 4, detail: '', user_email: '', database_id: 'db-local' });
+    proSync.dismissedReloginEpisode = proSync.authRequiredEpisode;
 
+    // Regression: the local-only override must cover EVERY field the pill
+    // and re-login/consent slots read, not just `state` — otherwise a grey
+    // "Local only" pill could still be clickable (userEmail !== '') and open
+    // an account menu claiming "Signed in as x@example.com".
     expect(proSync.state).toBe('local-only');
+    expect(proSync.userEmail).toBe('');
+    expect(proSync.detail).toBe('');
+    expect(proSync.authRequiredEpisode).toBe(0);
+    expect(proSync.dismissedReloginEpisode).toBe(-1);
   });
 
   it('does not force local-only while the registry has not resolved the active database yet', () => {

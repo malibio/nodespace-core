@@ -234,25 +234,39 @@ class DatabaseStore {
   }
 
   /**
+   * Serializes `activateProSync` calls so a rapid A -> B -> A switch sequence
+   * can never have its underlying `pro_activate_database` invokes resolve out
+   * of send order. Each call is chained to start only once the previous one
+   * has settled, guaranteeing arrival order on the Rust side matches send
+   * order — without this, the daemon (and the Rust-tracked
+   * `active_database_id` every subsequent unscoped `sync:status` event is
+   * attributed against) could end up pointed at a stale target if an earlier
+   * call's RPC happens to complete after a later one's.
+   */
+  private proActivateChain: Promise<void> = Promise.resolve();
+
+  /**
    * Re-target the Pro cloud-sync session to `id` (ADR-053 single-active sync).
    * Called both from `load()`'s first resolution (so a fresh launch's default
    * selection is the daemon's sync target from the start, not just after the
    * first manual switch) and from `switchTo()`. No-ops in community mode (the
    * Tauri command returns early without a `ProClient`). Best-effort and
-   * fire-and-forget, same contract as `pinWindowDatabase` above — a failure
-   * here must never destabilize the caller.
+   * fire-and-forget from the CALLER's perspective (same contract as
+   * `pinWindowDatabase` above — a failure here must never destabilize the
+   * caller), but internally serialized via `proActivateChain` — see there.
    */
   private activateProSync(id: string): void {
     if (!isTauriBridgePresent()) return;
-    try {
-      Promise.resolve(invoke('pro_activate_database', { databaseId: id })).catch(
-        (err: unknown) => {
+    this.proActivateChain = this.proActivateChain
+      // A previous call's rejection must not abort this one's turn in the chain.
+      .catch(() => {})
+      .then(async () => {
+        try {
+          await invoke('pro_activate_database', { databaseId: id });
+        } catch (err) {
           log.warn('Failed to re-target sync to the database', { id, error: err });
         }
-      );
-    } catch (err) {
-      log.warn('Failed to re-target sync to the database', { id, error: err });
-    }
+      });
   }
 
   /**

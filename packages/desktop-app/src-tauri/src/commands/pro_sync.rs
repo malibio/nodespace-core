@@ -64,12 +64,16 @@ pub async fn pro_current_status(app: AppHandle) -> Result<Option<SyncStatusSnaps
     let Some(pro) = app.try_state::<ProClient>() else {
         return Ok(None);
     };
-    let database_id = pro.active_database_id().await.unwrap_or_default();
-    Ok(pro.last_status().await.map(|s| SyncStatusSnapshot {
+    // Read both fields together under one lock acquisition (not two separate
+    // active_database_id()/last_status() calls) — a database switch racing
+    // between two separate reads could otherwise attribute a stale status
+    // from the PREVIOUS database to the newly-active one.
+    let (database_id, last_status) = pro.status_snapshot().await;
+    Ok(last_status.map(|s| SyncStatusSnapshot {
         state: s.state,
         detail: s.detail,
         user_email: s.user_email,
-        database_id,
+        database_id: database_id.unwrap_or_default(),
     }))
 }
 
