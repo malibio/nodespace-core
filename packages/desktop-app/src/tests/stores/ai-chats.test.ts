@@ -344,5 +344,44 @@ describe('aiChatsData', () => {
       expect(aiChatsData.createBusy).toBe(false);
       expect(aiChatsData.createError).toBe('');
     });
+
+    // Follow-up from core#2220 code review: reset() bumps #generation the
+    // same way collectionsData.reset() does, so an in-flight load/create
+    // discovered stale by a reset() (not just invalidateForDatabaseSwitch())
+    // cannot write into the state the reset just established.
+    it('discards a load that resolves after reset, without writing into the list', async () => {
+      let resolveLoad: (nodes: Node[]) => void = () => {};
+      mockQueryNodes.mockReturnValue(
+        new Promise<Node[]>((resolve) => {
+          resolveLoad = resolve;
+        })
+      );
+
+      const loadPromise = aiChatsData.loadAiChats();
+      aiChatsData.reset();
+
+      resolveLoad([makeChat('stale', 'Stale', '2026-01-01T00:00:00.000Z')]);
+      await loadPromise;
+
+      expect(aiChatsData.state.chats).toEqual([]);
+    });
+
+    it('discards a create that resolves after reset, without writing into the list', async () => {
+      let resolveCreate: (node: Node) => void = () => {};
+      mockCreateSchemaInstance.mockReturnValue(
+        new Promise<Node>((resolve) => {
+          resolveCreate = resolve;
+        })
+      );
+
+      const createPromise = aiChatsData.createChat();
+      aiChatsData.reset();
+
+      resolveCreate(makeChat('stale-chat', '', '2026-06-01T00:00:00.000Z'));
+      const result = await createPromise;
+
+      expect(result).toBeNull();
+      expect(aiChatsData.state.chats).toEqual([]);
+    });
   });
 });

@@ -153,8 +153,12 @@ class AiChatsStore {
 
   /** Reset to initial state (test use only — no production caller needs
    * this; production database switches use `invalidateForDatabaseSwitch()`
-   * followed by `loadAiChats()`, which replaces `chats` wholesale). */
+   * followed by `loadAiChats()`, which replaces `chats` wholesale). Bumps
+   * `#generation` too (mirrors `collectionsData.reset()`), so an in-flight
+   * `loadAiChats`/`createChat` that resolves after a test calls this cannot
+   * write stale data into the state the reset just established. */
   reset(): void {
+    this.#generation++;
     this.state = { ...initialState };
     this.createBusy = false;
     this.createError = '';
