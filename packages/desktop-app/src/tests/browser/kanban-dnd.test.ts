@@ -78,6 +78,47 @@ function seed(node: Node): void {
   sharedNodeStore.setNode(node, { type: 'database', reason: 'seed' });
 }
 
+/** A second, unrelated type — for cross-board isolation coverage below. Its
+ *  group-by field ('payment_state') doesn't exist on the 'ticket' type at all. */
+function invoiceSchema(): SchemaNode {
+  return {
+    id: 'invoice',
+    content: 'Invoice',
+    createdAt: '2026-01-01T00:00:00Z',
+    modifiedAt: '2026-01-01T00:00:00Z',
+    version: 1,
+    isCore: false,
+    schemaVersion: 1,
+    fields: [
+      {
+        name: 'payment_state',
+        friendlyName: 'Payment State',
+        type: 'enum',
+        protection: 'user',
+        indexed: false,
+        coreValues: [
+          { value: 'pending', label: 'Pending' },
+          { value: 'paid', label: 'Paid' }
+        ],
+        userValues: []
+      }
+    ]
+  };
+}
+
+function invoice(id: string, paymentState: string, title: string): Node {
+  return {
+    id,
+    nodeType: 'invoice',
+    content: title,
+    createdAt: '2026-01-01T00:00:00Z',
+    modifiedAt: '2026-01-01T00:00:00Z',
+    version: 1,
+    properties: { payment_state: paymentState },
+    mentions: []
+  };
+}
+
 function cardFor(container: HTMLElement, title: string): HTMLElement {
   const el = Array.from(container.querySelectorAll('.kanban-card')).find(
     (card) => card.querySelector('.kanban-card-title')?.textContent?.trim() === title
@@ -417,6 +458,139 @@ describe('KanbanView — drag-and-drop (browser mode)', () => {
     expect(cardsIn(columnFor(container, 'Open'))).toEqual([]);
     expect(cardsIn(columnFor(container, 'Closed'))).toEqual([]);
     expect(updateSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('KanbanView — cross-board drag isolation (browser mode)', () => {
+  beforeEach(() => {
+    sharedNodeStore.clearAll();
+    conflictNotifications.dismissAll();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    sharedNodeStore.clearAll();
+    conflictNotifications.dismissAll();
+  });
+
+  it('rejects a drop whose dataTransfer id belongs to a different board\'s nodeIds (split view)', async () => {
+    // Board A: tasks grouped by 'status'. Board B: an unrelated type grouped
+    // by a field the task type doesn't even have ('payment_state') — the
+    // exact split-view scenario from the issue. kanban-view is the only
+    // component that sets node-id drag data, so two live instances on
+    // screen at once can cross-talk through the DOM's single DataTransfer.
+    seed(ticket('t1', 'open', 'Fix the bug'));
+    seed(invoice('i1', 'pending', 'Invoice #1'));
+
+    const updateSpy = vi.spyOn(backendAdapter, 'updateNode');
+
+    const boardA = render(KanbanView, {
+      props: {
+        nodeIds: ['t1'],
+        schema: schema(),
+        groupBy: 'status',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+    const boardB = render(KanbanView, {
+      props: {
+        nodeIds: ['i1'],
+        schema: invoiceSchema(),
+        groupBy: 'payment_state',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+
+    const sourceCard = cardFor(boardA.container, 'Fix the bug'); // t1, board A's own card
+    const targetColumn = columnFor(boardB.container, 'Paid'); // board B's column
+
+    // dragstart fires on board A's own card, so board A's local draggingId
+    // is 't1' and dataTransfer carries 't1' too — but the drop lands on
+    // board B's column. Board B's own draggingId was never set (its
+    // onDragStart never fired), so its onDrop falls back to dataTransfer
+    // and must recognize 't1' isn't one of ITS nodeIds (['i1']) before
+    // doing anything with it.
+    const dataTransfer = new DataTransfer();
+    sourceCard.dispatchEvent(
+      new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer })
+    );
+    targetColumn.dispatchEvent(
+      new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer })
+    );
+    targetColumn.dispatchEvent(
+      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer })
+    );
+    sourceCard.dispatchEvent(
+      new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer })
+    );
+
+    // Give any (wrongly-fired) write a tick to land before asserting its absence.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // No write at all — not the task's own 'status', and definitely not
+    // board B's 'payment_state' onto the task node.
+    expect(updateSpy).not.toHaveBeenCalled();
+    // The task node is untouched, still in board A's Open column.
+    expect(cardsIn(columnFor(boardA.container, 'Open'))).toEqual(['Fix the bug']);
+    // Board B's Paid column stays empty — the foreign card was never adopted.
+    expect(cardsIn(columnFor(boardB.container, 'Paid'))).toEqual([]);
+    expect(cardsIn(columnFor(boardB.container, 'Pending'))).toEqual(['Invoice #1']);
+    // The shared store's task node was never given board B's field at all.
+    const node = sharedNodeStore.getNode('t1');
+    expect(node?.properties?.payment_state).toBeUndefined();
+  });
+
+  it('still allows a same-board drop that falls back to dataTransfer (draggingId cleared mid-drag)', async () => {
+    // Guards against an over-broad fix: the dataTransfer fallback path
+    // itself is legitimate (e.g. draggingId reset by an intervening
+    // dragend/state change within the SAME board) as long as the id really
+    // is one of this board's own nodeIds — only a FOREIGN id must be
+    // rejected, not the fallback mechanism itself.
+    seed(ticket('t1', 'open', 'Fix the bug'));
+    seed(ticket('t2', 'closed', 'Ship the feature'));
+
+    const updateSpy = vi.spyOn(backendAdapter, 'updateNode').mockResolvedValue({
+      ...ticket('t1', 'closed', 'Fix the bug'),
+      version: 2
+    });
+
+    const { container } = render(KanbanView, {
+      props: {
+        nodeIds: ['t1', 't2'],
+        schema: schema(),
+        groupBy: 'status',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+
+    const targetColumn = columnFor(container, 'Closed');
+
+    // Only dispatch dragover + drop (skip dragstart) so draggingId stays
+    // null on this instance, forcing the dataTransfer fallback — but seed
+    // dataTransfer with this board's own valid id.
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData('text/plain', 't1');
+    targetColumn.dispatchEvent(
+      new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer })
+    );
+    targetColumn.dispatchEvent(
+      new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer })
+    );
+
+    await waitFor(() => {
+      expect(cardsIn(columnFor(container, 'Closed'))).toEqual(
+        expect.arrayContaining(['Ship the feature', 'Fix the bug'])
+      );
+    });
+    expect(updateSpy).toHaveBeenCalledWith(
+      't1',
+      1,
+      expect.objectContaining({ properties: expect.objectContaining({ status: 'closed' }) })
+    );
   });
 });
 

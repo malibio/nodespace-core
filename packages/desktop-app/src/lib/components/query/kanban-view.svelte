@@ -326,7 +326,18 @@
     const id = draggingId ?? e.dataTransfer?.getData('text/plain') ?? null;
     draggingId = null;
     dragOverColumn = null;
-    if (id) moveCard(id, columnValue);
+    // `draggingId` is component-local state set only by THIS board's own
+    // onDragStart, so it's always one of this board's own nodeIds. The
+    // dataTransfer fallback has no such guarantee: kanban-view is the only
+    // component that sets node-id drag data, so in a split view with two
+    // boards on screen, a drag that started in the OTHER board's instance
+    // leaves this instance's draggingId null while the browser still hands
+    // this drop handler that other board's text/plain payload. Without this
+    // check, moveCard would resolve that foreign id in the shared store and
+    // write THIS board's activeGroupBy column value onto a node that isn't
+    // even part of this board's result set — silently corrupting a node
+    // that may not use that field's vocabulary at all.
+    if (id && nodeIds.includes(id)) moveCard(id, columnValue);
   }
 </script>
 
