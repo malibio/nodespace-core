@@ -46,6 +46,15 @@ struct ProClientInner {
     client: CloudSyncServiceClient<Channel>,
     tier: ProTier,
     last_status: Option<SyncStatusEvent>,
+    /// Registry id of the database the desktop last told the daemon to make the
+    /// active cloud-sync target (via `ActivateDatabase`). `None` until the first
+    /// `pro_activate_database` call succeeds — e.g. immediately after the Pro
+    /// probe, before the frontend has resolved which database it's showing.
+    /// `SyncStatusEvent` carries no `database_id` of its own (ADR-053 single-active
+    /// session: the daemon runs exactly one sync session, so this locally-tracked
+    /// id is what every `WatchSyncStatus` event is attributed to when forwarded to
+    /// the frontend).
+    active_database_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -76,6 +85,7 @@ impl ProClient {
                 client,
                 tier,
                 last_status,
+                active_database_id: None,
             })),
             generation: Arc::new(watch::channel(0u64).0),
         }
@@ -95,6 +105,18 @@ impl ProClient {
         self.inner.read().await.last_status.clone()
     }
 
+    /// Atomic snapshot of `(active_database_id, last_status)`, read together
+    /// under ONE lock acquisition. Callers that need both fields (e.g.
+    /// `pro_current_status`, to attribute the cached status to a database)
+    /// must use this rather than two separate `active_database_id()` /
+    /// `last_status()` calls — a database switch (`set_active_database_id`)
+    /// racing between two separate reads would otherwise let a stale status
+    /// from the PREVIOUS database be attributed to the NEW one.
+    pub async fn status_snapshot(&self) -> (Option<String>, Option<SyncStatusEvent>) {
+        let inner = self.inner.read().await;
+        (inner.active_database_id.clone(), inner.last_status.clone())
+    }
+
     /// Cache the daemon's most recent status. Called from the `WatchSyncStatus`
     /// forwarding task so `last_status` tracks the live state rather than only
     /// the probe-time snapshot — this is what lets the frontend re-hydrate the
@@ -105,6 +127,60 @@ impl ProClient {
 
     pub async fn client(&self) -> CloudSyncServiceClient<Channel> {
         self.inner.read().await.client.clone()
+    }
+
+    /// The database id last told to the daemon via `ActivateDatabase`, or `None`
+    /// before the first activation. Used to attribute `sync:status` events to a
+    /// database (see [`ProClientInner::active_database_id`]).
+    pub async fn active_database_id(&self) -> Option<String> {
+        self.inner.read().await.active_database_id.clone()
+    }
+
+    /// [`ProClient::active_database_id`], defaulted to `""` — the convention
+    /// every outgoing `database_id` payload field uses (matching
+    /// `ActivateDatabaseRequest`'s own "empty = no/unknown target"
+    /// convention) so every emit site shares one place to change it.
+    pub async fn attributed_database_id(&self) -> String {
+        self.active_database_id().await.unwrap_or_default()
+    }
+
+    /// Record the database id the desktop just activated. Empty string is
+    /// normalized to `None` (deactivate / local-only), mirroring
+    /// `ActivateDatabaseRequest.database_id`'s "empty = deactivate" convention.
+    ///
+    /// Clears the cached `last_status` when this is a genuine re-target (the
+    /// previously-tracked id was `Some` and differs from the new one) — a
+    /// status snapshot cached for the OLD database is not valid for the new
+    /// one, and attributing it to the new id (as `pro_current_status` would)
+    /// is worse than reporting no snapshot: the frontend just waits for the
+    /// next real `sync:status` event, which arrives correctly tagged. A
+    /// first-ever activation (`None` -> `Some`) is NOT treated as a re-target
+    /// and leaves `last_status` alone — that's `load()`'s first resolution
+    /// declaring what the daemon most likely already has active (ADR-053: the
+    /// last-active database persists across restarts), so the probe-time
+    /// snapshot is still valid and a webview reload can re-hydrate the
+    /// signed-in state from it deterministically instead of appearing
+    /// signed out.
+    ///
+    /// This is a best-effort local approximation of the daemon's real
+    /// session target, not a guaranteed atomic view of it: the
+    /// `WatchSyncStatus` forwarding task reads/writes this same state
+    /// independently (see its call sites), so a status event racing a
+    /// concurrent re-target can still land tagged with the previous id in a
+    /// narrow window, and a failed `ActivateDatabase` call leaves this
+    /// unchanged even though the caller may have already persisted a
+    /// different intended selection. Both are narrow, self-correcting via
+    /// the next genuine `sync:status` event — closing them fully would need
+    /// daemon-side coordination, not just local bookkeeping.
+    pub async fn set_active_database_id(&self, database_id: String) {
+        let next = normalize_active_database_id(database_id);
+        let mut inner = self.inner.write().await;
+        let is_genuine_retarget =
+            inner.active_database_id.is_some() && inner.active_database_id != next;
+        if is_genuine_retarget {
+            inner.last_status = None;
+        }
+        inner.active_database_id = next;
     }
 
     /// Point the cached Pro client at a freshly-rebuilt channel after a
@@ -181,5 +257,104 @@ async fn probe(client: &mut CloudSyncServiceClient<Channel>) -> (ProTier, Option
             // subscription.
             (ProTier::Pro, None)
         }
+    }
+}
+
+/// Normalize an `ActivateDatabase` argument for storage as the tracked active
+/// database id: empty string (the proto's "deactivate / local-only"
+/// convention) becomes `None`, anything else is kept as-is. Extracted as a
+/// pure function so the normalization is unit-testable without a live gRPC
+/// channel (see [`ProClient::set_active_database_id`]).
+fn normalize_active_database_id(database_id: String) -> Option<String> {
+    if database_id.is_empty() {
+        None
+    } else {
+        Some(database_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_active_database_id, ProClient};
+    use tonic::transport::Channel;
+
+    #[test]
+    fn empty_database_id_normalizes_to_none() {
+        assert_eq!(normalize_active_database_id(String::new()), None);
+    }
+
+    #[test]
+    fn non_empty_database_id_is_kept() {
+        assert_eq!(
+            normalize_active_database_id("db-alpha".to_string()),
+            Some("db-alpha".to_string())
+        );
+    }
+
+    /// A `ProClient` bound to nothing real (port 1 refuses immediately, so
+    /// `probe_on_channel`'s connect attempt fails fast rather than riding out
+    /// its 2s timeout) — enough to exercise `set_active_database_id` /
+    /// `status_snapshot` without a live daemon.
+    async fn disconnected_client() -> ProClient {
+        let channel = Channel::from_static("http://127.0.0.1:1").connect_lazy();
+        ProClient::probe_on_channel(channel).await
+    }
+
+    #[tokio::test]
+    async fn a_genuine_retarget_clears_the_cached_status() {
+        let pro = disconnected_client().await;
+        pro.set_active_database_id("db-a".to_string()).await;
+        pro.set_last_status(super::SyncStatusEvent {
+            state: 6,
+            detail: String::new(),
+            user_email: "user@example.com".to_string(),
+        })
+        .await;
+        assert!(pro.last_status().await.is_some());
+
+        // Switching to a DIFFERENT database must drop the now-stale status —
+        // it belonged to db-a, not db-b, and attributing it to the
+        // newly-active database is worse than reporting no snapshot at all.
+        pro.set_active_database_id("db-b".to_string()).await;
+
+        assert_eq!(pro.active_database_id().await, Some("db-b".to_string()));
+        assert!(pro.last_status().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_first_ever_activation_leaves_a_probe_time_status_alone() {
+        let pro = disconnected_client().await;
+        pro.set_last_status(super::SyncStatusEvent {
+            state: 6,
+            detail: String::new(),
+            user_email: "user@example.com".to_string(),
+        })
+        .await;
+
+        // First-ever activation (None -> Some) is `load()`'s first
+        // resolution declaring what the daemon most likely already has
+        // active, not a re-target — the probe-time snapshot must survive so
+        // reload re-hydration isn't broken for the common (steady-state)
+        // case.
+        pro.set_active_database_id("db-a".to_string()).await;
+
+        assert_eq!(pro.active_database_id().await, Some("db-a".to_string()));
+        assert!(pro.last_status().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn re_activating_the_same_database_leaves_the_cached_status_alone() {
+        let pro = disconnected_client().await;
+        pro.set_active_database_id("db-a".to_string()).await;
+        pro.set_last_status(super::SyncStatusEvent {
+            state: 6,
+            detail: String::new(),
+            user_email: "user@example.com".to_string(),
+        })
+        .await;
+
+        pro.set_active_database_id("db-a".to_string()).await;
+
+        assert!(pro.last_status().await.is_some());
     }
 }

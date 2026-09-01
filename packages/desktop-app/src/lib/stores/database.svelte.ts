@@ -195,6 +195,7 @@ class DatabaseStore {
           this.refreshDatabaseSettings();
           if (resolved !== null) {
             this.pinWindowDatabase(resolved);
+            this.activateProSync(resolved);
           }
         }
       }
@@ -230,6 +231,42 @@ class DatabaseStore {
     } catch (err) {
       log.debug('Failed to pin window to database', { id, error: err });
     }
+  }
+
+  /**
+   * Serializes `activateProSync` calls so a rapid A -> B -> A switch sequence
+   * can never have its underlying `pro_activate_database` invokes resolve out
+   * of send order. Each call is chained to start only once the previous one
+   * has settled, guaranteeing arrival order on the Rust side matches send
+   * order — without this, the daemon (and the Rust-tracked
+   * `active_database_id` every subsequent unscoped `sync:status` event is
+   * attributed against) could end up pointed at a stale target if an earlier
+   * call's RPC happens to complete after a later one's.
+   */
+  private proActivateChain: Promise<void> = Promise.resolve();
+
+  /**
+   * Re-target the Pro cloud-sync session to `id` (ADR-053 single-active sync).
+   * Called both from `load()`'s first resolution (so a fresh launch's default
+   * selection is the daemon's sync target from the start, not just after the
+   * first manual switch) and from `switchTo()`. No-ops in community mode (the
+   * Tauri command returns early without a `ProClient`). Best-effort and
+   * fire-and-forget from the CALLER's perspective (same contract as
+   * `pinWindowDatabase` above — a failure here must never destabilize the
+   * caller), but internally serialized via `proActivateChain` — see there.
+   */
+  private activateProSync(id: string): void {
+    if (!isTauriBridgePresent()) return;
+    this.proActivateChain = this.proActivateChain
+      // A previous call's rejection must not abort this one's turn in the chain.
+      .catch(() => {})
+      .then(async () => {
+        try {
+          await invoke('pro_activate_database', { databaseId: id });
+        } catch (err) {
+          log.warn('Failed to re-target sync to the database', { id, error: err });
+        }
+      });
   }
 
   /**
@@ -354,14 +391,9 @@ class DatabaseStore {
 
       // Re-target Pro cloud-sync to follow the newly-active database (ADR-053
       // single-active sync): switching database in the app switches which tenant
-      // syncs, not just which one is read/written. No-ops in community mode (the
-      // Tauri command returns early without a ProClient). Best-effort — a
-      // re-target failure must not abort the already-committed routing switch.
-      try {
-        await invoke('pro_activate_database', { databaseId: id });
-      } catch (err) {
-        log.warn('Failed to re-target sync to the switched database', { id, error: err });
-      }
+      // syncs, not just which one is read/written. Best-effort — a re-target
+      // failure must not abort the already-committed routing switch.
+      this.activateProSync(id);
 
       // Evict the previous database's cached data. `clearAll()` also bumps the
       // store's database epoch, which closes the in-flight-read window: a read

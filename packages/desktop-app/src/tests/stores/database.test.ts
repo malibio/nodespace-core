@@ -314,7 +314,12 @@ describe('Database Store', () => {
       expect(flushAllPendingSaves).toHaveBeenCalledOnce();
       expect(mockInvoke).toHaveBeenCalledWith('set_active_database', { id: 'b' });
       // The switch also re-targets Pro cloud-sync to the new database (ADR-053).
-      expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' });
+      // Dispatched via a serialized chain (prevents a rapid A->B->A switch
+      // from resolving out of send order) rather than synchronously within
+      // switchTo, so it lands a microtask or two after switchTo resolves.
+      await vi.waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' })
+      );
       expect(databaseStore.activeDatabaseId).toBe('b');
       expect(clearAll).toHaveBeenCalledOnce();
       expect(structureTreeClear).toHaveBeenCalledOnce();
@@ -367,10 +372,47 @@ describe('Database Store', () => {
 
       // A sync re-target failure is best-effort: the already-committed routing
       // switch still lands (caches cleared, tabs reset), never left half-done.
-      expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' });
       expect(databaseStore.activeDatabaseId).toBe('b');
       expect(clearAll).toHaveBeenCalledOnce();
       expect(clearAllTabs).toHaveBeenCalledOnce();
+      // Dispatched via a serialized chain, so it lands a microtask or two
+      // after switchTo resolves — and its rejection must not surface.
+      await vi.waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('pro_activate_database', { databaseId: 'b' })
+      );
+      expect(databaseStore.error).toBeNull();
+    });
+
+    it('does not dispatch a later pro_activate_database call until an earlier one settles, so a rapid switch sequence cannot land out of send order', async () => {
+      databaseStore.databases = [db('a'), db('b'), db('c')];
+      databaseStore.activeDatabaseId = 'a';
+
+      let resolveActivateB: (() => void) | null = null;
+      const activateCalls: string[] = [];
+      mockInvoke.mockImplementation((cmd: string, args?: { databaseId?: string }) => {
+        if (cmd === 'pro_activate_database') {
+          activateCalls.push(args!.databaseId!);
+          if (args!.databaseId === 'b') {
+            return new Promise<void>((resolve) => {
+              resolveActivateB = () => resolve();
+            });
+          }
+        }
+        return Promise.resolve(undefined);
+      });
+
+      await databaseStore.switchTo('b');
+      // switchTo('b') has resolved, but its fire-and-forget pro_activate_database('b')
+      // call is still pending (deliberately unresolved above).
+      await databaseStore.switchTo('c');
+
+      // 'c'’s pro_activate_database call must not be dispatched yet — it's
+      // queued behind 'b'’s still-unsettled one, so a slow-to-resolve 'b' can
+      // never have its eventual response applied AFTER 'c'’s on the Rust side.
+      expect(activateCalls).toEqual(['b']);
+
+      resolveActivateB!();
+      await vi.waitFor(() => expect(activateCalls).toEqual(['b', 'c']));
     });
 
     it('no-ops when switching to the already-active database', async () => {
