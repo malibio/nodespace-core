@@ -442,6 +442,58 @@ fn every_reference_file_is_linked_from_the_body() {
     );
 }
 
+/// The Preflight Check's MCP passthrough branch (Branch 2) names the actual
+/// tool the `nodespace mcp` server exposes.
+///
+/// Unlike the CLI surface and schema rules, Branch 2's prose has no
+/// generator behind it — it is hand-written, same as the rest of the
+/// Preflight Check, because it is judgment prose rather than a derivable
+/// listing (see this file's module doc comment). That means nothing
+/// automatically catches the tool name drifting away from
+/// `packages/cli/src/commands/mcp.rs`'s own `TOOL_NAME` constant if it is
+/// ever renamed. This test is that catch: it reads the constant directly
+/// rather than hand-typing a second copy of it.
+#[test]
+fn skill_md_mcp_branch_names_the_real_passthrough_tool() {
+    let skill = skill_md();
+    let tool_name = nodespace_cli::commands::mcp::TOOL_NAME;
+    let needle = format!("`{tool_name}`");
+    assert!(
+        skill.contains(&needle),
+        "SKILL.md's Preflight Check (Branch 2) does not reference the MCP \
+         passthrough's actual tool name ({needle}, from mcp.rs's TOOL_NAME \
+         constant) — update the Preflight Check section."
+    );
+}
+
+/// Branch 2 documents the MCP passthrough's real dispatch timeout and the
+/// streaming commands it cannot support, not an invented number.
+///
+/// `nodespace mcp` kills and reports as a timeout any dispatched command
+/// that outlives `DISPATCH_TIMEOUT` — in practice, `session launch`/`session
+/// attach`, which stream a PTY and would otherwise block the server's
+/// single-threaded request loop forever (see `mcp.rs`'s own doc comment).
+/// If that constant is ever tuned, this test forces the doc's numeral to be
+/// re-checked rather than silently going stale.
+#[test]
+fn skill_md_mcp_branch_documents_the_real_dispatch_timeout() {
+    let skill = skill_md();
+    let timeout_secs = nodespace_cli::commands::mcp::DISPATCH_TIMEOUT.as_secs();
+    let needle = format!("{timeout_secs}s");
+    assert!(
+        skill.contains(&needle),
+        "SKILL.md's Preflight Check (Branch 2) does not mention the MCP \
+         passthrough's actual dispatch timeout ({needle}, from mcp.rs's \
+         DISPATCH_TIMEOUT constant) — update the Preflight Check section."
+    );
+    assert!(
+        skill.contains("session launch") && skill.contains("session attach"),
+        "SKILL.md's Preflight Check (Branch 2) should name the streaming \
+         commands (session launch / session attach) that the MCP passthrough \
+         cannot support, matching mcp.rs's own timeout behavior."
+    );
+}
+
 /// The checked-in SKILL.md matches what the generator produces.
 ///
 /// This is the same guarantee `bun run skill:check` gives in the pre-push

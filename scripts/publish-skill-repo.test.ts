@@ -112,6 +112,22 @@ describe("renderPublishFiles", () => {
     expect(m![1].length).toBeLessThanOrEqual(500);
   });
 
+  test("compatibility field names both the shell and the MCP-connector requirement, not just the CLI", () => {
+    // A published skill installed onto a bash-less MCP surface should be
+    // able to tell, from the frontmatter alone, that it needs either a shell
+    // or an MCP connector to `nodespace mcp` -- not just "the CLI on $PATH",
+    // which reads as a shell-only requirement and doesn't warn a bash-less
+    // installer that it needs the MCP passthrough instead. See SKILL.md's
+    // Preflight Check (Branch 2) for the guidance this string points at.
+    const files = renderPublishFiles("v0.2.2");
+    const skillMd = files.find((f) => f.relPath === "skills/nodespace/SKILL.md")!;
+    const m = /^compatibility:\s*(.+)$/m.exec(skillMd.content);
+    expect(m).toBeTruthy();
+    const compatibility = m![1];
+    expect(compatibility.toLowerCase()).toContain("shell");
+    expect(compatibility).toContain("nodespace mcp");
+  });
+
   test("normalizes a leading v the same way for the compatibility field", () => {
     const withV = renderPublishFiles("v0.2.2").find(
       (f) => f.relPath === "skills/nodespace/SKILL.md",
