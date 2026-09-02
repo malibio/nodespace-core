@@ -1,10 +1,11 @@
 //! First-launch skill installer.
 //!
 //! Runs the bundled `packages/skill` installer (`dist/install.js`, executed
-//! directly via `bun` — never `npx`/`npm`, see module docs on
-//! `resolve_installer_path`) to copy SKILL.md and agent shims into detected
-//! agents' directories. Persists completion state to `~/.nodespace/setup.json`
-//! so subsequent launches are no-ops once installation succeeds.
+//! directly via `bun` or `node` — never `npx`/`npm`, see module docs on
+//! `resolve_installer_path` and [`INSTALLER_RUNTIMES`]) to copy SKILL.md and
+//! agent shims into detected agents' directories. Persists completion state
+//! to `~/.nodespace/setup.json` so subsequent launches are no-ops once
+//! installation succeeds.
 //!
 //! Also verifies that the `nodespace` CLI is resolvable on $PATH and emits a
 //! warning if not (the skill is useless until the CLI is installed).
@@ -290,30 +291,77 @@ fn resolve_installer_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathB
     Err("Skill installer is missing from this build (packaging issue).".to_string())
 }
 
-/// Build the `bun <installer_path> install` invocation — the single place
-/// that decides how the installer is launched, so both production and tests
-/// exercise the exact same command construction. Never `npx`/`npm` — this
-/// repo is Bun-only, and `@nodespaceai/skill` isn't published anyway.
-fn installer_command(installer_path: &Path) -> Command {
-    let mut cmd = Command::new("bun");
+/// Runtimes capable of executing the installer's output, tried in this
+/// order. `packages/skill`'s installer (`src/install.ts` and everything it
+/// imports) has zero Bun-specific API usage — it's plain `node:fs`/`node:path`
+/// TypeScript compiled to a standard ESM module via `tsc` — so it runs
+/// identically under either. `bun` is tried first (this repo's own dev-time
+/// convention, always present in CI/dev environments), `node` second: `bun`
+/// is a requirement for *building* NodeSpace, never for *running* the shipped
+/// app, so a packaged app's end user has no reason to have it — `node` is far
+/// more likely to already be on the machine of someone who'd actually use
+/// these AI-agent integrations (Claude Code, Codex, Gemini CLI, OpenCode are
+/// themselves typically Node-ecosystem-adjacent). Only when neither is found
+/// does the failure surface to the user.
+const INSTALLER_RUNTIMES: [&str; 2] = ["bun", "node"];
+
+/// Build the `<runtime> <installer_path> install` invocation — the single
+/// place that decides how the installer is launched, so both production and
+/// tests exercise the exact same command construction. Never `npx`/`npm` —
+/// this repo is Bun-only, and `@nodespaceai/skill` isn't published anyway.
+fn installer_command(installer_path: &Path, runtime: &str) -> Command {
+    let mut cmd = Command::new(runtime);
     cmd.arg(installer_path).arg("install");
     cmd
 }
 
 /// Run the installer and collect installed agent names from stdout. Returns
-/// an error string on non-zero exit.
+/// an error string on non-zero exit. Tries each of [`INSTALLER_RUNTIMES`] in
+/// order — see [`run_installer_with_runtimes`] for the fallthrough logic.
 fn run_skill_installer(installer_path: &Path) -> Result<Vec<String>, String> {
-    let output = installer_command(installer_path).output().map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            "The `bun` runtime was not found on $PATH. It's required to install NodeSpace's \
-                 AI-agent integrations (Claude Code, Codex, Gemini CLI, OpenCode). Install it from \
-                 https://bun.sh and relaunch NodeSpace — or ignore this if you don't use one of \
-                 those agents."
-                .to_string()
-        } else {
-            format!("Failed to launch bun: {e}")
+    run_installer_with_runtimes(installer_path, &INSTALLER_RUNTIMES)
+}
+
+/// The runtime-fallthrough logic, parameterized over the runtime list so
+/// tests can exercise it with fake, explicit-path "runtimes" instead of the
+/// real `bun`/`node` resolved via the process's actual `$PATH`. Falls
+/// through to the next runtime only on `NotFound` (a runtime that exists but
+/// fails to spawn for some other reason is a real error, not a cue to try
+/// the next one).
+///
+/// Deliberately does NOT test this via a mutated process-global `$PATH`:
+/// `cargo test` runs the whole suite in one process, so a test that
+/// temporarily narrows `$PATH` (even restored afterward) can race any other
+/// test concurrently resolving a bare command name — nodespace-sync hit
+/// exactly this class of bug with a mutated `umask` and lost a third of its
+/// pre-push runs to it. Passing absolute paths as the "runtime" strings
+/// sidesteps `$PATH` resolution entirely, so the test stays deterministic
+/// under parallel execution.
+fn run_installer_with_runtimes(
+    installer_path: &Path,
+    runtimes: &[&str],
+) -> Result<Vec<String>, String> {
+    let mut output = None;
+    for runtime in runtimes {
+        match installer_command(installer_path, runtime).output() {
+            Ok(out) => {
+                output = Some(out);
+                break;
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("Failed to launch {runtime}: {e}")),
         }
-    })?;
+    }
+
+    let Some(output) = output else {
+        return Err(
+            "Neither `bun` nor `node` was found on $PATH. One of them is required to install \
+                 NodeSpace's AI-agent integrations (Claude Code, Codex, Gemini CLI, OpenCode). \
+                 Install Node from https://nodejs.org (or Bun from https://bun.sh) and relaunch \
+                 NodeSpace — or ignore this if you don't use one of those agents."
+                .to_string(),
+        );
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -426,7 +474,7 @@ mod tests {
     /// published).
     #[test]
     fn installer_command_invokes_bun_directly_not_npx_or_npm() {
-        let cmd = installer_command(Path::new("/tmp/fake/install.js"));
+        let cmd = installer_command(Path::new("/tmp/fake/install.js"), "bun");
         let debug_repr = format!("{cmd:?}");
 
         assert!(
@@ -437,6 +485,68 @@ mod tests {
             !debug_repr.contains("npx") && !debug_repr.contains("npm"),
             "found npx/npm in the constructed command: {debug_repr}"
         );
+    }
+
+    /// `run_installer_with_runtimes` falls through from the first runtime to
+    /// the second on `NotFound` rather than surfacing the failure
+    /// immediately — the actual bug this issue fixes (a packaged app's end
+    /// user has no reason to have `bun`, but is far more likely to have
+    /// `node`). Uses absolute paths as the "runtimes" — a nonexistent one
+    /// first, a real executable fake shim second — so this proves the
+    /// fallback actually ran (not just that the function returns success for
+    /// some other reason), without touching the process's real `$PATH` (see
+    /// the mutation-safety note on `run_installer_with_runtimes`).
+    #[test]
+    fn run_installer_with_runtimes_falls_back_past_a_missing_first_runtime() {
+        let fake_dir = tempfile::tempdir().expect("create scratch dir");
+        let missing_runtime = fake_dir.path().join("definitely-does-not-exist-xyz");
+        let working_runtime = fake_dir.path().join("fake-node-shim");
+        std::fs::write(
+            &working_runtime,
+            "#!/bin/sh\necho '✓ claude-code: installed 1 file(s)'\nexit 0\n",
+        )
+        .expect("write fake node shim");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&working_runtime, std::fs::Permissions::from_mode(0o755))
+                .expect("make fake node shim executable");
+        }
+
+        let result = run_installer_with_runtimes(
+            Path::new("/tmp/fake/install.js"),
+            &[
+                missing_runtime.to_str().unwrap(),
+                working_runtime.to_str().unwrap(),
+            ],
+        );
+
+        assert_eq!(
+            result,
+            Ok(vec!["claude-code".to_string()]),
+            "expected the fallback runtime to run and report success"
+        );
+    }
+
+    /// When no runtime in the list resolves, the error names both `bun` and
+    /// `node` (the real, hardcoded message — not the fake paths passed in
+    /// for the fallthrough mechanics) — so the message stays accurate for
+    /// the (more common, for a packaged app's end user) case where `node`
+    /// was the one actually tried and missing.
+    #[test]
+    fn run_installer_with_runtimes_error_names_both_real_runtimes_when_none_resolve() {
+        let fake_dir = tempfile::tempdir().expect("create scratch dir");
+        let missing_a = fake_dir.path().join("does-not-exist-a");
+        let missing_b = fake_dir.path().join("does-not-exist-b");
+
+        let result = run_installer_with_runtimes(
+            Path::new("/tmp/fake/install.js"),
+            &[missing_a.to_str().unwrap(), missing_b.to_str().unwrap()],
+        );
+
+        let err = result.expect_err("neither fake runtime resolves");
+        assert!(err.contains("bun"), "error should mention bun: {err}");
+        assert!(err.contains("node"), "error should mention node: {err}");
     }
 
     /// End-to-end: actually runs the real built installer (via the same
@@ -460,7 +570,7 @@ mod tests {
         // .env() only affects this child process, not the test binary's own
         // environment — safe under parallel test execution (no risk to any
         // other test that resolves the real $HOME).
-        let output = installer_command(&installer_path)
+        let output = installer_command(&installer_path, "bun")
             .env("HOME", fake_home.path())
             .output()
             .expect("bun must be on $PATH to run this test");
