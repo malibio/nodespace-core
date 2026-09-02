@@ -1,11 +1,24 @@
 //! First-launch skill installer.
 //!
-//! Runs the bundled `packages/skill` installer (`dist/install.js`, executed
-//! directly via `bun` or `node` — never `npx`/`npm`, see module docs on
-//! `resolve_installer_path` and [`INSTALLER_RUNTIMES`]) to copy SKILL.md and
-//! agent shims into detected agents' directories. Persists completion state
-//! to `~/.nodespace/setup.json` so subsequent launches are no-ops once
+//! Runs the bundled `packages/skill` installer to copy SKILL.md and agent
+//! shims into detected agents' directories. Persists completion state to
+//! `~/.nodespace/setup.json` so subsequent launches are no-ops once
 //! installation succeeds.
+//!
+//! # Two ways to run the installer
+//!
+//! Preferred: the compiled standalone binary (`bun build --compile packages/
+//! skill/src/install.ts`, staged as the `nodespace-skill-installer`
+//! `externalBin` sidecar — see `resolve_compiled_installer_path`). No
+//! external runtime needed at all; a packaged app's end user has no reason
+//! to have `bun` or `node` installed, so this is what a real release build
+//! actually uses.
+//!
+//! Fallback: the plain JS build (`dist/install.js`, executed via `bun` or
+//! `node` — never `npx`/`npm`, see [`INSTALLER_RUNTIMES`]) when the compiled
+//! binary isn't available — a dev/source checkout that hasn't run the
+//! compile step, or a platform this hasn't been wired up for yet. See
+//! `resolve_installer_path`.
 //!
 //! Also verifies that the `nodespace` CLI is resolvable on $PATH and emits a
 //! warning if not (the skill is useless until the CLI is installed).
@@ -173,8 +186,8 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
 
     let cli_on_path = check_cli_on_path();
 
-    let installer_path = match resolve_installer_path(app) {
-        Ok(path) => path,
+    let installer = match resolve_installer(app) {
+        Ok(installer) => installer,
         Err(e) => {
             return finish_failed(previously_failed, cli_on_path, e).await;
         }
@@ -182,7 +195,7 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
 
     // Run the installer in a blocking thread so we don't hold the async
     // runtime during the child process execution.
-    let result = tokio::task::spawn_blocking(move || run_skill_installer(&installer_path)).await;
+    let result = tokio::task::spawn_blocking(move || run_skill_installer(&installer)).await;
 
     match result {
         Err(join_err) => {
@@ -250,7 +263,71 @@ async fn finish_failed(
     }
 }
 
-/// Resolve the path to the built skill installer (`dist/install.js`).
+/// How to invoke the skill installer — resolved once per [`install_skill`]
+/// call by [`resolve_installer`], then dispatched on in
+/// [`run_skill_installer`].
+enum Installer {
+    /// The compiled standalone binary (see module docs) — no external
+    /// runtime needed. `resource_root` is where SKILL.md/shims/references
+    /// actually live, passed as `--resource-root` (the binary has no
+    /// source-relative sibling directory to infer it from the way
+    /// `dist/install.js` does).
+    Compiled {
+        binary: PathBuf,
+        resource_root: PathBuf,
+    },
+    /// The plain JS build, needing `bun` or `node` to execute — see
+    /// [`INSTALLER_RUNTIMES`].
+    Script { path: PathBuf },
+}
+
+/// Resolve which [`Installer`] to use: the compiled standalone binary if
+/// it's available for this platform/build, the plain JS script otherwise.
+fn resolve_installer<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Installer, String> {
+    if let Some((binary, resource_root)) = resolve_compiled_installer_path(app) {
+        return Ok(Installer::Compiled {
+            binary,
+            resource_root,
+        });
+    }
+    resolve_installer_path(app).map(|path| Installer::Script { path })
+}
+
+/// Locate the compiled standalone installer binary bundled beside the app's
+/// own executable — Tauri's `externalBin` convention, the same mechanism
+/// `daemon_setup` already uses for `nodespaced`/`nodespace` (see
+/// `daemon_setup::sidecar_path_from_exe`'s doc comment for why sidecars land
+/// beside the running executable rather than under a Resources tree) — plus
+/// the resource root it needs (`SKILL.md`/`shims`/`references`, staged the
+/// same place `dist/install.js` already was). Returns `None` when either
+/// piece is missing, e.g. a platform this hasn't been wired up for yet, or a
+/// dev/source checkout that hasn't run the compile step — the caller falls
+/// through to [`Installer::Script`] in that case.
+fn resolve_compiled_installer_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<(PathBuf, PathBuf)> {
+    use tauri::path::BaseDirectory;
+
+    let exe = std::env::current_exe().ok()?;
+    let binary_name = crate::daemon_setup::bundled_sidecar_name("nodespace-skill-installer");
+    let binary = crate::daemon_setup::sidecar_path_from_exe(&exe, &binary_name)?;
+    if !binary.exists() {
+        return None;
+    }
+
+    let resource_root = app
+        .path()
+        .resolve("resources/skill", BaseDirectory::Resource)
+        .ok()?;
+    if !resource_root.exists() {
+        return None;
+    }
+
+    Some((binary, resource_root))
+}
+
+/// Resolve the path to the built skill installer (`dist/install.js`) — the
+/// [`Installer::Script`] fallback.
 ///
 /// The installer ships bundled inside the app (declared as a Tauri
 /// `resources` entry — see `tauri.conf.json` and `scripts/build-skill.ts`)
@@ -315,11 +392,33 @@ fn installer_command(installer_path: &Path, runtime: &str) -> Command {
     cmd
 }
 
+/// Build the `<binary> install --resource-root <resource_root>` invocation
+/// for the compiled standalone installer — the zero-runtime path. Mirrors
+/// `installer_command`'s separation of command construction from execution
+/// so both are independently testable.
+fn compiled_installer_command(binary: &Path, resource_root: &Path) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.arg("install").arg("--resource-root").arg(resource_root);
+    cmd
+}
+
 /// Run the installer and collect installed agent names from stdout. Returns
-/// an error string on non-zero exit. Tries each of [`INSTALLER_RUNTIMES`] in
-/// order — see [`run_installer_with_runtimes`] for the fallthrough logic.
-fn run_skill_installer(installer_path: &Path) -> Result<Vec<String>, String> {
-    run_installer_with_runtimes(installer_path, &INSTALLER_RUNTIMES)
+/// an error string on non-zero exit. Dispatches on [`Installer`]: the
+/// compiled binary needs no runtime fallthrough at all, the script needs
+/// [`run_installer_with_runtimes`]'s `bun`-then-`node` logic.
+fn run_skill_installer(installer: &Installer) -> Result<Vec<String>, String> {
+    match installer {
+        Installer::Compiled {
+            binary,
+            resource_root,
+        } => {
+            let output = compiled_installer_command(binary, resource_root)
+                .output()
+                .map_err(|e| format!("Failed to launch the compiled skill installer: {e}"))?;
+            parse_installer_output(output)
+        }
+        Installer::Script { path } => run_installer_with_runtimes(path, &INSTALLER_RUNTIMES),
+    }
 }
 
 /// The runtime-fallthrough logic, parameterized over the runtime list so
@@ -363,6 +462,15 @@ fn run_installer_with_runtimes(
         );
     };
 
+    parse_installer_output(output)
+}
+
+/// Parse a finished installer invocation's exit status and stdout into
+/// installed-agent names, or an error string. Shared by both
+/// [`Installer::Compiled`] and [`Installer::Script`] — the underlying
+/// `packages/skill` `install()` call and its console output are identical
+/// either way, only how the process got launched differs.
+fn parse_installer_output(output: std::process::Output) -> Result<Vec<String>, String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -462,6 +570,144 @@ mod tests {
             resolved.display()
         );
         assert!(resolved.exists());
+    }
+
+    /// `mock_app()` (used throughout this test module) has no bundled
+    /// `externalBin` sidecar or `resources` tree, and the test binary's own
+    /// `current_exe()` has no `nodespace-skill-installer` sitting beside it
+    /// — so `resolve_compiled_installer_path` must return `None` and
+    /// `resolve_installer` must fall through to `Installer::Script`, never
+    /// silently produce a `Compiled` variant pointing at a binary that
+    /// doesn't exist.
+    #[test]
+    fn resolve_installer_falls_back_to_script_when_no_compiled_binary_is_bundled() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+
+        assert!(
+            resolve_compiled_installer_path(&handle).is_none(),
+            "mock_app() has no bundled compiled installer sidecar"
+        );
+
+        let installer =
+            resolve_installer(&handle).expect("falls back to the script path successfully");
+        assert!(
+            matches!(installer, Installer::Script { .. }),
+            "expected Installer::Script when no compiled binary is available"
+        );
+    }
+
+    /// Same shape as `installer_command_invokes_bun_directly_not_npx_or_npm`
+    /// but for the compiled-binary path: asserts the constructed `Command`
+    /// invokes the binary directly (not through a shell) with `install
+    /// --resource-root <path>`, via the `Command`'s `Debug` representation
+    /// so a non-literal construction can't hide from this check either.
+    #[test]
+    fn compiled_installer_command_invokes_the_binary_directly_with_resource_root() {
+        let cmd = compiled_installer_command(
+            Path::new("/opt/nodespace/nodespace-skill-installer"),
+            Path::new("/opt/nodespace/resources/skill"),
+        );
+        let debug_repr = format!("{cmd:?}");
+
+        assert!(
+            debug_repr.starts_with("\"/opt/nodespace/nodespace-skill-installer\""),
+            "expected the compiled binary as the program, got: {debug_repr}"
+        );
+        assert!(
+            debug_repr.contains("\"install\""),
+            "expected the install subcommand, got: {debug_repr}"
+        );
+        assert!(
+            debug_repr.contains("\"--resource-root\"")
+                && debug_repr.contains("\"/opt/nodespace/resources/skill\""),
+            "expected --resource-root and its value, got: {debug_repr}"
+        );
+    }
+
+    /// End-to-end proof that the whole compiled-binary path actually works,
+    /// not just that the pieces type-check: compiles a REAL standalone
+    /// binary from the real `packages/skill/src/install.ts` (via `bun build
+    /// --compile`, the exact command the real build pipeline runs), then runs
+    /// it through the same `compiled_installer_command` + `parse_installer_output`
+    /// pair `run_skill_installer`'s `Installer::Compiled` branch uses,
+    /// against an isolated fake `$HOME` — asserting SKILL.md and the
+    /// claude-code shim land where `packages/skill`'s agent config says they
+    /// should, with ZERO bun/node on the child's `$PATH` (only the compiled
+    /// binary itself, which needs no external runtime by construction).
+    /// Requires `bun` on $PATH to run the compile step (this repo is
+    /// Bun-only, so the test/pre-push environment always has it).
+    #[test]
+    fn run_skill_installer_compiled_variant_actually_installs_with_zero_runtime_on_path() {
+        let skill_src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("skill")
+            .join("src")
+            .join("install.ts");
+        assert!(
+            skill_src.exists(),
+            "packages/skill/src/install.ts must exist at {}",
+            skill_src.display()
+        );
+        let resource_root = skill_src
+            .parent()
+            .and_then(Path::parent)
+            .expect("install.ts is two levels under packages/skill")
+            .to_path_buf();
+
+        let scratch = tempfile::tempdir().expect("create scratch dir for the compiled binary");
+        let binary_path = scratch.path().join("nodespace-skill-installer-test");
+
+        let compile = Command::new("bun")
+            .args(["build", "--compile"])
+            .arg(&skill_src)
+            .arg("--outfile")
+            .arg(&binary_path)
+            .output()
+            .expect("bun must be on $PATH to compile the test binary");
+        assert!(
+            compile.status.success(),
+            "bun build --compile failed — stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&compile.stdout),
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        assert!(binary_path.exists(), "compiled binary was not produced");
+
+        let fake_home = tempfile::tempdir().expect("create isolated fake $HOME");
+        std::fs::create_dir_all(fake_home.path().join(".claude"))
+            .expect("create fake .claude dir so the installer detects claude-code");
+
+        // Same construction the production Installer::Compiled branch of
+        // run_skill_installer uses (compiled_installer_command +
+        // parse_installer_output), with HOME/PATH overridden on the CHILD
+        // process only via Command::env (matching the existing
+        // run_skill_installer_actually_installs_into_an_isolated_home test's
+        // pattern for the script variant) — never the parent test process's
+        // own environment, so this stays safe under parallel test execution.
+        // PATH is scrubbed to bare OS binaries to prove zero runtime
+        // dependency, not just that it happens to work with bun on PATH.
+        let output = compiled_installer_command(&binary_path, &resource_root)
+            .env("HOME", fake_home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .expect("compiled binary must run standalone");
+        let agents = parse_installer_output(output).expect("install succeeds with zero runtime");
+
+        assert_eq!(agents, vec!["claude-code".to_string()]);
+        let installed_skill = fake_home.path().join(".claude/skills/nodespace/SKILL.md");
+        assert!(
+            installed_skill.exists(),
+            "SKILL.md was not installed into the fake $HOME at {}",
+            installed_skill.display()
+        );
+        let installed_shim = fake_home
+            .path()
+            .join(".claude/skills/nodespace/nodespace-hook.ts");
+        assert!(
+            installed_shim.exists(),
+            "claude-code shim was not installed"
+        );
     }
 
     /// Inspects the actual constructed `Command`'s program (via its `Debug`

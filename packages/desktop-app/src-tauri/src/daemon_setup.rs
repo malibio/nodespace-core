@@ -708,7 +708,7 @@ fn resolve_sidecar_path(_app: &AppHandle, name: &str) -> Result<PathBuf> {
 /// The installed sidecar's filename: the bare name Tauri renames it to when
 /// bundling, plus the platform's native executable extension. `.exe` on
 /// Windows; no extension on macOS/Linux, where executables don't carry one.
-fn bundled_sidecar_name(name: &str) -> String {
+pub(crate) fn bundled_sidecar_name(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
     } else {
@@ -724,7 +724,7 @@ fn bundled_sidecar_name(name: &str) -> String {
 /// tree. Takes the executable path as a parameter (rather than calling
 /// `current_exe()` itself) so this is exercisable with a synthetic path in a
 /// unit test, independent of where cargo actually places the test binary.
-fn sidecar_path_from_exe(exe_path: &Path, sidecar_name: &str) -> Option<PathBuf> {
+pub(crate) fn sidecar_path_from_exe(exe_path: &Path, sidecar_name: &str) -> Option<PathBuf> {
     Some(exe_path.parent()?.join(sidecar_name))
 }
 
