@@ -4,8 +4,8 @@ Installs the NodeSpace Agent Skill into PTY agents (Claude Code, Codex, Gemini C
 
 **This package is not published to npm.** `@nodespaceai/skill` never existed
 on the npm registry, and it is not going to: the NodeSpace desktop app is the
-one thing that installs this package's output, and it does so by running the
-built installer directly with `bun` (see
+one thing that installs this package's output, and it does so by running a
+built installer directly (see
 `packages/desktop-app/src-tauri/src/skill_setup.rs`) — never `npx`/`npm`, so
 publishing to npm was never actually required for the app's own install path.
 
@@ -22,11 +22,22 @@ every release — never hand-edited.
 This package's build output (`dist/`, `shims/`, `SKILL.md`, `references/`) is
 consumed two ways, both inside this monorepo's own tooling:
 
-1. **Bundled into the desktop app.** `scripts/build-skill.ts` stages it into
+1. **Bundled into the desktop app.** `scripts/build-skill.ts` compiles
+   `src/install.ts` into a standalone executable (`bun build --compile`,
+   staged as the `nodespace-skill-installer` `externalBin` sidecar — the
+   same mechanism as `nodespaced`/`nodespace`, on macOS and Windows, the two
+   platforms with a Tauri desktop app) and also stages `dist/`, `shims/`,
+   `SKILL.md`, and `references/` into
    `packages/desktop-app/src-tauri/resources/skill/` as a Tauri resource. On
-   first launch, the app runs `bun dist/install.js install` to detect which
-   agents are present and copy `SKILL.md` (with the right frontmatter
-   prepended) into each one's skills directory.
+   first launch, the app runs the compiled binary — genuinely zero
+   dependency on any external runtime, so a packaged app's end user never
+   needs `bun` or `node` installed — with `install --resource-root
+   <path to the staged resources above>`, to detect which agents are
+   present and copy `SKILL.md` (with the right frontmatter prepended) into
+   each one's skills directory. Falls back to running `dist/install.js`
+   directly via `bun` or `node` (never `npx`/`npm`) only when the compiled
+   binary isn't available for some reason — an unwired platform, or a
+   dev/source checkout that hasn't run the compile step.
 2. **Published to `NodeSpaceAI/nodespace-skill`.** The release pipeline runs
    `scripts/publish-skill-repo.ts`, which renders the same frontmatter this
    package builds (via `buildSkillFrontmatter` in `src/agents.ts`) plus
@@ -39,6 +50,12 @@ consumed two ways, both inside this monorepo's own tooling:
 bun run --cwd packages/skill build
 bun packages/skill/dist/install.js install
 ```
+
+`--resource-root <path>` is only needed when running a *compiled* copy of
+`install.ts` (`bun build --compile`) from somewhere other than this package
+directory — it has no source-relative sibling directory to find
+`SKILL.md`/`shims`/`references` from the way `dist/install.js` does. A plain
+`dist/install.js` run like the one above finds them automatically.
 
 ## Supported Agents
 
