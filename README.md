@@ -12,12 +12,6 @@ AI coding assistants forget everything between sessions. NodeSpace gives them pe
 
 ---
 
-## Documentation
-
-For full documentation, see [nodespace-docs](../nodespace-docs/).
-
----
-
 ## Why NodeSpace
 
 Developers using AI assistants waste time copying files, re-explaining architecture, and watching context degrade mid-session. NodeSpace fixes this by sitting between your knowledge and your AI tools:
@@ -46,7 +40,7 @@ Apple Silicon is the only supported macOS target. The cask installs a signed and
 
 | Platform | Format |
 |----------|--------|
-| macOS (Apple Silicon) | `.dmg` |
+| macOS 14 (Sonoma) or later, Apple Silicon | `.dmg` |
 | Windows | `.msi` or `.exe` |
 | Linux | `nodespace`/`nodespaced` binaries (CLI + daemon only — no packaged desktop app yet) |
 
