@@ -13,7 +13,7 @@
     transition:fade={{ duration: 150 }}
   >
     {#if state.message}
-      <span class="message">{state.message}</span>
+      <span class="message" title={state.message}>{state.message}</span>
     {/if}
     {#if state.progress !== undefined}
       <div class="progress-bar">
@@ -49,7 +49,16 @@
   }
 
   .message {
-    flex-shrink: 0;
+    /* A long message (e.g. an error naming multiple install links) must fit
+       the fixed-height bar rather than overflow past the window edge and
+       clip its own actionable content. `min-width: 0` is required for a
+       flex child to shrink below its content's intrinsic width at all —
+       flex items default to `min-width: auto`, which ignores `overflow`
+       otherwise. The full text is still reachable via the `title` tooltip. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .progress-bar {
