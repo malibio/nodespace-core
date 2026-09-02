@@ -417,6 +417,15 @@ async function main() {
         console.log("📝 Updating version in config files...");
         updateVersion(version);
 
+        // Re-resolve Cargo.lock so its own self-referential workspace-member
+        // version entries (nodespace-app, nodespace-cli, nodespace-agent, ...)
+        // match the Cargo.toml files updateVersion() just edited. `cargo check`
+        // is enough to trigger Cargo's normal lockfile re-sync and is far
+        // cheaper than a full build; it does not touch external dependency
+        // versions unless a requirement range actually changed.
+        console.log("🔒 Re-syncing Cargo.lock...");
+        Bun.spawnSync(["cargo", "check", "--workspace"], { stdout: "inherit", stderr: "inherit" });
+
         // Check if there are uncommitted changes
         const statusResult = Bun.spawnSync(["git", "status", "--porcelain"], {
           stdout: "pipe"
@@ -430,7 +439,9 @@ async function main() {
           const versionFiles = [
             "packages/desktop-app/src-tauri/tauri.conf.json",
             "packages/desktop-app/src-tauri/Cargo.toml",
+            "packages/desktop-app/package.json",
             "Cargo.toml",
+            "Cargo.lock",
             "package.json"
           ];
           for (const file of versionFiles) {
