@@ -45,7 +45,8 @@
     ],
     "externalBin": [
       "binaries/nodespaced",
-      "binaries/nodespace"
+      "binaries/nodespace",
+      "binaries/nodespace-skill-installer"
     ]
   }
 }
