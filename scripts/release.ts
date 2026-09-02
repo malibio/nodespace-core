@@ -426,6 +426,13 @@ async function main() {
         console.log("🔒 Re-syncing Cargo.lock...");
         Bun.spawnSync(["cargo", "check", "--workspace"], { stdout: "inherit", stderr: "inherit" });
 
+        // bun.lock carries the same kind of self-referential version entry
+        // for packages/desktop-app (its own workspace member record) that
+        // updateVersion() just edited in package.json. `bun install` is a
+        // fast no-op besides that resync since no actual dependency changed.
+        console.log("🔒 Re-syncing bun.lock...");
+        Bun.spawnSync(["bun", "install"], { stdout: "inherit", stderr: "inherit" });
+
         // Check if there are uncommitted changes
         const statusResult = Bun.spawnSync(["git", "status", "--porcelain"], {
           stdout: "pipe"
@@ -442,6 +449,7 @@ async function main() {
             "packages/desktop-app/package.json",
             "Cargo.toml",
             "Cargo.lock",
+            "bun.lock",
             "package.json"
           ];
           for (const file of versionFiles) {
