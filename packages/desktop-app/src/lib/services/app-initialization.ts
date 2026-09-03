@@ -162,6 +162,18 @@ export function registerShutdownHandlers(): void {
  *
  * Uses Tauri 2.x event API to intercept window close and flush
  * pending operations before allowing the window to actually close.
+ *
+ * `destroy()` MUST run unconditionally at the end, not just on the
+ * has-pending-writes path (core#2347). Tauri's own manager calls
+ * `prevent_close()` on every `CloseRequested` whenever a JS listener is
+ * registered for it -- which this one always is -- before this callback
+ * even runs, and holds the window open regardless of what the callback
+ * does. `destroy()` is the only thing that bypasses that and actually
+ * closes the window (which is what drives `ExitRequested` -> `Exit` on
+ * the Rust side, including the "Quit" tray menu item, which requests a
+ * close through this exact path rather than a direct app-exit API). Any
+ * code path that returns without calling it leaves the window -- and the
+ * whole app -- silently un-closable: no error, just nothing happens.
  */
 async function registerTauriCloseHandler(): Promise<void> {
   try {
@@ -188,10 +200,11 @@ async function registerTauriCloseHandler(): Promise<void> {
         } catch (err) {
           log.error('Error flushing pending writes:', err);
         }
-
-        // Now allow the window to close
-        await currentWindow.destroy();
       }
+
+      // Always destroy -- see the function doc comment for why this
+      // cannot be conditional on hasPendingWrites().
+      await currentWindow.destroy();
     });
 
     log.debug('Registered Tauri close request handler');
