@@ -138,7 +138,9 @@ async fn write_setup_state(state: &SetupState) -> Result<()> {
 }
 
 /// Check whether `nodespace --version` resolves on an augmented $PATH.
-/// Runs synchronously — safe to call from a blocking context.
+/// Runs synchronously (spawning up to two subprocesses: `path_helper` on
+/// macOS, then `nodespace` itself) — safe to call from a blocking context,
+/// not from an async task directly.
 ///
 /// Deliberately does NOT rely on the raw PATH this process inherited. On
 /// macOS, an app launched via LaunchServices (Finder/Dock/Spotlight -- how
@@ -694,6 +696,26 @@ mod tests {
         assert!(
             homebrew_idx < existing_usr_bin_idx,
             "shell-configured entries must be searched before the raw inherited PATH"
+        );
+    }
+
+    /// Closes the gap between `build_augmented_path` (well-tested, pure) and
+    /// the real wiring in `check_cli_on_path` -- a regression that deletes
+    /// the `.env("PATH", augmented_cli_path())` call from `check_cli_on_path`
+    /// while leaving `build_augmented_path` untouched would otherwise pass
+    /// every other test in this module. Only reads `PATH`/`HOME` (never
+    /// mutates them), so this is safe alongside the parallel test run.
+    #[test]
+    fn augmented_cli_path_includes_homebrew_bin() {
+        let result = augmented_cli_path();
+        let paths: Vec<PathBuf> = std::env::split_paths(&result).collect();
+        assert!(
+            paths.contains(&PathBuf::from("/opt/homebrew/bin")),
+            "augmented_cli_path() must include /opt/homebrew/bin, got: {result:?}"
+        );
+        assert!(
+            paths.contains(&PathBuf::from("/usr/local/bin")),
+            "augmented_cli_path() must include /usr/local/bin, got: {result:?}"
         );
     }
 
