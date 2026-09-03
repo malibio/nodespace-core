@@ -65,6 +65,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -136,16 +137,97 @@ async fn write_setup_state(state: &SetupState) -> Result<()> {
         .context("Failed to write ~/.nodespace/setup.json")
 }
 
-/// Check whether `nodespace --version` resolves on $PATH.
-/// Runs synchronously — safe to call from a blocking context.
+/// Check whether `nodespace --version` resolves on an augmented $PATH.
+/// Runs synchronously (spawning up to two subprocesses: `path_helper` on
+/// macOS, then `nodespace` itself) — safe to call from a blocking context,
+/// not from an async task directly.
+///
+/// Deliberately does NOT rely on the raw PATH this process inherited. On
+/// macOS, an app launched via LaunchServices (Finder/Dock/Spotlight -- how
+/// virtually every non-developer user launches it) gets a minimal system
+/// PATH that excludes Homebrew (`/opt/homebrew/bin`) and other
+/// shell-configured locations, since those are only added by shell startup
+/// files a GUI-launched process never sources. Without augmentation, this
+/// check reports "not found" even when the CLI is genuinely correctly
+/// installed and would resolve fine from a terminal (core#2350).
 pub fn check_cli_on_path() -> bool {
     Command::new("nodespace")
         .args(["--version"])
+        .env("PATH", augmented_cli_path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Builds the augmented PATH used by [`check_cli_on_path`]. Mirrors
+/// `packages/agent/src/pty/detection.rs`'s `augmented_path()`, which solves
+/// the identical problem for AI-agent-CLI detection (`claude`, `codex`,
+/// etc.) -- `nodespace-app` has no dependency on `nodespace-agent`, so this
+/// is a deliberate mirror rather than a shared function; keep the two in
+/// sync if either changes.
+fn augmented_cli_path() -> OsString {
+    let shell_path = path_helper_output();
+    let home = dirs::home_dir();
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    build_augmented_path(&existing, home.as_deref(), shell_path.as_deref())
+}
+
+/// Pure PATH-building logic, factored out of [`augmented_cli_path`] so it
+/// can be unit tested without mutating the real process-wide `PATH` env var
+/// (tests run many-per-process; mutating global env state is a known
+/// footgun in this codebase).
+fn build_augmented_path(
+    existing_path: &OsStr,
+    home_dir: Option<&Path>,
+    shell_path: Option<&OsStr>,
+) -> OsString {
+    let mut extra: Vec<PathBuf> = Vec::new();
+
+    if let Some(shell_path) = shell_path {
+        extra.extend(std::env::split_paths(shell_path));
+    }
+
+    if let Some(home) = home_dir {
+        extra.push(home.join(".npm-global").join("bin"));
+        extra.push(home.join(".local").join("bin"));
+        extra.push(home.join(".cargo").join("bin"));
+        extra.push(home.join("go").join("bin"));
+    }
+    extra.push(PathBuf::from("/opt/homebrew/bin"));
+    extra.push(PathBuf::from("/usr/local/bin"));
+
+    extra.extend(std::env::split_paths(existing_path));
+
+    std::env::join_paths(extra).unwrap_or_else(|_| existing_path.to_os_string())
+}
+
+/// Run `/usr/libexec/path_helper -s` and extract the PATH value from its
+/// output. Output looks like: `PATH="/usr/local/bin:/usr/bin:/bin"; export PATH;`
+#[cfg(target_os = "macos")]
+fn path_helper_output() -> Option<OsString> {
+    let output = std::process::Command::new("/usr/libexec/path_helper")
+        .arg("-s")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let path_line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with("PATH="))?;
+    let after_prefix = path_line.trim_start().strip_prefix("PATH=\"")?;
+    let value = after_prefix
+        .strip_suffix("\"; export PATH;")
+        .or_else(|| after_prefix.strip_suffix('"'))?;
+    Some(OsString::from(value))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn path_helper_output() -> Option<OsString> {
+    None
 }
 
 /// Serializes the whole read-state → run-installer → write-state critical
@@ -547,6 +629,94 @@ mod tests {
     #[test]
     fn cli_warning_is_none_when_cli_on_path() {
         assert!(cli_warning(true).is_none());
+    }
+
+    /// core#2350: `check_cli_on_path()` must search Homebrew's bin dirs and
+    /// common per-user install dirs, not just whatever bare PATH the app
+    /// process happened to inherit -- a LaunchServices-launched app never
+    /// gets those from shell startup files. Uses injected fake values, not
+    /// real env mutation, per this codebase's no-global-env-mutation-in-tests
+    /// rule (cargo test runs many tests in one process).
+    #[test]
+    fn build_augmented_path_includes_homebrew_and_home_dirs() {
+        let existing = OsStr::new("/usr/bin:/bin");
+        let home = PathBuf::from("/Users/testuser");
+        let result = build_augmented_path(existing, Some(&home), None);
+        let paths: Vec<PathBuf> = std::env::split_paths(&result).collect();
+
+        assert!(paths.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(paths.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(paths.contains(&home.join(".cargo").join("bin")));
+        assert!(paths.contains(&home.join(".local").join("bin")));
+        assert!(paths.contains(&home.join(".npm-global").join("bin")));
+        assert!(paths.contains(&home.join("go").join("bin")));
+    }
+
+    #[test]
+    fn build_augmented_path_preserves_existing_path_entries() {
+        let existing = OsStr::new("/custom/bin:/another/bin");
+        let result = build_augmented_path(existing, None, None);
+        let paths: Vec<PathBuf> = std::env::split_paths(&result).collect();
+
+        assert!(paths.contains(&PathBuf::from("/custom/bin")));
+        assert!(paths.contains(&PathBuf::from("/another/bin")));
+    }
+
+    #[test]
+    fn build_augmented_path_works_with_no_home_dir_or_shell_path() {
+        // Must not panic even when dirs::home_dir() or path_helper both
+        // return None (e.g. a sandboxed or unusual environment).
+        let existing = OsStr::new("/usr/bin");
+        let result = build_augmented_path(existing, None, None);
+        let paths: Vec<PathBuf> = std::env::split_paths(&result).collect();
+
+        assert!(paths.contains(&PathBuf::from("/usr/bin")));
+        assert!(paths.contains(&PathBuf::from("/opt/homebrew/bin")));
+    }
+
+    /// Shell-configured entries (from `path_helper` on macOS) must come
+    /// before the raw inherited PATH's entries, so a Homebrew-installed
+    /// `nodespace` is found ahead of any same-named binary already resolvable
+    /// on the minimal inherited PATH.
+    #[test]
+    fn build_augmented_path_orders_shell_path_before_existing_path() {
+        let existing = OsStr::new("/usr/bin");
+        let shell_path = OsStr::new("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
+        let result = build_augmented_path(existing, None, Some(shell_path));
+        let paths: Vec<PathBuf> = std::env::split_paths(&result).collect();
+
+        let homebrew_idx = paths
+            .iter()
+            .position(|p| p == &PathBuf::from("/opt/homebrew/bin"))
+            .expect("/opt/homebrew/bin must be present");
+        let existing_usr_bin_idx = paths
+            .iter()
+            .rposition(|p| p == &PathBuf::from("/usr/bin"))
+            .expect("/usr/bin must be present");
+        assert!(
+            homebrew_idx < existing_usr_bin_idx,
+            "shell-configured entries must be searched before the raw inherited PATH"
+        );
+    }
+
+    /// Closes the gap between `build_augmented_path` (well-tested, pure) and
+    /// the real wiring in `check_cli_on_path` -- a regression that deletes
+    /// the `.env("PATH", augmented_cli_path())` call from `check_cli_on_path`
+    /// while leaving `build_augmented_path` untouched would otherwise pass
+    /// every other test in this module. Only reads `PATH`/`HOME` (never
+    /// mutates them), so this is safe alongside the parallel test run.
+    #[test]
+    fn augmented_cli_path_includes_homebrew_bin() {
+        let result = augmented_cli_path();
+        let paths: Vec<PathBuf> = std::env::split_paths(&result).collect();
+        assert!(
+            paths.contains(&PathBuf::from("/opt/homebrew/bin")),
+            "augmented_cli_path() must include /opt/homebrew/bin, got: {result:?}"
+        );
+        assert!(
+            paths.contains(&PathBuf::from("/usr/local/bin")),
+            "augmented_cli_path() must include /usr/local/bin, got: {result:?}"
+        );
     }
 
     /// `resolve_installer_path` must never fall through to `npx`/`npm` (the
