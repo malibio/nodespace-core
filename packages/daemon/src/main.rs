@@ -31,7 +31,9 @@
 //! separately; see ADR-052 for the full security review and remediation
 //! plan). Do not assume a peer-identity check exists anywhere in this file.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use nodespace_agent::local_agent::otlp_tracer;
@@ -177,6 +179,24 @@ fn pipe_name() -> String {
 /// Headless mode is supported for systems that don't have a display (Linux
 /// CI, headless servers): if `NODESPACED_HEADLESS=1` is set, the tray loop
 /// is skipped and we fall back to a pure async `main` that exits on signals.
+///
+/// Live validation found the tray-mode shutdown sequence can intermittently
+/// stall indefinitely after GPU/model teardown completes and before this
+/// function's own "shutdown complete" log line -- observed durations ranged
+/// from ~24s to several minutes, non-deterministic, root cause not fully
+/// pinned down (a background task, e.g. from `SharedServices`, not finishing
+/// promptly is the leading suspect, but this has not been conclusively
+/// isolated). [`SHUTDOWN_WATCHDOG_TIMEOUT`] bounds how long a deliberate quit
+/// (tray "Quit", SIGTERM/SIGINT, or the app's own quit path) waits for
+/// graceful shutdown before forcing an exit -- otherwise a hang here means
+/// Quit does nothing at all, forever, which is worse than a slightly abrupt
+/// exit. Exits `0` (not an error code) even when forced, since this always
+/// fires only after the user (or the OS) already asked to quit -- treating it
+/// as a "failure" would make launchd's now-conditional `KeepAlive` (see
+/// `write_plist` in `daemon_setup.rs`) restart the daemon right back up,
+/// undoing the very quit this exists to guarantee.
+const SHUTDOWN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(15);
+
 fn main() -> Result<()> {
     // Early-exit flags — handled before tracing/runtime init so the installer
     // postinstall script can query these without spinning up the full daemon.
@@ -222,14 +242,98 @@ fn main() -> Result<()> {
 
     // `tray::run` returned, so the user picked Quit. Wait for the gRPC
     // server to finish draining before we drop the runtime — otherwise
-    // in-flight RPCs would be killed mid-response.
+    // in-flight RPCs would be killed mid-response. Bounded by a watchdog
+    // (see SHUTDOWN_WATCHDOG_TIMEOUT's doc comment): if graceful shutdown
+    // doesn't finish in time, force-exit rather than let a stuck teardown
+    // make Quit hang forever.
+    let defused = arm_shutdown_watchdog(SHUTDOWN_WATCHDOG_TIMEOUT, || {
+        tracing::error!(
+            timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
+            "Graceful shutdown did not complete in time -- forcing exit. \
+             If you see this, please report it: something in daemon \
+             teardown is hanging (see core#2353's follow-up)."
+        );
+        std::process::exit(0);
+    });
+
     runtime
         .block_on(grpc_handle)
         .context("gRPC task panicked")?
         .context("gRPC server returned an error")?;
+    defused.store(true, Ordering::SeqCst);
 
     tracing::info!("nodespaced shutdown complete");
     Ok(())
+}
+
+/// Spawns a background thread that runs `on_timeout` once, after `timeout`,
+/// unless the returned flag is set to `true` first (by the caller, once the
+/// thing being bounded actually finishes). The watchdog thread only reads
+/// the flag and calls `on_timeout` — it needs no cooperation from whatever
+/// might be stuck, which is the whole point: it still fires even if the
+/// bounded work is wedged on a synchronous call that can't be cancelled.
+///
+/// Split out from `main`'s tray-mode shutdown path so the arm/defuse timing
+/// logic itself is unit-testable without needing to trigger a real process
+/// exit — production passes `std::process::exit`, tests pass something
+/// observable instead.
+fn arm_shutdown_watchdog(
+    timeout: Duration,
+    on_timeout: impl FnOnce() + Send + 'static,
+) -> Arc<AtomicBool> {
+    let defused = Arc::new(AtomicBool::new(false));
+    let watcher = defused.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        if !watcher.load(Ordering::SeqCst) {
+            on_timeout();
+        }
+    });
+    defused
+}
+
+#[cfg(test)]
+mod shutdown_watchdog_tests {
+    use super::arm_shutdown_watchdog;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// The bug this exists to prevent (core#2353's follow-up): if graceful
+    /// shutdown never completes, `on_timeout` must still fire so the process
+    /// doesn't hang forever.
+    #[test]
+    fn fires_on_timeout_when_never_defused() {
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_writer = fired.clone();
+        let _defused = arm_shutdown_watchdog(Duration::from_millis(20), move || {
+            fired_writer.store(true, Ordering::SeqCst);
+        });
+
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "on_timeout must fire once the timeout elapses with no defuse"
+        );
+    }
+
+    /// The normal, fast-shutdown path: `on_timeout` must NOT fire once the
+    /// caller marks the watched work as actually finished.
+    #[test]
+    fn does_not_fire_once_defused_before_timeout() {
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_writer = fired.clone();
+        let defused = arm_shutdown_watchdog(Duration::from_millis(100), move || {
+            fired_writer.store(true, Ordering::SeqCst);
+        });
+
+        defused.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !fired.load(Ordering::SeqCst),
+            "on_timeout must not fire once the caller defused it before the deadline"
+        );
+    }
 }
 
 fn headless() -> bool {
@@ -376,8 +480,19 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
     // Drain every open database's compute, then release the shared GPU once.
+    //
+    // Timed (core#2353 follow-up): live validation found this tail can
+    // intermittently stall for a long time (24s to several minutes observed)
+    // with no further log output, root cause not yet pinned down. These two
+    // timings are the diagnostic a future occurrence needs -- without them,
+    // a hang here is invisible until `main`'s SHUTDOWN_WATCHDOG_TIMEOUT
+    // (15s) forces the process to exit anyway.
+    let shutdown_started = std::time::Instant::now();
     shutdown_manager.shutdown_all().await;
+    tracing::info!(elapsed = ?shutdown_started.elapsed(), "shutdown_all finished");
+    let gpu_release_started = std::time::Instant::now();
     release_shared_gpu(&shared_model).await;
+    tracing::info!(elapsed = ?gpu_release_started.elapsed(), "release_shared_gpu finished");
     Ok(())
 }
 
