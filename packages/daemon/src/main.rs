@@ -187,14 +187,20 @@ fn pipe_name() -> String {
 /// pinned down (a background task, e.g. from `SharedServices`, not finishing
 /// promptly is the leading suspect, but this has not been conclusively
 /// isolated). [`SHUTDOWN_WATCHDOG_TIMEOUT`] bounds how long a deliberate quit
-/// (tray "Quit", SIGTERM/SIGINT, or the app's own quit path) waits for
-/// graceful shutdown before forcing an exit -- otherwise a hang here means
-/// Quit does nothing at all, forever, which is worse than a slightly abrupt
-/// exit. Exits `0` (not an error code) even when forced, since this always
-/// fires only after the user (or the OS) already asked to quit -- treating it
-/// as a "failure" would make launchd's now-conditional `KeepAlive` (see
-/// `write_plist` in `daemon_setup.rs`) restart the daemon right back up,
-/// undoing the very quit this exists to guarantee.
+/// (tray "Quit", SIGTERM/SIGINT, or the app's own quit path) waits for the
+/// ENTIRE post-`tray::run` sequence -- gRPC drain, `shutdown_all()` across
+/// every open database, and GPU/model teardown together, not just the
+/// specific tail where the hang has been observed so far -- before forcing
+/// an exit. Bounding the whole sequence rather than just the suspected tail
+/// is deliberate: today `shutdown_all()`/gRPC drain are cheap and fast, but
+/// nothing architecturally guarantees that stays true, and a hang anywhere
+/// in this path has the identical symptom (Quit does nothing at all,
+/// forever), which is worse than a slightly abrupt forced exit. Exits `0`
+/// (not an error code) even when forced, since this always fires only after
+/// the user (or the OS) already asked to quit -- treating it as a "failure"
+/// would make launchd's now-conditional `KeepAlive` (see `write_plist` in
+/// `daemon_setup.rs`) restart the daemon right back up, undoing the very
+/// quit this exists to guarantee.
 const SHUTDOWN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn main() -> Result<()> {
@@ -251,7 +257,7 @@ fn main() -> Result<()> {
             timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
             "Graceful shutdown did not complete in time -- forcing exit. \
              If you see this, please report it: something in daemon \
-             teardown is hanging (see core#2353's follow-up)."
+             teardown is hanging (see core#2357)."
         );
         std::process::exit(0);
     });
@@ -295,44 +301,56 @@ fn arm_shutdown_watchdog(
 #[cfg(test)]
 mod shutdown_watchdog_tests {
     use super::arm_shutdown_watchdog;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
     use std::time::Duration;
 
-    /// The bug this exists to prevent (core#2353's follow-up): if graceful
-    /// shutdown never completes, `on_timeout` must still fire so the process
-    /// doesn't hang forever.
+    /// The bug this exists to prevent (core#2357): if graceful shutdown
+    /// never completes, `on_timeout` must still fire so the process doesn't
+    /// hang forever.
+    ///
+    /// Uses a channel rather than a fixed sleep-then-check margin: this test
+    /// waits exactly as long as it takes for `on_timeout` to actually fire
+    /// (fast in practice), bounded by a generous 2s `recv_timeout` so a
+    /// loaded CI runner delaying the watchdog thread's own scheduling can't
+    /// produce a false failure the way a fixed short sleep could.
     #[test]
     fn fires_on_timeout_when_never_defused() {
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_writer = fired.clone();
+        let (tx, rx) = mpsc::channel();
         let _defused = arm_shutdown_watchdog(Duration::from_millis(20), move || {
-            fired_writer.store(true, Ordering::SeqCst);
+            let _ = tx.send(());
         });
 
-        std::thread::sleep(Duration::from_millis(150));
-        assert!(
-            fired.load(Ordering::SeqCst),
-            "on_timeout must fire once the timeout elapses with no defuse"
-        );
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("on_timeout must fire once the timeout elapses with no defuse");
     }
 
     /// The normal, fast-shutdown path: `on_timeout` must NOT fire once the
-    /// caller marks the watched work as actually finished.
+    /// caller marks the watched work as actually finished. Proving a
+    /// negative still requires waiting out the deadline (a channel alone
+    /// can't shortcut that), but the wait here is bounded to the timeout
+    /// plus a fixed, generous margin rather than a wholly separate guessed
+    /// sleep duration.
     #[test]
     fn does_not_fire_once_defused_before_timeout() {
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_writer = fired.clone();
-        let defused = arm_shutdown_watchdog(Duration::from_millis(100), move || {
-            fired_writer.store(true, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        let defused = arm_shutdown_watchdog(Duration::from_millis(50), move || {
+            let _ = tx.send(());
         });
 
         defused.store(true, Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(
-            !fired.load(Ordering::SeqCst),
-            "on_timeout must not fire once the caller defused it before the deadline"
-        );
+
+        match rx.recv_timeout(Duration::from_millis(300)) {
+            // Timeout: on_timeout was never called at all, so `tx` is still
+            // parked inside it, unsent. Disconnected: on_timeout's closure
+            // (and the `tx` it owns) was dropped without sending, once the
+            // watchdog thread found `defused` set and skipped calling it.
+            // Both correctly mean "never fired" -- only Ok(()) means it did.
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+            Ok(()) => {
+                panic!("on_timeout must not fire once the caller defused it before the deadline")
+            }
+        }
     }
 }
 
@@ -481,7 +499,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
     // Drain every open database's compute, then release the shared GPU once.
     //
-    // Timed (core#2353 follow-up): live validation found this tail can
+    // Timed (core#2357): live validation found this tail can
     // intermittently stall for a long time (24s to several minutes observed)
     // with no further log output, root cause not yet pinned down. These two
     // timings are the diagnostic a future occurrence needs -- without them,
@@ -712,8 +730,13 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     .await
     .context("gRPC server terminated with error")?;
     // Drain every open database's compute, then release the shared GPU once.
+    // Timed (core#2357): see the matching Unix serve_grpc for why.
+    let shutdown_started = std::time::Instant::now();
     shutdown_manager.shutdown_all().await;
+    tracing::info!(elapsed = ?shutdown_started.elapsed(), "shutdown_all finished");
+    let gpu_release_started = std::time::Instant::now();
     release_shared_gpu(&shared_model).await;
+    tracing::info!(elapsed = ?gpu_release_started.elapsed(), "release_shared_gpu finished");
     Ok(())
 }
 
