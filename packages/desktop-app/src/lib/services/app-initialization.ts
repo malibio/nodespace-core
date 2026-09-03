@@ -190,7 +190,10 @@ async function registerTauriCloseHandler(): Promise<void> {
       if (sharedNodeStore.hasPendingWrites()) {
         log.info('Flushing pending node writes before Tauri window close');
 
-        // Prevent the window from closing until flush completes
+        // Tauri already withholds the close regardless of this call (see the
+        // function doc comment) -- kept so the intent is explicit here and
+        // the flush below isn't racing a close Tauri's own default behavior
+        // happens to prevent for us anyway.
         event.preventDefault();
 
         try {
@@ -203,8 +206,14 @@ async function registerTauriCloseHandler(): Promise<void> {
       }
 
       // Always destroy -- see the function doc comment for why this
-      // cannot be conditional on hasPendingWrites().
-      await currentWindow.destroy();
+      // cannot be conditional on hasPendingWrites(). This is now the one
+      // call the whole fix hinges on, so a throw here can't be allowed to
+      // silently leave the window (and the app) un-closable again.
+      try {
+        await currentWindow.destroy();
+      } catch (err) {
+        log.error('Error destroying window on close request:', err);
+      }
     });
 
     log.debug('Registered Tauri close request handler');

@@ -100,4 +100,14 @@ describe('registerShutdownHandlers — Tauri close handler', () => {
 
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });
+
+  it('does not propagate if destroy() itself throws', async () => {
+    const { handler, sharedNodeStore } = await registerAndCapture();
+    vi.spyOn(sharedNodeStore, 'hasPendingWrites').mockReturnValue(false);
+    destroyMock.mockRejectedValueOnce(new Error('destroy failed'));
+
+    await expect(handler({ preventDefault: vi.fn() })).resolves.toBeUndefined();
+
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
 });
