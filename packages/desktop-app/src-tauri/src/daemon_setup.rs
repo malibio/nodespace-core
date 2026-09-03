@@ -769,14 +769,21 @@ fn launch_agents_dir(home: &Path) -> PathBuf {
 /// `KeepAlive` is the conditional `{SuccessfulExit: false}` form, NOT bare
 /// `true` (core#2353). Bare `true` restarts the job on *any* exit, with no
 /// way to distinguish a crash from a deliberate, successful shutdown --
-/// which meant the tray's "Quit" item, or any other clean exit (`Ok(())`
-/// from `main`, e.g. via SIGTERM), was undone by launchd relaunching the
+/// which meant the tray's "Quit" item was undone by launchd relaunching the
 /// process within about half a second, regardless of how cleanly it had
 /// just shut down. `SuccessfulExit: false` only restarts on a nonzero/
-/// crash exit, matching `main`'s existing `Ok(())` (exit 0) vs `Err(...)`
-/// (exit nonzero, same as a panic) behavior -- and matches the Linux
-/// systemd unit's `Restart=on-failure` in `write_systemd_service`, which
-/// never had this bug because it was never unconditional to begin with.
+/// crash exit, matching `main`'s `Ok(())` (exit 0) vs `Err(...)` (exit
+/// nonzero, same as a panic) behavior on the verified tray-Quit path -- and
+/// matches the Linux systemd unit's `Restart=on-failure` in
+/// `write_systemd_service`, which never had this bug because it was never
+/// unconditional to begin with.
+///
+/// This does NOT by itself guarantee a SIGTERM'd or internally-panicked
+/// daemon always reaches that `Ok(())`/`Err(...)` split while the tray is
+/// up -- `main`'s tray-mode event loop only reacts to the tray's own "Quit"
+/// click today, a separate, pre-existing gap tracked in a follow-up issue.
+/// This fix is specifically about the path that IS wired end to end: a
+/// deliberate tray "Quit."
 #[cfg(target_os = "macos")]
 fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> {
     let launch_agents = plist_path
@@ -1402,7 +1409,7 @@ mod macos_plist_keepalive_tests {
              daemon on every exit, including a clean, deliberate shutdown (core#2353): {contents}"
         );
         assert!(
-            contents.contains("<key>SuccessfulExit</key>") && contents.contains("<false/>"),
+            contents.contains("<key>SuccessfulExit</key>\n        <false/>"),
             "KeepAlive must use the conditional {{SuccessfulExit: false}} form so launchd only \
              restarts on a nonzero/crash exit: {contents}"
         );
