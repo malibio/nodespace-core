@@ -765,6 +765,18 @@ fn launch_agents_dir(home: &Path) -> PathBuf {
 }
 
 /// Write the launchd plist for the nodespaced user agent.
+///
+/// `KeepAlive` is the conditional `{SuccessfulExit: false}` form, NOT bare
+/// `true` (core#2353). Bare `true` restarts the job on *any* exit, with no
+/// way to distinguish a crash from a deliberate, successful shutdown --
+/// which meant the tray's "Quit" item, or any other clean exit (`Ok(())`
+/// from `main`, e.g. via SIGTERM), was undone by launchd relaunching the
+/// process within about half a second, regardless of how cleanly it had
+/// just shut down. `SuccessfulExit: false` only restarts on a nonzero/
+/// crash exit, matching `main`'s existing `Ok(())` (exit 0) vs `Err(...)`
+/// (exit nonzero, same as a panic) behavior -- and matches the Linux
+/// systemd unit's `Restart=on-failure` in `write_systemd_service`, which
+/// never had this bug because it was never unconditional to begin with.
 #[cfg(target_os = "macos")]
 fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> {
     let launch_agents = plist_path
@@ -832,7 +844,10 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>StandardOutPath</key>
     <string>{log_out}</string>
     <key>StandardErrorPath</key>
@@ -1346,6 +1361,79 @@ mod macos_codesign_tests {
             !has_quarantine_attribute(&bin),
             "a signature match must not be treated as proof the binary is unquarantined"
         );
+    }
+}
+
+/// core#2353 regression guard: launchd's `KeepAlive` must be the conditional
+/// `{SuccessfulExit: false}` form, not bare `true`. Bare `true` restarted the
+/// daemon on ANY exit -- crash or a fully clean, deliberate shutdown (e.g.
+/// the tray "Quit" item) alike -- since launchd has no way to distinguish
+/// them under that form. A future edit that reverts to `<true/>` for
+/// simplicity would silently reintroduce the exact bug this module exists to
+/// prevent, so this asserts on the literal rendered XML rather than just
+/// checking the plist parses.
+#[cfg(all(test, target_os = "macos"))]
+mod macos_plist_keepalive_tests {
+    use super::write_plist;
+    use std::path::PathBuf;
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ns-plist-keepalive-test-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn keep_alive_is_conditional_on_successful_exit_not_bare_true() {
+        let home = scratch_dir("keepalive");
+        let plist_path = home.join("Library/LaunchAgents/app.nodespace.daemon.plist");
+        let daemon_bin = home.join("bin/nodespaced");
+
+        write_plist(&home, &plist_path, &daemon_bin).expect("write_plist should succeed");
+        let contents = std::fs::read_to_string(&plist_path).expect("plist should be written");
+
+        assert!(
+            !contents.contains("<key>KeepAlive</key>\n    <true/>"),
+            "KeepAlive must not be the unconditional bare `true` form -- that restarts the \
+             daemon on every exit, including a clean, deliberate shutdown (core#2353): {contents}"
+        );
+        assert!(
+            contents.contains("<key>SuccessfulExit</key>") && contents.contains("<false/>"),
+            "KeepAlive must use the conditional {{SuccessfulExit: false}} form so launchd only \
+             restarts on a nonzero/crash exit: {contents}"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn keep_alive_dict_is_well_formed_xml() {
+        let home = scratch_dir("wellformed");
+        let plist_path = home.join("Library/LaunchAgents/app.nodespace.daemon.plist");
+        let daemon_bin = home.join("bin/nodespaced");
+
+        write_plist(&home, &plist_path, &daemon_bin).expect("write_plist should succeed");
+        assert!(
+            plist_path.exists(),
+            "write_plist should have created the file"
+        );
+
+        // `plutil -lint` validates real plist XML structure (matching quotes,
+        // balanced tags, valid DOCTYPE) without needing to actually load it
+        // as a launchd job -- a lightweight correctness check beyond string
+        // matching, catching e.g. an unbalanced <dict>/</dict> from the
+        // KeepAlive change above.
+        let status = std::process::Command::new("plutil")
+            .args(["-lint", &plist_path.to_string_lossy()])
+            .status()
+            .expect("plutil should be available on macOS");
+        assert!(status.success(), "written plist must be valid XML/plist");
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
 
