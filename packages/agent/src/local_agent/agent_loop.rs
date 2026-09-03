@@ -118,6 +118,20 @@ const CANONICAL_ARGS_DIGEST_PREFIX: &str = "sha256:";
 /// canonicalises the parsed arguments to match what the write record persists.
 /// That difference is deliberate — the loop-breaker only needs to recognise a
 /// stuck model, whereas the guard's comparison must be exact.
+/// Truncate `s` to at most `max_chars` characters (char-boundary safe via
+/// `.chars()`, unlike a `[..N]` byte slice which can panic mid-character on
+/// any non-ASCII content) for a log/span preview. Returns the preview and
+/// whether truncation actually happened, so a caller can mark it — a
+/// preview that silently reads as the complete value has repeatedly cost
+/// real diagnosis time (see core#2173): the log line looks complete, and
+/// nothing says otherwise.
+fn char_preview(s: &str, max_chars: usize) -> (String, bool) {
+    let mut chars = s.chars();
+    let preview: String = chars.by_ref().take(max_chars).collect();
+    let truncated = chars.next().is_some();
+    (preview, truncated)
+}
+
 pub fn canonical_args(args_json: &str) -> String {
     serde_json::from_str::<serde_json::Value>(args_json)
         .map(|mut v| {
@@ -1645,8 +1659,8 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 .iter()
                 .map(|m| {
                     let role = format!("{:?}", m.role).to_lowercase();
-                    let preview: String = m.content.chars().take(2000).collect();
-                    serde_json::json!({"role": role, "content": preview})
+                    let (preview, truncated) = char_preview(&m.content, 2000);
+                    serde_json::json!({"role": role, "content": preview, "content_truncated": truncated})
                 })
                 .collect();
             iter_span.set_attribute(KeyValue::new(
@@ -1748,11 +1762,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 accumulated_reasoning.push_str(iteration_reasoning.trim());
             }
 
+            let (response_preview, response_preview_truncated) = char_preview(&response_text, 200);
             tracing::info!(
                 iteration,
                 tool_calls = tool_calls.len(),
                 response_len = response_text.len(),
-                response_preview = %response_text.chars().take(200).collect::<String>(),
+                response_preview = %response_preview,
+                response_preview_truncated,
                 "Agent loop: inference round completed"
             );
             // Full, untruncated generation — deliberately `debug`, not `info`, so
@@ -1806,11 +1822,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let normalized = if normalized.is_empty() {
                     normalized
                 } else if !any_real_tool_calls && contains_action_claim(&normalized) {
+                    let (preview, preview_truncated) = char_preview(&normalized, 120);
                     tracing::warn!(
                         session_id = %session.id,
                         model = %session.model_id.as_deref().unwrap_or("unknown"),
                         iteration = iteration,
-                        response_preview = %normalized.chars().take(120).collect::<String>(),
+                        response_preview = %preview,
+                        response_preview_truncated = preview_truncated,
                         "Anti-fabrication: model claimed action with zero tool calls — converting to confirmation request"
                     );
                     CONFIRMATION_REQUEST.to_string()
@@ -1829,11 +1847,13 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let normalized = if !normalized.is_empty()
                     && looks_like_narrated_tool_call(&normalized)
                 {
+                    let (preview, preview_truncated) = char_preview(&normalized, 120);
                     tracing::warn!(
                         session_id = %session.id,
                         model = %session.model_id.as_deref().unwrap_or("unknown"),
                         iteration = iteration,
-                        response_preview = %normalized.chars().take(120).collect::<String>(),
+                        response_preview = %preview,
+                        response_preview_truncated = preview_truncated,
                         "Narrated tool call: model printed a tool call as text instead of invoking it — converting to confirmation request"
                     );
                     CONFIRMATION_REQUEST.to_string()
@@ -1865,12 +1885,14 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     && all_writes_were_empty
                     && contains_action_claim(&normalized)
                 {
+                    let (preview, preview_truncated) = char_preview(&normalized, 120);
                     tracing::warn!(
                         session_id = %session.id,
                         model = %session.model_id.as_deref().unwrap_or("unknown"),
                         iteration = iteration,
                         write_calls = write_field_counts.len(),
-                        response_preview = %normalized.chars().take(120).collect::<String>(),
+                        response_preview = %preview,
+                        response_preview_truncated = preview_truncated,
                         "No-op success: model claimed an action backed only by writes that persisted nothing — converting to confirmation request"
                     );
                     CONFIRMATION_REQUEST.to_string()
@@ -1965,19 +1987,21 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     // canned UX string. Structured fields below let the
                     // production dashboards group these by model and surface
                     // session/iteration for replay.
+                    let (user_message_preview, user_message_preview_truncated) = session
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| matches!(m.role, Role::User))
+                        .map(|m| char_preview(&m.content, 80))
+                        .unwrap_or_default();
                     tracing::error!(
                         session_id = %session.id,
                         model = %session.model_id.as_deref().unwrap_or("unknown"),
                         iteration = iteration,
                         prompt_tokens = total_usage.prompt_tokens,
                         completion_tokens = total_usage.completion_tokens,
-                        user_message_preview = %session
-                            .messages
-                            .iter()
-                            .rev()
-                            .find(|m| matches!(m.role, Role::User))
-                            .map(|m| m.content.chars().take(80).collect::<String>())
-                            .unwrap_or_default(),
+                        user_message_preview = %user_message_preview,
+                        user_message_preview_truncated,
                         "Agent returned empty response with no tool calls"
                     );
                     return Err(InferenceError::Engine(
@@ -2303,13 +2327,16 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     }
                     Err(parse_err) => {
                         consecutive_parse_failures += 1;
+                        let (args_preview, args_preview_truncated) =
+                            char_preview(&tc.arguments_json, 300);
                         tracing::warn!(
                             session_id = %session.id,
                             tool = %tc.function_name,
                             iteration = iteration,
                             error = %parse_err,
                             consecutive_parse_failures,
-                            args_preview = %tc.arguments_json.chars().take(300).collect::<String>(),
+                            args_preview = %args_preview,
+                            args_preview_truncated,
                             "Model emitted unparseable tool arguments — reporting to model instead of substituting an empty object"
                         );
                         (serde_json::json!({}), None)
@@ -2356,21 +2383,29 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // logged, never acted on.
                 let result_field_count = persisted_field_count(&tc.function_name, &result_value);
 
+                let (args_preview, args_preview_truncated) = char_preview(&args.to_string(), 300);
+                let (result_preview, result_preview_truncated) =
+                    char_preview(&result_value.to_string(), 300);
                 tracing::info!(
                     tool = %tc.function_name,
                     is_error,
                     duration_ms,
                     result_field_count,
-                    args_preview = %args.to_string().chars().take(300).collect::<String>(),
-                    result_preview = %result_value.to_string().chars().take(300).collect::<String>(),
+                    args_preview = %args_preview,
+                    args_preview_truncated,
+                    result_preview = %result_preview,
+                    result_preview_truncated,
                     "Tool executed"
                 );
 
+                let (result_for_span, result_for_span_truncated) =
+                    char_preview(&result_value.to_string(), 2000);
                 tool_results_for_span.push(serde_json::json!({
                     "tool": tc.function_name,
                     "is_error": is_error,
                     "duration_ms": duration_ms,
-                    "result": result_value.to_string().chars().take(2000).collect::<String>(),
+                    "result": result_for_span,
+                    "result_truncated": result_for_span_truncated,
                 }));
 
                 let record = ToolExecutionRecord {
@@ -3389,6 +3424,43 @@ mod tests {
         MAX_TOOL_ITERATIONS >= 5,
         "multi_skill_turn_invokes_skill_tools_between_searches requires MAX_TOOL_ITERATIONS >= 5",
     );
+
+    // -- char_preview -----------------------------------------------------
+
+    #[test]
+    fn char_preview_reports_no_truncation_when_the_string_fits() {
+        let (preview, truncated) = char_preview("short", 200);
+        assert_eq!(preview, "short");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn char_preview_reports_truncation_and_the_right_prefix_when_it_does_not_fit() {
+        let (preview, truncated) = char_preview("abcdefghij", 5);
+        assert_eq!(preview, "abcde");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn char_preview_is_char_boundary_safe_on_multi_byte_content() {
+        // Each of these is a multi-byte UTF-8 character. A byte-slice `[..3]`
+        // on a string built from them would panic (splits a character); a
+        // char-based take must not.
+        let s = "日本語のテキストです";
+        let (preview, truncated) = char_preview(s, 3);
+        assert_eq!(preview, "日本語");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn char_preview_treats_exact_length_as_not_truncated() {
+        let (preview, truncated) = char_preview("exact", 5);
+        assert_eq!(preview, "exact");
+        assert!(
+            !truncated,
+            "a string exactly at the limit was not cut, so is not truncated"
+        );
+    }
 
     // -- Mock inference engine -------------------------------------------
 
