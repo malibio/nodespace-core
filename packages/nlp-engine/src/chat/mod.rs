@@ -388,11 +388,23 @@ impl ChatEngine {
             }
         }
         let prompt = &tmpl_result.prompt;
-        tracing::debug!(
-            "Chat prompt ({} chars): {:?}",
-            prompt.len(),
-            &prompt[..prompt.len().min(200)]
-        );
+        // `.chars().take(N)` (not a `[..N]` byte slice) -- a byte slice can
+        // panic when byte 200 falls inside a multi-byte UTF-8 character,
+        // reachable with any non-ASCII prompt content. Says explicitly when
+        // truncation happened and points at the full-fidelity dump so this
+        // preview never reads as if it were the whole prompt (see
+        // prompt_dump's module doc).
+        let mut prompt_chars = prompt.chars();
+        let preview: String = prompt_chars.by_ref().take(200).collect();
+        if prompt_chars.next().is_some() {
+            tracing::debug!(
+                "Chat prompt ({} chars, showing first 200; set NODESPACE_PROMPT_DUMP for the full text): {:?}",
+                prompt.len(),
+                preview
+            );
+        } else {
+            tracing::debug!("Chat prompt ({} chars): {:?}", prompt.len(), preview);
+        }
         // Dev-only full-text dump (NODESPACE_PROMPT_DUMP) — see prompt_dump's
         // module doc. This is the single chokepoint every native-path caller
         // (Stage 1 routing, Stage 2 ReAct turns, resolve_query, the routing
