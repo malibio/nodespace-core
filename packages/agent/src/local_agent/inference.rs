@@ -102,31 +102,7 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
                 tools,
                 temperature,
                 max_tokens,
-                move |chunk| {
-                    match chunk {
-                        ChatChunk::Token(text) => {
-                            on_chunk(StreamingChunk::Token { text });
-                        }
-                        ChatChunk::Reasoning(text) => {
-                            on_chunk(StreamingChunk::Reasoning { text });
-                        }
-                        ChatChunk::ToolCallStart { id, name } => {
-                            on_chunk(StreamingChunk::ToolCallStart { id, name });
-                        }
-                        ChatChunk::ToolCallArgs { id, json } => {
-                            on_chunk(StreamingChunk::ToolCallArgs {
-                                id,
-                                args_json: json,
-                            });
-                        }
-                        ChatChunk::Done => {
-                            // Done is handled by the return value, not a chunk
-                        }
-                        ChatChunk::Error(msg) => {
-                            tracing::error!("Inference error chunk: {}", msg);
-                        }
-                    }
-                },
+                move |chunk| bridge_chat_chunk(chunk, on_chunk.as_ref()),
             )
             .await
             .map_err(|e| InferenceError::Engine(e.to_string()))?;
@@ -165,6 +141,46 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
     }
 }
 
+/// Maps one nlp-engine `ChatChunk` to the app-crate `StreamingChunk` and
+/// forwards it via `on_chunk`.
+///
+/// Extracted from the inline closure passed to `generate_streaming` so the
+/// mapping is directly unit-testable without a loaded model -- in
+/// particular, that a mid-generation `ChatChunk::Error` (e.g. the context
+/// window filling up during generation) actually reaches the caller as a
+/// `StreamingChunk::Error` instead of only being logged. Before this, the
+/// underlying engine still finished and reported success on a mid-generation
+/// overflow, so a silently truncated response was presented to the user as
+/// a complete, successful answer -- `StreamingChunk::Error` already had a
+/// caller (the daemon maps it to a UI-visible error `AgentChunk`); this was
+/// the one missing link.
+fn bridge_chat_chunk(chunk: ChatChunk, on_chunk: &dyn Fn(StreamingChunk)) {
+    match chunk {
+        ChatChunk::Token(text) => {
+            on_chunk(StreamingChunk::Token { text });
+        }
+        ChatChunk::Reasoning(text) => {
+            on_chunk(StreamingChunk::Reasoning { text });
+        }
+        ChatChunk::ToolCallStart { id, name } => {
+            on_chunk(StreamingChunk::ToolCallStart { id, name });
+        }
+        ChatChunk::ToolCallArgs { id, json } => {
+            on_chunk(StreamingChunk::ToolCallArgs {
+                id,
+                args_json: json,
+            });
+        }
+        ChatChunk::Done => {
+            // Done is handled by the return value, not a chunk.
+        }
+        ChatChunk::Error(msg) => {
+            tracing::error!("Inference error chunk: {}", msg);
+            on_chunk(StreamingChunk::Error { message: msg });
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Convert ToolDefinition → ToolSpec (utility for external callers)
 // ---------------------------------------------------------------------------
@@ -175,5 +191,89 @@ pub fn to_tool_spec(def: &ToolDefinition) -> ToolSpec {
         name: def.name.clone(),
         description: def.description.clone(),
         parameters_schema: def.parameters_schema.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// Drives `bridge_chat_chunk` with a spy `on_chunk` and returns everything
+    /// it forwarded. `RefCell`, not a channel/mutex, is enough here since the
+    /// call is synchronous and single-threaded.
+    fn bridge(chat_chunk: ChatChunk) -> Vec<StreamingChunk> {
+        let collected: RefCell<Vec<StreamingChunk>> = RefCell::new(Vec::new());
+        bridge_chat_chunk(chat_chunk, &|chunk| collected.borrow_mut().push(chunk));
+        collected.into_inner()
+    }
+
+    /// Regression guard: a mid-generation `ChatChunk::Error` must reach the
+    /// caller as a `StreamingChunk::Error`, not just a log line. Before this
+    /// fix, the underlying engine still finished and reported success on a
+    /// mid-generation context-window overflow, so a truncated response was
+    /// silently presented as a complete, successful answer.
+    #[test]
+    fn error_chunk_reaches_on_chunk_as_streaming_error() {
+        let chunks = bridge(ChatChunk::Error("Context window full".to_string()));
+        assert_eq!(
+            chunks.len(),
+            1,
+            "a ChatChunk::Error must forward exactly one StreamingChunk"
+        );
+        match &chunks[0] {
+            StreamingChunk::Error { message } => {
+                assert_eq!(message, "Context window full");
+            }
+            other => panic!("expected StreamingChunk::Error, got {other:?}"),
+        }
+    }
+
+    /// `Done` is signaled to the caller via `generate`'s return value, not a
+    /// chunk -- must stay a no-op here, or callers would see a spurious
+    /// forwarded chunk with no counterpart on the `ChatChunk` side.
+    #[test]
+    fn done_chunk_forwards_nothing() {
+        let chunks = bridge(ChatChunk::Done);
+        assert!(
+            chunks.is_empty(),
+            "Done must not forward a chunk -- it's signaled via the return value"
+        );
+    }
+
+    #[test]
+    fn token_chunk_maps_straight_through() {
+        let chunks = bridge(ChatChunk::Token("hello".to_string()));
+        match &chunks[0] {
+            StreamingChunk::Token { text } => assert_eq!(text, "hello"),
+            other => panic!("expected StreamingChunk::Token, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_call_chunks_map_field_for_field() {
+        let start = bridge(ChatChunk::ToolCallStart {
+            id: "call-1".to_string(),
+            name: "create_node".to_string(),
+        });
+        match &start[0] {
+            StreamingChunk::ToolCallStart { id, name } => {
+                assert_eq!(id, "call-1");
+                assert_eq!(name, "create_node");
+            }
+            other => panic!("expected StreamingChunk::ToolCallStart, got {other:?}"),
+        }
+
+        let args = bridge(ChatChunk::ToolCallArgs {
+            id: "call-1".to_string(),
+            json: "{\"a\":1}".to_string(),
+        });
+        match &args[0] {
+            StreamingChunk::ToolCallArgs { id, args_json } => {
+                assert_eq!(id, "call-1");
+                assert_eq!(args_json, "{\"a\":1}");
+            }
+            other => panic!("expected StreamingChunk::ToolCallArgs, got {other:?}"),
+        }
     }
 }
