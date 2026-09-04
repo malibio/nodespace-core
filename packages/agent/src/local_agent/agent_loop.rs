@@ -1711,7 +1711,28 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 let guard = collected_chunks.lock().unwrap_or_else(|p| p.into_inner());
                 guard.clone()
             };
-            let (response_text, iteration_reasoning, mut tool_calls) = Self::parse_chunks(&chunks);
+            let (response_text, iteration_reasoning, mut tool_calls, chunk_error) =
+                Self::parse_chunks(&chunks);
+
+            // A mid-generation error (most commonly the context window
+            // filling up before the model finished) still lets the engine
+            // return Ok, with only a truncated response_text/tool_calls to
+            // show for it. Failing the whole turn here, before either branch
+            // below acts on that truncated output, mirrors the "empty
+            // response" precedent a few lines down (ADR-062: refuse loudly,
+            // don't clamp silently) rather than silently persisting a
+            // partial answer as a normal, complete success.
+            if let Some(err) = chunk_error {
+                tracing::error!(
+                    session_id = %session.id,
+                    iteration = iteration,
+                    error = %err,
+                    "Agent loop: inference reported an error mid-generation"
+                );
+                return Err(InferenceError::Engine(format!(
+                    "inference failed mid-generation: {err}"
+                )));
+            }
 
             // Repair the model's malformed argument encodings here, at the parse
             // boundary, so every downstream consumer sees one repaired form.
@@ -2528,19 +2549,32 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         let guard = final_chunks.lock().unwrap_or_else(|p| p.into_inner());
                         guard.clone()
                     };
-                    let (final_text, final_reasoning, _) = Self::parse_chunks(&chunks);
+                    let (final_text, final_reasoning, _, final_chunk_error) =
+                        Self::parse_chunks(&chunks);
                     if !final_reasoning.trim().is_empty() {
                         if !accumulated_reasoning.is_empty() {
                             accumulated_reasoning.push_str("\n\n");
                         }
                         accumulated_reasoning.push_str(final_reasoning.trim());
                     }
-                    // Accept the final text only if it's real content — not empty
-                    // and not a tool call the model printed as text instead of
-                    // invoking. A narrated pseudo-call here falls through to the
-                    // tool-result synthesis below rather than being persisted raw.
+                    if let Some(err) = &final_chunk_error {
+                        tracing::error!(
+                            session_id = %session.id,
+                            error = %err,
+                            "Agent loop: final inference reported an error mid-generation"
+                        );
+                    }
+                    // Accept the final text only if it's real, complete content
+                    // — not empty, not a tool call the model printed as text
+                    // instead of invoking, and not truncated by a mid-generation
+                    // error (e.g. context-window overflow). Any of those falls
+                    // through to the tool-result synthesis below rather than
+                    // persisting a truncated or otherwise untrustworthy reply.
                     let normalized = normalize_response(&final_text);
-                    if !normalized.is_empty() && !looks_like_narrated_tool_call(&normalized) {
+                    if final_chunk_error.is_none()
+                        && !normalized.is_empty()
+                        && !looks_like_narrated_tool_call(&normalized)
+                    {
                         let reasoning = (!accumulated_reasoning.trim().is_empty())
                             .then(|| accumulated_reasoning.trim().to_string());
                         let mut assistant_msg =
@@ -2633,20 +2667,32 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                     let guard = final_chunks.lock().unwrap_or_else(|p| p.into_inner());
                     guard.clone()
                 };
-                let (tail_text, tail_reasoning, _) = Self::parse_chunks(&chunks);
+                let (tail_text, tail_reasoning, _, tail_chunk_error) = Self::parse_chunks(&chunks);
                 if !tail_reasoning.trim().is_empty() {
                     if !accumulated_reasoning.is_empty() {
                         accumulated_reasoning.push_str("\n\n");
                     }
                     accumulated_reasoning.push_str(tail_reasoning.trim());
                 }
+                if let Some(err) = &tail_chunk_error {
+                    tracing::error!(
+                        session_id = %session.id,
+                        error = %err,
+                        "Agent loop: tail inference reported an error mid-generation"
+                    );
+                }
                 let normalized_tail = normalize_response(&tail_text);
-                if normalized_tail.is_empty() || looks_like_narrated_tool_call(&normalized_tail) {
+                if tail_chunk_error.is_some()
+                    || normalized_tail.is_empty()
+                    || looks_like_narrated_tool_call(&normalized_tail)
+                {
                     // Model returned nothing, leaked internal plumbing (e.g. a
-                    // <tool_call> block) that stripped down to nothing, or printed
-                    // a tool call as text instead of invoking it — synthesize a
-                    // summary from the tool results instead of persisting a blank
-                    // bubble or raw pseudo-code.
+                    // <tool_call> block) that stripped down to nothing, printed
+                    // a tool call as text instead of invoking it, or the
+                    // response was truncated by a mid-generation error (e.g.
+                    // context-window overflow) -- synthesize a summary from the
+                    // tool results instead of persisting a blank, truncated, or
+                    // untrustworthy reply.
                     summarize_executions(&all_tool_executions)
                 } else {
                     normalized_tail
@@ -2820,7 +2866,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         outcome.usage = usage;
 
         let collected = chunks.lock().map(|g| g.clone()).unwrap_or_default();
-        let (_, _, tool_calls) = Self::parse_chunks(&collected);
+        let (_, _, tool_calls, _) = Self::parse_chunks(&collected);
         let decision = tool_calls
             .iter()
             .find_map(|tc| routing::parse_route_decision(&tc.function_name, &tc.arguments_json));
@@ -2961,13 +3007,27 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         outcome
     }
 
-    fn parse_chunks(chunks: &[StreamingChunk]) -> (String, String, Vec<ToolCallRaw>) {
+    /// Parses collected chunks into (text, reasoning, tool calls, error).
+    ///
+    /// The error slot is `Some(message)` when a `StreamingChunk::Error` chunk
+    /// was seen -- e.g. a mid-generation context-window overflow, which lets
+    /// the underlying engine finish and report success even though the
+    /// output is truncated. Callers that silently ignored this (falling
+    /// through to treat the truncated text as a normal, complete response)
+    /// are exactly the "turn succeeds with truncated output and zero visible
+    /// signal" failure mode; see `run_turn`'s use of this field for the
+    /// established "fail loudly" handling other bad-generation outcomes
+    /// (e.g. an empty response) already get in this same loop.
+    fn parse_chunks(
+        chunks: &[StreamingChunk],
+    ) -> (String, String, Vec<ToolCallRaw>, Option<String>) {
         let mut text = String::new();
         let mut reasoning = String::new();
         let mut tool_calls: Vec<ToolCallRaw> = Vec::new();
         // Accumulate tool call args by id
         // Use Vec to preserve tool call ordering (important for causal dependencies)
         let mut pending_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args_json)
+        let mut error: Option<String> = None;
 
         for chunk in chunks {
             match chunk {
@@ -2986,7 +3046,15 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         call.2.push_str(args_json);
                     }
                 }
-                StreamingChunk::Done { .. } | StreamingChunk::Error { .. } => {}
+                StreamingChunk::Done { .. } => {}
+                StreamingChunk::Error { message } => {
+                    // Keep the first error: it names the condition that
+                    // actually caused generation to go wrong, rather than
+                    // whatever knock-on chunk arrived last.
+                    if error.is_none() {
+                        error = Some(message.clone());
+                    }
+                }
             }
         }
 
@@ -2999,7 +3067,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             });
         }
 
-        (text, reasoning, tool_calls)
+        (text, reasoning, tool_calls, error)
     }
 
     /// Summarize older history turns if the conversation exceeds the token budget.
@@ -3163,7 +3231,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
             let guard = summary_chunks.lock().unwrap_or_else(|p| p.into_inner());
             guard.clone()
         };
-        let (summary_text, _, _) = Self::parse_chunks(&chunks);
+        let (summary_text, _, _, _) = Self::parse_chunks(&chunks);
 
         let summary_content = if summary_text.is_empty() {
             // Fallback: just note that history was truncated
@@ -4099,11 +4167,12 @@ mod tests {
                 },
             },
         ];
-        let (text, reasoning, tool_calls) =
+        let (text, reasoning, tool_calls, error) =
             LocalAgentLoop::<MockEngine, MockToolExecutor>::parse_chunks(&chunks);
         assert_eq!(text, "Hello world");
         assert!(reasoning.is_empty());
         assert!(tool_calls.is_empty());
+        assert!(error.is_none());
     }
 
     #[tokio::test]
@@ -4125,11 +4194,12 @@ mod tests {
                 },
             },
         ];
-        let (text, reasoning, tool_calls) =
+        let (text, reasoning, tool_calls, error) =
             LocalAgentLoop::<MockEngine, MockToolExecutor>::parse_chunks(&chunks);
         assert_eq!(text, "Hello!");
         assert_eq!(reasoning, "The user said hi; I should greet back.");
         assert!(tool_calls.is_empty());
+        assert!(error.is_none());
     }
 
     #[tokio::test]
@@ -4157,12 +4227,34 @@ mod tests {
                 },
             },
         ];
-        let (text, _reasoning, tool_calls) =
+        let (text, _reasoning, tool_calls, error) =
             LocalAgentLoop::<MockEngine, MockToolExecutor>::parse_chunks(&chunks);
         assert_eq!(text, "Let me search");
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function_name, "search_nodes");
         assert_eq!(tool_calls[0].arguments_json, r#"{"query":"test"}"#);
+        assert!(error.is_none());
+    }
+
+    #[tokio::test]
+    async fn parse_chunks_captures_the_first_error() {
+        let chunks = vec![
+            StreamingChunk::Token {
+                text: "partial answer".to_string(),
+            },
+            StreamingChunk::Error {
+                message: "Context window full".to_string(),
+            },
+            // A second error chunk, if one ever arrived, must not overwrite
+            // the first -- the first is what actually caused the failure.
+            StreamingChunk::Error {
+                message: "a later, unrelated error".to_string(),
+            },
+        ];
+        let (text, _reasoning, _tool_calls, error) =
+            LocalAgentLoop::<MockEngine, MockToolExecutor>::parse_chunks(&chunks);
+        assert_eq!(text, "partial answer");
+        assert_eq!(error, Some("Context window full".to_string()));
     }
 
     // -- LocalAgentService tests -----------------------------------------
@@ -7337,6 +7429,216 @@ mod tests {
             InferenceError::Engine(msg) => assert!(msg.contains("empty response")),
             other => panic!("Expected Engine error, got {:?}", other),
         }
+    }
+
+    /// A mid-generation context-window overflow (`ChatChunk::Error`,
+    /// surfaced to this loop as `StreamingChunk::Error` by the inference
+    /// bridge) must fail the turn loudly, not have the truncated partial
+    /// text silently accepted and persisted as a normal, complete response
+    /// -- the exact "turn succeeds with truncated output and zero visible
+    /// signal" failure mode the issue reported.
+    #[tokio::test]
+    async fn mid_generation_error_returns_error_and_does_not_persist_truncated_text() {
+        let engine = Arc::new(MockEngine::new(vec![vec![
+            StreamingChunk::Token {
+                text: "This looks like a normal reply that got cut off mid".to_string(),
+            },
+            StreamingChunk::Error {
+                message: "Context window full".to_string(),
+            },
+            // A real overflow still lets the engine finish and emit Done --
+            // the mock mirrors that so this test exercises the same shape
+            // `generate` actually returns (Ok(usage)), not an early bail.
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 16000,
+                    completion_tokens: 880,
+                },
+            },
+        ]]));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(&mut session, "hi", |_| {}, |_| {}, CancellationToken::new())
+            .await;
+
+        let err = result.expect_err(
+            "a mid-generation error must fail the turn, not succeed with truncated output",
+        );
+        match err {
+            InferenceError::Engine(msg) => assert!(
+                msg.contains("Context window full"),
+                "error must carry the underlying reason, got: {msg}"
+            ),
+            other => panic!("Expected Engine error, got {:?}", other),
+        }
+
+        // The user's message is pushed unconditionally before generation
+        // runs, so it's expected to still be there -- what must NOT be there
+        // is a fabricated assistant reply built from the truncated text.
+        assert_eq!(
+            session.messages.last().map(|m| &m.role),
+            Some(&Role::User),
+            "a failed turn must not push a fabricated assistant response to history"
+        );
+    }
+
+    /// The main loop's mid-generation error check (tested above) hard-fails
+    /// the whole turn -- correct there, since nothing useful has necessarily
+    /// happened yet. This "max iterations reached" fallback has a different,
+    /// deliberate design: it always synthesizes *some* response from
+    /// whatever tool executions already happened, rather than ever failing
+    /// the turn outright (see `EMPTY_RESPONSE_FALLBACK`/`summarize_executions`
+    /// a few lines below in `run_turn`). A mid-generation error on the
+    /// "final, tool-less inference" this branch runs must therefore be
+    /// treated the same way this branch already treats an empty or
+    /// narrated-tool-call response: don't trust it, fall through to the
+    /// existing synthesis path -- not accepted as if it were a complete,
+    /// real answer.
+    #[tokio::test]
+    async fn max_iterations_final_inference_error_falls_through_to_synthesis() {
+        let tool_round = |i: usize| {
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: format!("tc_{i}"),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: format!("tc_{i}"),
+                    args_json: format!(r#"{{"query":"test-{i}"}}"#),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ]
+        };
+
+        let mut rounds: Vec<_> = (0..MAX_TOOL_ITERATIONS).map(tool_round).collect();
+        // The "+1 extra" final, tool-less inference call: real text that got
+        // cut off by a mid-generation error, not a genuine complete answer.
+        rounds.push(vec![
+            StreamingChunk::Token {
+                text: "This looks like a real answer but".to_string(),
+            },
+            StreamingChunk::Error {
+                message: "Context window full".to_string(),
+            },
+            StreamingChunk::Done {
+                usage: InferenceUsage {
+                    prompt_tokens: 16000,
+                    completion_tokens: 880,
+                },
+            },
+        ]);
+
+        let engine = Arc::new(MockEngine::new(rounds));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "Keep running search_nodes forever — verify the iteration cap stops it",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect(
+                "this branch always synthesizes a response, even when the final \
+                 inference call hit a mid-generation error",
+            );
+
+        assert!(
+            !result
+                .response
+                .contains("This looks like a real answer but"),
+            "a truncated response from a mid-generation error must not be accepted \
+             as the final answer: {:?}",
+            result.response
+        );
+    }
+
+    /// Same principle as the test above, for the sibling "tail inference
+    /// after loop break" branch (reached via the duplicate-call guard here,
+    /// mirroring `duplicate_tool_call_breaks_loop`): a mid-generation error
+    /// on the tail call must fall through to `summarize_executions`, not be
+    /// accepted as the real response.
+    #[tokio::test]
+    async fn tail_inference_error_falls_through_to_synthesis() {
+        let dup_call = || {
+            vec![
+                StreamingChunk::ToolCallStart {
+                    id: "tc_dup".to_string(),
+                    name: "search_nodes".to_string(),
+                },
+                StreamingChunk::ToolCallArgs {
+                    id: "tc_dup".to_string(),
+                    args_json: r#"{"node_type":"task","query":"Test Task"}"#.to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                },
+            ]
+        };
+
+        let rounds = vec![
+            // Round 0: first call — executes normally
+            dup_call(),
+            // Round 1: identical call — guard detects duplicate, breaks loop
+            dup_call(),
+            // Round 2: tail tool-less inference — text truncated by a
+            // mid-generation error, not a genuine complete answer.
+            vec![
+                StreamingChunk::Token {
+                    text: "I found the task, and also".to_string(),
+                },
+                StreamingChunk::Error {
+                    message: "Context window full".to_string(),
+                },
+                StreamingChunk::Done {
+                    usage: InferenceUsage {
+                        prompt_tokens: 16000,
+                        completion_tokens: 880,
+                    },
+                },
+            ],
+        ];
+
+        let engine = Arc::new(MockEngine::new(rounds));
+        let executor = Arc::new(MockToolExecutor::new());
+        let agent_loop = LocalAgentLoop::new(engine, executor);
+
+        let mut session = new_session();
+        let result = agent_loop
+            .run_turn(
+                &mut session,
+                "Find the task named Test Task",
+                |_| {},
+                |_| {},
+                CancellationToken::new(),
+            )
+            .await
+            .expect(
+                "this branch always synthesizes a response, even when the tail \
+                 inference call hit a mid-generation error",
+            );
+
+        assert!(
+            !result.response.contains("I found the task, and also"),
+            "a truncated response from a mid-generation error must not be accepted \
+             as the final answer: {:?}",
+            result.response
+        );
     }
 
     // -- Silent-failure guard regression tests -----------------------
