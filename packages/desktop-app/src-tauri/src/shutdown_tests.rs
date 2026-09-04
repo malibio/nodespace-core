@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use tauri::Manager;
 
-use super::{graceful_shutdown, handle_run_event, ShutdownToken};
+use super::{arm_quit_watchdog, graceful_shutdown, handle_run_event, ShutdownToken};
 
 /// Bound on every synchronization wait below. Generous relative to
 /// `MockRuntime::run()`'s own 1s idle-poll interval (it sleeps 1s between
@@ -165,4 +165,64 @@ fn close_requested_does_not_cancel_token_until_window_is_destroyed() {
         "shutdown token must be cancelled once the window is actually \
          destroyed and the app exits"
     );
+}
+
+/// The crashed/hung-webview case this watchdog exists to guard against: if
+/// the normal close path never reaches `ExitRequested`/`Exit` at all, the
+/// watchdog's `on_timeout` must still fire so tray "Quit" doesn't hang
+/// forever.
+///
+/// Uses a channel rather than a fixed sleep-then-check margin: this test
+/// waits exactly as long as it takes for `on_timeout` to actually fire (fast
+/// in practice), bounded by a generous `recv_timeout` so a loaded CI runner
+/// delaying the watchdog thread's own scheduling can't produce a false
+/// failure the way a fixed short sleep could.
+#[test]
+fn arm_quit_watchdog_forces_exit_when_shutdown_never_starts() {
+    let token = ShutdownToken::new();
+    let (tx, rx) = mpsc::channel::<()>();
+
+    arm_quit_watchdog(token, Duration::from_millis(20), move || {
+        let _ = tx.send(());
+    });
+
+    rx.recv_timeout(WAIT)
+        .expect("on_timeout must fire once the timeout elapses with the token never started");
+}
+
+/// The healthy-webview case: once the normal close path has already driven
+/// `graceful_shutdown` -- i.e. `ExitRequested`/`Exit` genuinely fired --
+/// forcing another exit would be redundant, so the watchdog must find that
+/// and skip calling `on_timeout`.
+#[test]
+fn arm_quit_watchdog_is_a_no_op_once_shutdown_already_started() {
+    let app = tauri::test::mock_app();
+    let token = ShutdownToken::new();
+    app.manage(token.clone());
+    let handle = app.handle().clone();
+
+    // Simulates ExitRequested/Exit having already fired via the normal path
+    // before the watchdog gets a chance to check.
+    graceful_shutdown(&handle);
+
+    let (tx, rx) = mpsc::channel::<()>();
+    arm_quit_watchdog(token, Duration::from_millis(20), move || {
+        let _ = tx.send(());
+    });
+
+    // Proving a negative still requires waiting out the deadline (a channel
+    // alone can't shortcut that), but the wait here is bounded to the
+    // timeout plus a fixed, generous margin rather than a wholly separate
+    // guessed sleep duration.
+    match rx.recv_timeout(Duration::from_millis(300)) {
+        // Timeout: on_timeout was never called at all, so `tx` is still
+        // parked inside it, unsent. Disconnected: on_timeout's closure (and
+        // the `tx` it owns) was dropped without sending, once the watchdog
+        // thread found shutdown already started and skipped calling it.
+        // Both correctly mean "never fired" -- only Ok(()) means it did.
+        Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        Ok(()) => {
+            panic!("on_timeout must not fire once shutdown has already started before the deadline")
+        }
+    }
 }
