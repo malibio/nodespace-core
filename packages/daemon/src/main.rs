@@ -293,6 +293,17 @@ fn main() -> Result<()> {
 /// own "Quit" menu click -- sat forever with a live tray icon fronting a
 /// dead gRPC server. A user-initiated Quit still reaches `ControlFlow::Exit`
 /// on its own through the menu handler and never depends on this path.
+///
+/// One asymmetry with the Quit path worth knowing: `task` doesn't resolve
+/// until `serve_grpc`'s own post-shutdown drain (`shutdown_all` + shared GPU
+/// release) has already finished, so this bridge only fires once that drain
+/// is done -- whereas the Quit path reaches `tray::run`'s return, and so
+/// arms `main`'s shutdown watchdog, *before* that same drain runs. If that
+/// drain is ever the thing hanging, a SIGTERM never reaches this bridge
+/// either, and the watchdog never arms to force it through. Fixing that
+/// class of hang is a separate, still-open problem (see
+/// `SHUTDOWN_WATCHDOG_TIMEOUT`'s doc comment) -- this bridge only fixes the
+/// case where the gRPC task actually does finish and nothing was listening.
 async fn bridge_grpc_completion_to_tray(
     task: tokio::task::JoinHandle<Result<()>>,
     controller: tray::TrayController,
