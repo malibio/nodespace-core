@@ -6,6 +6,7 @@
 //! build and cache per-database service sets, and the `nodespaced` binary just
 //! calls these entry points.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
@@ -44,6 +45,14 @@ pub struct SharedContext {
     /// Whether an NLP model file was found at startup. Gates both the
     /// per-database embedding wiring and the `EmbeddingsService` registration.
     pub has_model: bool,
+    /// Set once, permanently, by `load_shared_embedding_model_bg` if the
+    /// background load fails (corrupt file, engine init error). A closed
+    /// `model` channel alone is ambiguous -- it also looks that way while
+    /// still loading, since nothing has been sent on it yet -- so
+    /// `EmbeddingsServiceImpl` reads this flag to distinguish "still
+    /// loading, retry later" from "failed, retrying will never help" when
+    /// answering an RPC while `model` has not yielded a value.
+    pub model_load_failed: Arc<AtomicBool>,
     /// Process-global embedding scheduler (ADR-053: per-database compute
     /// scoping). Grants the active database's embedding batches priority over
     /// other open databases so foreground work is not blocked by another
@@ -172,9 +181,11 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
     let model_path = resolve_model_path();
     let has_model = model_path.is_some();
     let (model_tx, model_rx) = watch::channel::<Option<Arc<EmbeddingService>>>(None);
+    let model_load_failed = Arc::new(AtomicBool::new(false));
     let model_task = model_path.map(|path| {
+        let model_load_failed = model_load_failed.clone();
         tokio::spawn(async move {
-            load_shared_embedding_model_bg(path, model_tx).await;
+            load_shared_embedding_model_bg(path, model_tx, model_load_failed).await;
         })
     });
 
@@ -198,6 +209,7 @@ pub async fn build_shared_services() -> Result<(SharedServices, Option<tokio::ta
                 pty_manager,
                 model: model_rx,
                 has_model,
+                model_load_failed,
                 subtree_gate_factory: Arc::new(OnceLock::new()),
                 scheduler,
                 local_agent,
@@ -274,9 +286,13 @@ pub async fn build_database_services(
     // EmbeddingsService is only registered when a model file exists at startup
     // (the shared model). If the model appears later, the endpoint is absent
     // until daemon restart — intentional, not a regression from prior behavior.
-    let embeddings_service_grpc = shared
-        .has_model
-        .then(|| EmbeddingsServiceImpl::new(node_service.clone(), embedding_state.clone()));
+    let embeddings_service_grpc = shared.has_model.then(|| {
+        EmbeddingsServiceImpl::new(
+            node_service.clone(),
+            embedding_state.clone(),
+            shared.model_load_failed.clone(),
+        )
+    });
 
     let assembler = Arc::new(GraphContextAssembler::new(
         node_service.clone(),
@@ -395,10 +411,14 @@ fn resolve_model_path() -> Option<std::path::PathBuf> {
 
 /// Background task: load the NLP embedding model once for the whole process and
 /// publish it over `model_tx`. Non-fatal — on failure the channel simply never
-/// yields a model and embeddings stay disabled everywhere.
+/// yields a model and embeddings stay disabled everywhere, but `load_failed`
+/// is set first so `EmbeddingsServiceImpl` can tell a client the load is
+/// never going to complete, instead of a channel that just looks the same as
+/// "still loading" forever.
 async fn load_shared_embedding_model_bg(
     model_path: std::path::PathBuf,
     model_tx: watch::Sender<Option<Arc<EmbeddingService>>>,
+    load_failed: Arc<AtomicBool>,
 ) {
     tracing::info!(path = %model_path.display(), "Loading shared embedding model in background");
 
@@ -423,7 +443,10 @@ async fn load_shared_embedding_model_bg(
     .await
     {
         Ok(Ok(svc)) => Arc::new(svc),
-        Ok(Err(_)) | Err(_) => return,
+        Ok(Err(_)) | Err(_) => {
+            load_failed.store(true, Ordering::SeqCst);
+            return;
+        }
     };
 
     // A send error only means every database's wiring task has already gone away
