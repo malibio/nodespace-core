@@ -146,11 +146,11 @@ When linking nodes or exploring connections:
 
 CALL create_relationship NOW: your next action is the tool call, not planning text.
 
-CREATING A RELATIONSHIP: both ids come from a prior tool result — copy each exactly, do not ask the user for either. The relation_type must be one declared on the source record's own type (e.g. "supersedes", "has_task"), or one of the four universal names legal between any two records: member_of, has_child, mentions, has_role. Any other name is rejected — when no declared relation fits, use "mentions".
+CREATING A RELATIONSHIP: both ids come from a prior tool result — copy each exactly, do not ask the user for either. The relationship_type must be one declared on the source record's own type (e.g. "supersedes", "has_task"), or one of the four universal names legal between any two records: member_of, has_child, mentions, has_role. Any other name is rejected — when no declared relation fits, use "mentions".
 
 DIRECTION: from_id is the record that ACTS, to_id is the record acted upon. "A supersedes B" is from_id=A, to_id=B. Reversing them records the opposite fact and still reports success.
 
-TRAVERSING RELATIONSHIPS: Call get_related_nodes with a node ID to fetch its connected nodes. Use the direction parameter ("out", "in", or "both") to control traversal direction. Filter by relation_type to narrow results.
+TRAVERSING RELATIONSHIPS: Call get_related_nodes with a node ID to fetch its connected nodes. Use the direction parameter ("out", "in", or "both") to control traversal direction. Filter by relationship_type to narrow results.
 
 FIND BEFORE LINK: If the user says "link X to Y" and you don't have both IDs, call search_semantic or search_nodes once per entity to resolve them, then call create_relationship.
 
@@ -209,7 +209,7 @@ When organizing nodes into collections or categories:
 
 FIND THE NODE: {find_then_act}
 
-ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relation_type="member_of". {org_needs_existing_collection}
+ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relationship_type="member_of". {org_needs_existing_collection}
 
 SUCCESS: After create_relationship returns, confirm to the user that the node has been organized into the collection."#,
         find_then_act = FIND_THEN_ACT.imperative,
@@ -611,6 +611,59 @@ mod tests {
                 && !whitelist.contains(&"update_schema".to_string()),
             "whitelist must not offer a schema escape hatch the guidance forbids"
         );
+    }
+
+    /// core#2200: the Relationship Management and Organization guidance
+    /// taught `relation_type` at three call sites while `create_relationship`
+    /// and `get_related_nodes` both require `relationship_type` -- a model
+    /// that trusted the guidance it was just shown got rejected outright by
+    /// `#[serde(deny_unknown_fields)]`. Pins BOTH sides of the same rule
+    /// `both_surfaces_agree_on_the_undeclared_key_rule` above pins for Node
+    /// Creation: the guidance text names the same parameter the tool schema
+    /// actually requires, so a future reword of either side that
+    /// reintroduces the mismatch fails here instead of in an eval.
+    #[test]
+    fn relationship_guidance_teaches_the_real_parameter_name() {
+        let seeds = seed_skill_nodes();
+        let relationship_md = &seeds
+            .iter()
+            .find(|s| s.title == "Relationship Management")
+            .expect("Relationship Management skill must exist")
+            .markdown_content;
+        let organization_md = &seeds
+            .iter()
+            .find(|s| s.title == "Organization")
+            .expect("Organization skill must exist")
+            .markdown_content;
+
+        let create_relationship_schema = crate::local_agent::tools::Tool::CreateRelationship
+            .definition()
+            .parameters_schema;
+        let required = create_relationship_schema["required"]
+            .as_array()
+            .expect("create_relationship must declare required parameters");
+        let real_param_name = required
+            .iter()
+            .filter_map(|v| v.as_str())
+            .find(|s| s.contains("relationship"))
+            .expect("create_relationship's required list must name the relationship-type param");
+
+        for (skill_name, md) in [
+            ("Relationship Management", relationship_md),
+            ("Organization", organization_md),
+        ] {
+            assert!(
+                md.contains(real_param_name),
+                "{skill_name} guidance must teach the tool's actual parameter name \
+                 ({real_param_name:?}), got: {md}"
+            );
+            assert!(
+                !md.contains("relation_type"),
+                "{skill_name} guidance must not teach `relation_type` -- \
+                 create_relationship/get_related_nodes require `relationship_type` \
+                 and reject unknown fields, got: {md}"
+            );
+        }
     }
 
     /// The same rule must hold on the tool schema itself, which is what the
