@@ -5,8 +5,10 @@
 //! any individual RPC caller.
 //!
 //! The embedding model loads asynchronously after the socket is bound. While
-//! loading, all RPCs return `UNAVAILABLE` with a descriptive message. Once
-//! loaded, they work normally without any client reconnect.
+//! loading, all RPCs return `UNAVAILABLE` with a descriptive message; if the
+//! load permanently fails, they return `FAILED_PRECONDITION` instead so a
+//! polling caller knows to stop retrying. Once loaded, they work normally
+//! without any client reconnect.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -61,8 +63,7 @@ impl EmbeddingsServiceImpl {
     /// retry) while the model is still loading; `FAILED_PRECONDITION` (not
     /// safe to retry) once the load has permanently failed -- so a client
     /// polling this actually gets to stop polling instead of retrying a load
-    /// that will never happen (ADR-062: refuse loudly, don't leave a caller
-    /// guessing).
+    /// that will never happen.
     fn unavailable(&self) -> Status {
         if self.load_failed.load(Ordering::SeqCst) {
             Status::failed_precondition(
