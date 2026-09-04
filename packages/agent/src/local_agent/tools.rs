@@ -117,6 +117,15 @@ struct AgentGetNodeParams {
 struct CreateRelationshipParams {
     pub from_id: String,
     pub to_id: String,
+    // `relation_type` was, for a time, what the seeded skill guidance
+    // actually taught the model to send here -- three separate call sites
+    // instructed `relation_type=...` while this struct required
+    // `relationship_type`, so a model that trusted the guidance it was just
+    // shown got rejected outright. The guidance text is now corrected, but
+    // this alias stays as a defensive backstop the same way `node_id` below
+    // backstops `id` -- a model can drift back toward the more common
+    // general-knowledge-graph term regardless of what the guidance says.
+    #[serde(alias = "relation_type")]
     pub relationship_type: String,
 }
 
@@ -126,7 +135,7 @@ struct CreateRelationshipParams {
 struct GetRelatedNodesParams {
     #[serde(alias = "node_id")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, alias = "relation_type")]
     pub relationship_type: Option<String>,
     #[serde(default)]
     pub direction: Option<String>,
@@ -3748,6 +3757,25 @@ mod tests {
         );
     }
 
+    /// The seeded skill guidance taught `relation_type` for three call
+    /// sites while this struct required `relationship_type` -- a model
+    /// that trusted the guidance it was shown got rejected outright. The
+    /// guidance text is now corrected (see `skill_pipeline.rs`), but the
+    /// alias stays as a defensive backstop, mirroring the existing
+    /// `node_id`/`id` alias on `GetRelatedNodesParams` below for the
+    /// analogous split.
+    #[test]
+    fn create_relationship_params_accepts_relation_type_alias() {
+        let args = json!({
+            "from_id": "a",
+            "to_id": "b",
+            "relation_type": "mentions",
+        });
+        let params: CreateRelationshipParams = serde_json::from_value(args)
+            .expect("relation_type must deserialize via the relationship_type alias");
+        assert_eq!(params.relationship_type, "mentions");
+    }
+
     #[test]
     fn get_related_nodes_params_rejects_unknown_field() {
         let args = json!({ "id": "node-123", "reltype": "mentions" });
@@ -3756,6 +3784,16 @@ mod tests {
             err.to_string().contains("reltype"),
             "expected error naming `reltype`, got: {err}"
         );
+    }
+
+    /// Same backstop as `CreateRelationshipParams` above -- the
+    /// TRAVERSING RELATIONSHIPS guidance also taught `relation_type`.
+    #[test]
+    fn get_related_nodes_params_accepts_relation_type_alias() {
+        let args = json!({ "id": "node-123", "relation_type": "mentions" });
+        let params: GetRelatedNodesParams = serde_json::from_value(args)
+            .expect("relation_type must deserialize via the relationship_type alias");
+        assert_eq!(params.relationship_type.as_deref(), Some("mentions"));
     }
 
     #[test]
