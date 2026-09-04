@@ -169,6 +169,16 @@ impl ShutdownToken {
         self.cancellation.is_cancelled()
     }
 
+    /// True once [`graceful_shutdown`] has run at least once — i.e. the app
+    /// actually reached `ExitRequested`/`Exit`, by any path. [`arm_quit_watchdog`]
+    /// reads this to tell "the normal close path got the app into its real
+    /// shutdown sequence" apart from "nothing has happened yet", so it only
+    /// forces an exit in the latter case.
+    fn is_shutdown_started(&self) -> bool {
+        self.shutdown_started
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Marks the one-shot shutdown sequence as started. Returns `true` the
     /// first time it's called on this token, `false` on every later call —
     /// [`graceful_shutdown`] uses this to run its teardown exactly once even
@@ -650,10 +660,40 @@ pub fn run() {
             } else if *event.id() == open_integrations_id {
                 window_routing::emit_routed(app, "menu-open-integrations", (), None);
             } else if *event.id() == quit_id {
-                // Request exit through Tauri's event loop instead of std::process::exit(0)
-                // This triggers RunEvent::ExitRequested, allowing proper cleanup
+                // Still start the normal window-close path when a window
+                // exists -- it's what carries the pending-write flush (see
+                // `app-initialization.ts`'s `registerTauriCloseHandler`) --
+                // but that path depends on a window existing at all and on
+                // its webview being alive enough to run the flush and call
+                // `destroy()`. Neither holds if every window is already
+                // closed or the webview has crashed/hung, so `Quit` would
+                // otherwise silently do nothing. `arm_quit_watchdog` bounds
+                // how long this waits before forcing an unconditional exit.
                 if let Some(window) = window_routing::resolve_focus_window(app) {
                     let _ = window.close();
+                }
+                if let Some(shutdown_token) = app.try_state::<ShutdownToken>() {
+                    arm_quit_watchdog(
+                        shutdown_token.inner().clone(),
+                        QUIT_WATCHDOG_TIMEOUT,
+                        || {
+                            tracing::error!(
+                                timeout_secs = QUIT_WATCHDOG_TIMEOUT.as_secs(),
+                                "Tray Quit did not reach ExitRequested via the normal close \
+                             path in time -- forcing exit."
+                            );
+                            // `AppHandle::exit` only posts a message onto the
+                            // native event loop's proxy (confirmed against the
+                            // vendored `tauri-runtime-wry` source) -- it needs
+                            // that loop to still be pumping, which is exactly
+                            // what's in question if the normal path never got
+                            // here. `std::process::exit` is unconditional
+                            // regardless of what any thread, including the main
+                            // one, is doing -- matching `nodespace-daemon`'s
+                            // `arm_shutdown_watchdog`, which this mirrors.
+                            std::process::exit(0);
+                        },
+                    );
                 }
             }
         })
@@ -1010,6 +1050,41 @@ pub(crate) fn graceful_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle
 
     shutdown_token.cancel();
     tracing::info!("Shutdown: complete");
+}
+
+/// Bounds how long the tray "Quit" item waits for the normal window-close
+/// path (`WindowEvent::CloseRequested` -> frontend flush -> `destroy()` ->
+/// `ExitRequested` -> `Exit`) before [`arm_quit_watchdog`] forces an
+/// unconditional exit instead. The frontend's own flush self-bounds to 5s
+/// (`shared-node-store.svelte.ts`'s `flushAllPending`), so this adds a few
+/// seconds of margin for the IPC round trip and event propagation on top of
+/// that -- generous enough not to cut off a real flush, but still bounded so
+/// "Quit" can never hang forever: not for a healthy webview whose close
+/// handler never runs, not for a crashed/hung one, and not for a window-less
+/// app (every window already closed).
+const QUIT_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Spawn a thread that runs `on_timeout` once, after `timeout`, unless
+/// `shutdown_token.is_shutdown_started()` is already true by then -- i.e.
+/// the normal close path already got the app into its real shutdown
+/// sequence (`ExitRequested`/`Exit` fired by any means), making a forced
+/// exit redundant. A plain OS thread, not a tokio task, so it still fires
+/// even if the webview or the async runtime is the thing that's wedged.
+///
+/// Mirrors `nodespace-daemon`'s `arm_shutdown_watchdog`; split out with an
+/// injectable `on_timeout` for the same reason that one is -- unit-testable
+/// without triggering a real process exit.
+fn arm_quit_watchdog(
+    shutdown_token: ShutdownToken,
+    timeout: std::time::Duration,
+    on_timeout: impl FnOnce() + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        if !shutdown_token.is_shutdown_started() {
+            on_timeout();
+        }
+    });
 }
 
 #[cfg(test)]
