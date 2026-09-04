@@ -8,6 +8,7 @@
 //! loading, all RPCs return `UNAVAILABLE` with a descriptive message. Once
 //! loaded, they work normally without any client reconnect.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use nodespace_core::models::EmbeddingConfig;
@@ -36,18 +37,40 @@ pub struct EmbeddingsServiceImpl {
     node_service: Arc<NodeService>,
     /// `None` while the model is still loading; populated by the background task.
     state: Arc<RwLock<Option<EmbeddingReady>>>,
+    /// Set once, permanently, if the shared background load fails. `state`
+    /// alone cannot distinguish "still loading" from "failed, will never
+    /// complete" -- both leave it `None` forever -- so `unavailable()` reads
+    /// this to decide which of the two an RPC caller is actually looking at.
+    load_failed: Arc<AtomicBool>,
 }
 
 impl EmbeddingsServiceImpl {
-    pub fn new(node_service: Arc<NodeService>, state: Arc<RwLock<Option<EmbeddingReady>>>) -> Self {
+    pub fn new(
+        node_service: Arc<NodeService>,
+        state: Arc<RwLock<Option<EmbeddingReady>>>,
+        load_failed: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             node_service,
             state,
+            load_failed,
         }
     }
 
-    fn unavailable() -> Status {
-        Status::unavailable("embedding model loading, please retry")
+    /// `UNAVAILABLE` (a status gRPC clients conventionally treat as safe to
+    /// retry) while the model is still loading; `FAILED_PRECONDITION` (not
+    /// safe to retry) once the load has permanently failed -- so a client
+    /// polling this actually gets to stop polling instead of retrying a load
+    /// that will never happen (ADR-062: refuse loudly, don't leave a caller
+    /// guessing).
+    fn unavailable(&self) -> Status {
+        if self.load_failed.load(Ordering::SeqCst) {
+            Status::failed_precondition(
+                "embedding model failed to load — semantic search unavailable",
+            )
+        } else {
+            Status::unavailable("embedding model loading, please retry")
+        }
     }
 
     /// Resolve which database this request targets (ADR-053) and return that
@@ -115,7 +138,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         }
 
         let guard = this.state.read().await;
-        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+        let state = guard.as_ref().ok_or_else(|| this.unavailable())?;
 
         let threshold = if req.threshold == 0.0 {
             None
@@ -158,7 +181,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         let req = request.into_inner();
 
         let guard = this.state.read().await;
-        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+        let state = guard.as_ref().ok_or_else(|| this.unavailable())?;
 
         let node = this
             .node_service
@@ -184,7 +207,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         let req = request.into_inner();
 
         let guard = this.state.read().await;
-        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+        let state = guard.as_ref().ok_or_else(|| this.unavailable())?;
 
         let node = this
             .node_service
@@ -208,7 +231,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
     ) -> Result<Response<TriggerBatchEmbedResponse>, Status> {
         let this = self.route(&request).await?;
         let guard = this.state.read().await;
-        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+        let state = guard.as_ref().ok_or_else(|| this.unavailable())?;
 
         state
             .processor
@@ -236,7 +259,7 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         let req = request.into_inner();
 
         let guard = this.state.read().await;
-        let state = guard.as_ref().ok_or_else(Self::unavailable)?;
+        let state = guard.as_ref().ok_or_else(|| this.unavailable())?;
 
         let mut success_count = 0i32;
         let mut failures = Vec::new();
@@ -267,5 +290,60 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
             success_count,
             failures,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nodespace_core::db::SqliteStore;
+    use nodespace_core::services::NodeService as CoreNodeService;
+    use tempfile::TempDir;
+
+    async fn test_service(load_failed: bool) -> (EmbeddingsServiceImpl, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut store = Arc::new(
+            SqliteStore::new(tmp.path().join("test.db"))
+                .await
+                .expect("SqliteStore"),
+        );
+        let node_service = Arc::new(CoreNodeService::new(&mut store).await.expect("NodeService"));
+        let svc = EmbeddingsServiceImpl::new(
+            node_service,
+            Arc::new(RwLock::new(None)),
+            Arc::new(AtomicBool::new(load_failed)),
+        );
+        (svc, tmp)
+    }
+
+    /// While the model is genuinely still loading, RPCs must keep reporting
+    /// `UNAVAILABLE` -- unchanged, pre-existing behavior a client is
+    /// expected to treat as safe to retry.
+    #[tokio::test]
+    async fn unavailable_reports_loading_when_not_failed() {
+        let (svc, _tmp) = test_service(false).await;
+        let status = svc.unavailable();
+        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert!(
+            status.message().contains("loading"),
+            "expected a loading message, got: {}",
+            status.message()
+        );
+    }
+
+    /// The bug this exists to prevent: once the background load has
+    /// permanently failed, RPCs must stop claiming the model is "loading" --
+    /// a client that retries `UNAVAILABLE` forever never learns the load
+    /// isn't coming. `FAILED_PRECONDITION` signals "don't retry" instead.
+    #[tokio::test]
+    async fn unavailable_reports_failed_precondition_once_load_failed() {
+        let (svc, _tmp) = test_service(true).await;
+        let status = svc.unavailable();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            status.message().contains("failed to load"),
+            "expected a failure message distinct from 'loading', got: {}",
+            status.message()
+        );
     }
 }
