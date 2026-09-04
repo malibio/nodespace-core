@@ -151,9 +151,11 @@ impl ChatInferenceEngine for LlamaChatInferenceEngine {
 /// `StreamingChunk::Error` instead of only being logged. Before this, the
 /// underlying engine still finished and reported success on a mid-generation
 /// overflow, so a silently truncated response was presented to the user as
-/// a complete, successful answer -- `StreamingChunk::Error` already had a
-/// caller (the daemon maps it to a UI-visible error `AgentChunk`); this was
-/// the one missing link.
+/// a complete, successful answer. Closing that required two changes, not
+/// one: this bridge forwarding the chunk at all (what this function fixes),
+/// and the ReAct loop (`agent_loop::run_turn`) actually treating an error
+/// chunk as a failed turn instead of a normal, complete response -- see
+/// `run_turn`'s use of `parse_chunks`'s error field for the other half.
 fn bridge_chat_chunk(chunk: ChatChunk, on_chunk: &dyn Fn(StreamingChunk)) {
     match chunk {
         ChatChunk::Token(text) => {
