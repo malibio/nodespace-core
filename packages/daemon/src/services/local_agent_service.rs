@@ -1392,6 +1392,12 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
             .unload()
             .await
             .map_err(|e| Status::internal(format!("Failed to unload model: {e}")))?;
+        // model_manager().unload() above only flips catalog bookkeeping
+        // (loaded_model_id / status). It has no reference to the actual
+        // engine, which lives separately on `shared` -- without this, the
+        // multi-GB engine stays resident and keeps serving turns even
+        // though the catalog now reports the model as unloaded (core#2192).
+        self.inner.shared.reset_to_noop_engine().await;
         Ok(Response::new(UnloadModelResponse {}))
     }
 
@@ -2961,6 +2967,84 @@ mod tests {
 
         // The cached geometry must be cleared on reset, not left stale.
         assert_eq!(status.model_id, "");
+        assert_eq!(status.granted_n_ctx, 0);
+    }
+
+    /// core#2192: `unload_model` used to only flip the model manager's own
+    /// catalog bookkeeping (`loaded_model_id`/status), never touching the
+    /// actual engine held on `SharedLocalAgent` -- so a multi-GB engine
+    /// stayed resident (and `get_status` kept reporting its geometry) even
+    /// after the RPC reported success. Regression guard: after `unload_model`,
+    /// both halves of the state must agree that nothing is loaded.
+    #[tokio::test]
+    async fn unload_model_releases_the_engine_not_just_catalog_bookkeeping() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let models_dir = tempdir.path().join("models");
+
+        // `with_dir` snapshots each catalog entry's status once at
+        // construction time by checking whether its file already exists —
+        // so discover a real entry's id/filename from a throwaway instance
+        // first, write the fake file, then construct the instance actually
+        // used by the test so its initial scan sees it as `Ready`.
+        let discovery = GgufModelManager::with_dir(models_dir.clone()).expect("model manager");
+        let entry = discovery
+            .list()
+            .await
+            .expect("list")
+            .into_iter()
+            .next()
+            .expect("catalog has at least one entry");
+        let filename = entry
+            .filename
+            .clone()
+            .expect("catalog entry has a filename");
+        std::fs::write(models_dir.join(&filename), b"fake gguf").expect("write fake model file");
+
+        let mgr = Arc::new(GgufModelManager::with_dir(models_dir.clone()).expect("model manager"));
+        mgr.load(&entry.id).await.expect("load");
+
+        let daemon_config_path = tempdir.path().join("daemon.toml");
+        let shared = SharedLocalAgent::from_model_manager(
+            daemon_config_path,
+            Some(mgr.clone()),
+            MODEL_SPEC_SNAPSHOT_TIMEOUT,
+        );
+        let node_service = test_node_service(tempdir.path().join("daemon-db")).await;
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let svc = LocalAgentServiceImpl::new(shared, node_service, embedding);
+
+        // Simulate the real engine actually being swapped in, as happens on
+        // first inference use -- this is the piece `unload_model` must
+        // release, not just the model manager's own bookkeeping.
+        svc.replace_engine_if_changed(
+            &entry.id,
+            Arc::new(SpecEngine {
+                model_id: "/fake/resolved.gguf".to_string(),
+                context_window: 4096,
+            }),
+        )
+        .await;
+
+        svc.unload_model(Request::new(UnloadModelRequest {}))
+            .await
+            .expect("unload_model");
+
+        assert_eq!(
+            mgr.loaded_model().await.expect("loaded_model"),
+            None,
+            "catalog bookkeeping must be cleared"
+        );
+
+        let status = svc
+            .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
+            .await
+            .expect("get_status")
+            .into_inner();
+        assert_eq!(
+            status.model_id, "",
+            "the actual engine must be released too, not just the catalog -- \
+             a stale model_id here means the multi-GB engine is still resident"
+        );
         assert_eq!(status.granted_n_ctx, 0);
     }
 
