@@ -1396,7 +1396,7 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // (loaded_model_id / status). It has no reference to the actual
         // engine, which lives separately on `shared` -- without this, the
         // multi-GB engine stays resident and keeps serving turns even
-        // though the catalog now reports the model as unloaded (core#2192).
+        // though the catalog now reports the model as unloaded.
         self.inner.shared.reset_to_noop_engine().await;
         Ok(Response::new(UnloadModelResponse {}))
     }
@@ -2970,11 +2970,11 @@ mod tests {
         assert_eq!(status.granted_n_ctx, 0);
     }
 
-    /// core#2192: `unload_model` used to only flip the model manager's own
-    /// catalog bookkeeping (`loaded_model_id`/status), never touching the
-    /// actual engine held on `SharedLocalAgent` -- so a multi-GB engine
-    /// stayed resident (and `get_status` kept reporting its geometry) even
-    /// after the RPC reported success. Regression guard: after `unload_model`,
+    /// `unload_model` used to only flip the model manager's own catalog
+    /// bookkeeping (`loaded_model_id`/status), never touching the actual
+    /// engine held on `SharedLocalAgent` -- so a multi-GB engine stayed
+    /// resident (and `get_status` kept reporting its geometry) even after
+    /// the RPC reported success. Regression guard: after `unload_model`,
     /// both halves of the state must agree that nothing is loaded.
     #[tokio::test]
     async fn unload_model_releases_the_engine_not_just_catalog_bookkeeping() {
