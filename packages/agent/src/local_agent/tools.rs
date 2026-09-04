@@ -117,7 +117,7 @@ struct AgentGetNodeParams {
 struct CreateRelationshipParams {
     pub from_id: String,
     pub to_id: String,
-    // `relation_type` was, until core#2200, what the seeded skill guidance
+    // `relation_type` was, for a time, what the seeded skill guidance
     // actually taught the model to send here -- three separate call sites
     // instructed `relation_type=...` while this struct required
     // `relationship_type`, so a model that trusted the guidance it was just
@@ -3757,8 +3757,8 @@ mod tests {
         );
     }
 
-    /// core#2200: the seeded skill guidance taught `relation_type` for three
-    /// call sites while this struct required `relationship_type` -- a model
+    /// The seeded skill guidance taught `relation_type` for three call
+    /// sites while this struct required `relationship_type` -- a model
     /// that trusted the guidance it was shown got rejected outright. The
     /// guidance text is now corrected (see `skill_pipeline.rs`), but the
     /// alias stays as a defensive backstop, mirroring the existing
@@ -3786,7 +3786,7 @@ mod tests {
         );
     }
 
-    /// core#2200: same backstop as `CreateRelationshipParams` above -- the
+    /// Same backstop as `CreateRelationshipParams` above -- the
     /// TRAVERSING RELATIONSHIPS guidance also taught `relation_type`.
     #[test]
     fn get_related_nodes_params_accepts_relation_type_alias() {

@@ -613,7 +613,7 @@ mod tests {
         );
     }
 
-    /// core#2200: the Relationship Management and Organization guidance
+    /// The Relationship Management and Organization guidance
     /// taught `relation_type` at three call sites while `create_relationship`
     /// and `get_related_nodes` both require `relationship_type` -- a model
     /// that trusted the guidance it was just shown got rejected outright by
