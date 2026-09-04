@@ -240,15 +240,20 @@ fn main() -> Result<()> {
     // The tray's seed closure runs synchronously when `tray::run` is called,
     // launching the gRPC server on the tokio runtime so the daemon is
     // serving as soon as the tray appears. The returned `JoinHandle` flows
-    // back out of `tray::run` once the user picks Quit.
+    // back out of `tray::run` once the tray loop exits -- either the user
+    // picked Quit, or `bridge_grpc_completion_to_tray` told it the gRPC task
+    // stopped on its own (a signal drained it, or it failed).
     let runtime_handle = runtime.handle().clone();
     let grpc_handle = tray::run(move |controller| {
-        runtime_handle.spawn(async move { serve_grpc(controller).await })
+        let bridge_controller = controller.clone();
+        let task = runtime_handle.spawn(async move { serve_grpc(controller).await });
+        runtime_handle.spawn(bridge_grpc_completion_to_tray(task, bridge_controller))
     })?;
 
-    // `tray::run` returned, so the user picked Quit. Wait for the gRPC
-    // server to finish draining before we drop the runtime — otherwise
-    // in-flight RPCs would be killed mid-response. Bounded by a watchdog
+    // `tray::run` returned, so the tray loop has exited (Quit, a signal, or
+    // a gRPC task failure). Wait for the gRPC server to finish draining
+    // before we drop the runtime — otherwise in-flight RPCs would be killed
+    // mid-response. Bounded by a watchdog
     // (see SHUTDOWN_WATCHDOG_TIMEOUT's doc comment): if graceful shutdown
     // doesn't finish in time, force-exit rather than let a stuck teardown
     // make Quit hang forever.
@@ -270,6 +275,103 @@ fn main() -> Result<()> {
 
     tracing::info!("nodespaced shutdown complete");
     Ok(())
+}
+
+/// Awaits `task` -- the gRPC server's own `JoinHandle` -- and tells the tray
+/// loop once it resolves, then re-surfaces the exact same outcome so the
+/// existing `.context("gRPC task panicked")?.context("gRPC server returned
+/// an error")?` handling in `main` downstream of `grpc_handle` is
+/// unaffected: a panic inside `task` still resolves *this* handle as a panic
+/// too (via `resume_unwind`, not swallowed into a returned `Err`), and a
+/// clean or errored return passes through unchanged.
+///
+/// This is the bridge for two ways the gRPC task can stop that the tray
+/// loop previously had no way to learn about at all: an OS signal
+/// (SIGTERM/SIGINT) draining it via `combined_shutdown`, or it panicking or
+/// returning an error internally. Both used to leave `task` finished with
+/// nothing watching it, so the tao loop -- which only reacts to the tray's
+/// own "Quit" menu click -- sat forever with a live tray icon fronting a
+/// dead gRPC server. A user-initiated Quit still reaches `ControlFlow::Exit`
+/// on its own through the menu handler and never depends on this path.
+///
+/// One asymmetry with the Quit path worth knowing: `task` doesn't resolve
+/// until `serve_grpc`'s own post-shutdown drain (`shutdown_all` + shared GPU
+/// release) has already finished, so this bridge only fires once that drain
+/// is done -- whereas the Quit path reaches `tray::run`'s return, and so
+/// arms `main`'s shutdown watchdog, *before* that same drain runs. If that
+/// drain is ever the thing hanging, a SIGTERM never reaches this bridge
+/// either, and the watchdog never arms to force it through. Fixing that
+/// class of hang is a separate, still-open problem (see
+/// `SHUTDOWN_WATCHDOG_TIMEOUT`'s doc comment) -- this bridge only fixes the
+/// case where the gRPC task actually does finish and nothing was listening.
+async fn bridge_grpc_completion_to_tray(
+    task: tokio::task::JoinHandle<Result<()>>,
+    controller: tray::TrayController,
+) -> Result<()> {
+    let outcome = task.await;
+    controller.grpc_task_finished();
+    resurface_grpc_task_outcome(outcome)
+}
+
+/// Pure mapping from the gRPC task's raw `JoinHandle` outcome back to the
+/// `Result<()>` `main`'s existing `.context("gRPC task panicked")?
+/// .context("gRPC server returned an error")?` chain expects -- split out of
+/// [`bridge_grpc_completion_to_tray`] so this half is unit-testable without a
+/// real tao event loop, which `TrayController` needs a live `EventLoopProxy`
+/// (and therefore an actual platform event loop) to construct.
+fn resurface_grpc_task_outcome(outcome: Result<Result<()>, tokio::task::JoinError>) -> Result<()> {
+    match outcome {
+        Ok(result) => result,
+        Err(join_err) if join_err.is_panic() => std::panic::resume_unwind(join_err.into_panic()),
+        Err(join_err) => Err(join_err).context("gRPC task did not complete"),
+    }
+}
+
+#[cfg(test)]
+mod grpc_completion_bridge_tests {
+    use super::resurface_grpc_task_outcome;
+
+    /// The signal-drained/clean-shutdown case (Gap 1): `serve_grpc` returning
+    /// `Ok(())` after a SIGTERM must still surface as `Ok(())` here, so
+    /// `main` proceeds to a clean, zero-code exit rather than treating a
+    /// normal shutdown as a failure.
+    #[tokio::test]
+    async fn a_successful_task_result_passes_through_unchanged() {
+        let handle = tokio::spawn(async { Ok(()) });
+        let outcome = handle.await;
+
+        assert!(resurface_grpc_task_outcome(outcome).is_ok());
+    }
+
+    /// An internal error returned by `serve_grpc` (Gap 2, non-panic case)
+    /// must still surface as `Err` here, so `main`'s `?` propagates it and
+    /// the process exits nonzero -- which is what makes launchd's
+    /// conditional `KeepAlive` restart the daemon.
+    #[tokio::test]
+    async fn an_errored_task_result_passes_through_as_an_error() {
+        let handle = tokio::spawn(async { Err::<(), _>(anyhow::anyhow!("boom")) });
+        let outcome = handle.await;
+
+        let err = resurface_grpc_task_outcome(outcome).expect_err("must stay an error");
+        assert!(
+            err.to_string().contains("boom"),
+            "the original error's message must survive, got: {err}"
+        );
+    }
+
+    /// The other half of Gap 2: a genuine panic inside the gRPC task must
+    /// still resolve *this* function's own caller as a panic (via
+    /// `resume_unwind`), not be silently downgraded to a returned `Err`.
+    /// `main`'s two-step `.context("gRPC task panicked")?` specifically
+    /// depends on that distinction to report the right failure mode.
+    #[tokio::test]
+    #[should_panic(expected = "boom")]
+    async fn a_panicking_task_repanics_here_instead_of_becoming_an_error() {
+        let handle = tokio::spawn(async { panic!("boom") });
+        let outcome = handle.await;
+
+        let _ = resurface_grpc_task_outcome(outcome);
+    }
 }
 
 /// Spawns a background thread that runs `on_timeout` once, after `timeout`,

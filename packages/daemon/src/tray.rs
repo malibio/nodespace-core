@@ -51,6 +51,12 @@ enum TrayEvent {
     /// submenu. Carries owned data because it crosses from the tokio runtime
     /// into the `!Send` tray loop.
     DatabasesChanged(Box<RegistrySnapshot>),
+    /// The gRPC task has stopped running for a reason other than the tray's
+    /// own "Quit" menu item -- an OS signal (SIGTERM/SIGINT) drained it, or
+    /// it returned an error, or it panicked. Nothing else watches that task,
+    /// so without this the tao loop has no way to learn its work is done and
+    /// sits forever with a live tray icon fronting a dead gRPC server.
+    GrpcTaskFinished,
 }
 
 /// Handle the gRPC side of the daemon uses to talk to the tray.
@@ -102,6 +108,16 @@ impl TrayController {
         let _ = self
             .proxy
             .send_event(TrayEvent::DatabasesChanged(Box::new(snapshot)));
+    }
+
+    /// Tell the tray loop the gRPC task is done, so it exits too instead of
+    /// leaving a tray icon fronting a dead server. Call this from whatever is
+    /// watching the gRPC task's `JoinHandle` once it resolves -- by a signal
+    /// draining it, by it returning an error, or by it panicking -- covering
+    /// every way the task can stop other than the tray's own "Quit" click,
+    /// which already reaches `ControlFlow::Exit` through the menu handler.
+    pub fn grpc_task_finished(&self) {
+        let _ = self.proxy.send_event(TrayEvent::GrpcTaskFinished);
     }
 }
 
@@ -354,6 +370,14 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
                     s.status_item
                         .set_text(format!("Status: {count} active calls"));
                 }
+            }
+
+            Event::UserEvent(TrayEvent::GrpcTaskFinished) => {
+                // The gRPC task is already stopped by the time this arrives
+                // -- unlike the Quit branch above, there's nothing left to
+                // wake via `quit_notify`, just the loop itself to exit.
+                tracing::info!("gRPC task finished outside of tray Quit — shutting down tray loop");
+                *control_flow = ControlFlow::Exit;
             }
 
             _ => {}
