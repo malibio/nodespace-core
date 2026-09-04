@@ -668,23 +668,30 @@ pub fn run() {
                 // `destroy()`. Neither holds if every window is already
                 // closed or the webview has crashed/hung, so `Quit` would
                 // otherwise silently do nothing. `arm_quit_watchdog` bounds
-                // how long this waits before forcing an exit through a
-                // direct app-exit API that needs neither.
+                // how long this waits before forcing an unconditional exit.
                 if let Some(window) = window_routing::resolve_focus_window(app) {
                     let _ = window.close();
                 }
                 if let Some(shutdown_token) = app.try_state::<ShutdownToken>() {
-                    let app_handle = app.clone();
                     arm_quit_watchdog(
                         shutdown_token.inner().clone(),
                         QUIT_WATCHDOG_TIMEOUT,
-                        move || {
+                        || {
                             tracing::error!(
                                 timeout_secs = QUIT_WATCHDOG_TIMEOUT.as_secs(),
-                                "Tray Quit did not reach ExitRequested via the normal \
-                                 close path in time -- forcing exit."
+                                "Tray Quit did not reach ExitRequested via the normal close \
+                             path in time -- forcing exit."
                             );
-                            app_handle.exit(0);
+                            // `AppHandle::exit` only posts a message onto the
+                            // native event loop's proxy (confirmed against the
+                            // vendored `tauri-runtime-wry` source) -- it needs
+                            // that loop to still be pumping, which is exactly
+                            // what's in question if the normal path never got
+                            // here. `std::process::exit` is unconditional
+                            // regardless of what any thread, including the main
+                            // one, is doing -- matching `nodespace-daemon`'s
+                            // `arm_shutdown_watchdog`, which this mirrors.
+                            std::process::exit(0);
                         },
                     );
                 }
@@ -1047,14 +1054,14 @@ pub(crate) fn graceful_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle
 
 /// Bounds how long the tray "Quit" item waits for the normal window-close
 /// path (`WindowEvent::CloseRequested` -> frontend flush -> `destroy()` ->
-/// `ExitRequested` -> `Exit`) before [`arm_quit_watchdog`] forces an exit
-/// through a direct app-exit API instead. The frontend's own flush
-/// self-bounds to 5s (`shared-node-store.svelte.ts`'s `flushAllPending`), so
-/// this adds a few seconds of margin for the IPC round trip and event
-/// propagation on top of that -- generous enough not to cut off a real
-/// flush, but still bounded so "Quit" can never hang forever: not for a
-/// healthy webview whose close handler never runs, not for a crashed/hung
-/// one, and not for a window-less app (every window already closed).
+/// `ExitRequested` -> `Exit`) before [`arm_quit_watchdog`] forces an
+/// unconditional exit instead. The frontend's own flush self-bounds to 5s
+/// (`shared-node-store.svelte.ts`'s `flushAllPending`), so this adds a few
+/// seconds of margin for the IPC round trip and event propagation on top of
+/// that -- generous enough not to cut off a real flush, but still bounded so
+/// "Quit" can never hang forever: not for a healthy webview whose close
+/// handler never runs, not for a crashed/hung one, and not for a window-less
+/// app (every window already closed).
 const QUIT_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Spawn a thread that runs `on_timeout` once, after `timeout`, unless
