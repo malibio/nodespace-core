@@ -159,12 +159,6 @@ After completing the review, **AUTOMATICALLY POST TO GITHUB PR**:
    The verdict lives in the body either way — `reviewDecision` stays empty on a
    self-review no matter what, since `COMMENTED` is not an approval decision.
 
-4. **Mark review commit** (for future re-reviews):
-   ```bash
-   # Tag current HEAD for future delta reviews
-   git tag -a "review-$(date +%Y%m%d-%H%M%S)" -m "Code review completed"
-   ```
-
 **CRITICAL**: Always post the review to GitHub. This enables:
 - The `/address-review` command to reference feedback
 - Future re-reviews to compare against previous findings
