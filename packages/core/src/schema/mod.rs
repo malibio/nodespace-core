@@ -455,9 +455,14 @@ fn reject_reserved_relationship_names(
 ///
 /// - `coreValues` is required on an `enum` edge field and rejected on any other
 ///   type, so a value set can never sit on a field nothing validates against.
-/// - a declared `default` must itself be a member of that set — otherwise every
-///   edge created without an explicit value carries an illegal one, and the
-///   value check on write would reject a value the schema itself supplied.
+/// - a declared `default` must itself be a member of that set, so the schema
+///   cannot advertise a value its own value check would reject.
+///
+/// Note that validating the default is not the same as applying it: nothing
+/// fills an omitted edge key in from `default` at write time (edge `required` is
+/// likewise unenforced), so an edge created without the key is stored without
+/// it. This guard only ensures the declared default is legal if and when
+/// something does apply it.
 ///
 /// Enum values must also be unique: a duplicated `value` makes the label
 /// ambiguous at display time and silently shadows one of the two entries.

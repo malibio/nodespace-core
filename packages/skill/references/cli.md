@@ -288,16 +288,18 @@ If `create` rejects the schema with a validation error (not "already exists") �
 
 **Self-referential relationships:** a type may point at itself in the same `schema create` call — give its own schema ID (the snake_case form of the name); no follow-up `schema update` is needed. Name the reverse direction with `reverseName` rather than declaring a second relationship, so one stored edge is readable from both ends: `{"name":"supersedes","targetType":"adr","direction":"out","cardinality":"one","reverseName":"superseded_by","reverseCardinality":"one"}`. The same shape covers `blocks`/`blocked_by` on a task and `parent`/`child` on a category.
 
-**Edge fields.** A relationship can carry attributes on the edge itself via `edgeFields` — facts about the *connection*, not about either node (a role on a membership, a billing date on an invoice link). Give an edge field a fixed vocabulary by declaring it as an enum with `coreValues`, the same shape a node field uses:
+**Edge fields.** A relationship can carry attributes on the edge itself via `edgeFields` — facts about the *connection*, not about either node (an access level on a membership, a billing date on an invoice link). Give an edge field a fixed vocabulary by declaring it as an enum with `coreValues`, the same shape a node field uses:
 
 ```json
-{"name": "role", "type": "enum", "required": true, "default": "viewer",
+{"name": "access", "type": "enum",
  "coreValues": [{"value": "owner", "label": "Owner"},
                 {"value": "editor", "label": "Editor"},
                 {"value": "viewer", "label": "Viewer"}]}
 ```
 
-`coreValues` is required on an enum edge field and rejected on any other type; a `default` must be one of the declared values; values must be unique. Edge enums are closed — no `userValues`/`extensible` half. Edge values are validated against the set on every write path (including `--edge-data`), and the relationships UI renders a picker instead of a free-text box.
+`coreValues` is required on an enum edge field and rejected on any other type; a `default` must be one of the declared values; values must be unique. Edge enums are closed — no `userValues`/`extensible` half. Creating or editing an edge validates the value against the declared set (including via `--edge-data`), and the relationships UI renders a picker instead of a free-text box.
+
+Two limits worth knowing. Only relationships you declare can carry `edgeFields`: the built-in structural names (`member_of`, `has_child`, `mentions`, `has_role`) are reserved and rejected as declarations, so an edge field cannot be attached to them. And `required`/`default` on an edge field are recorded but not enforced at write time — an omitted enum key is stored absent rather than filled in from `default`, so don't rely on a default to supply a value.
 
 **Title template:** set `title_template` when a node's identity comes from its fields rather than free-form content, using `{field_name}` placeholders — every placeholder must be a defined field. Omit it if the content/title field alone identifies the node.
 
