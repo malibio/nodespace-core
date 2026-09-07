@@ -36,6 +36,7 @@
   import { labelForField } from '$lib/utils/schema-field-label';
   import { enumValueLabel } from '$lib/utils/schema-enum-values';
   import { formatDateDisplay } from '$lib/utils/schema-date-values';
+  import { isUserVisibleField } from '$lib/utils/schema-field-visibility';
   import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
   import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
   import TypedFormShell from '$lib/components/schema/typed-form-shell.svelte';
@@ -118,7 +119,7 @@
   // never render as a user-editable control, mirroring GenericSchemaForm's protection filter).
   const userDefinedFields = $derived.by(() => {
     if (!schema) return [];
-    return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name) && f.protection !== 'system');
+    return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name) && isUserVisibleField(f));
   });
 
   // Calculate field completion stats
