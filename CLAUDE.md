@@ -206,15 +206,17 @@ IMPORTANT SUB-AGENT INSTRUCTIONS:
    bun run quality:fix       # MANDATORY — fix all lint/format issues
    git add . && git commit -m "Fix linting and formatting"
    git push origin HEAD:issue-<number>-brief-desc
-   bun run gh:pr <number>    # Creates PR, updates status to "Ready for Review"
+   bun run gh:pr <number>    # Creates PR, updates status to "In Review"
    ```
 
    > ⚠️ **`bun run gh:pr` infers the head branch from the LOCAL branch name**, which `EnterWorktree` prefixes with `worktree-`. It therefore fails with `Validation Failed: {"field":"head","code":"invalid"}` against a remote branch pushed without that prefix. Create the PR directly instead, then set status:
    > ```bash
    > gh pr create --repo NodeSpaceAI/nodespace-core --base main \
    >   --head issue-<number>-brief-desc --title "..." --body "..."
-   > bun run gh:status <number> "Ready for Review"
+   > bun run gh:status <number> "In Review"
    > ```
+   >
+   > The Status field accepts exactly six values — `Backlog`, `Todo`, `In Progress`, `In Review`, `Done`, `Blocked` — each mapped to a single-select option ID on the project board. Anything else is rejected; there is no "Ready for Review".
 
    > ⚠️ **`git push` runs a pre-push gate (`scripts/test-gate.ts`, ADR-047)** that re-runs `test:all`, then `cargo build --bin nodespaced`, then the full `test:e2e` suite — every push, not just the first. On a fresh worktree with no Rust build cache this can take **several minutes** (cold `cargo build` alone can exceed 5 minutes). Give the push command a long timeout (10+ minutes) or run it in the background and wait for completion — a command that times out before the hook finishes looks identical to a real failure but isn't one; check the tail of the actual output for a real test failure vs. an incomplete cold build before concluding the push failed. Do not reach for `--no-verify` to work around slowness — it's reserved for WIP Handoff Commits.
 
