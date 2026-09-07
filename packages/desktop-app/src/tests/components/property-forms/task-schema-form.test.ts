@@ -405,4 +405,36 @@ describe('TaskSchemaForm — user-defined fields still render dynamically', () =
     const persisted = changes.properties as { task: Record<string, unknown> };
     expect(persisted.task.sprint).toBe('Sprint 13');
   });
+
+  it('does not render a system-protected field as an editable control', async () => {
+    const schema = realTaskSchema();
+    schema.fields.push({
+      name: 'sprint',
+      friendlyName: 'Sprint',
+      type: 'string',
+      protection: 'user',
+      indexed: false,
+      required: false
+    });
+    schema.fields.push({
+      name: 'capture:transcript',
+      friendlyName: 'Transcript',
+      type: 'string',
+      protection: 'system',
+      indexed: false,
+      required: false
+    });
+    vi.spyOn(backendAdapter, 'getSchema').mockResolvedValue(schema as never);
+    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
+    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode({ status: 'open' }));
+
+    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
+    await openForm(container);
+
+    // The user-protected sibling proves the dynamic field loop ran at all, so the
+    // absence of the system field below is the filter working, not a form that
+    // rendered nothing.
+    await waitFor(() => expect(screen.getByLabelText('Sprint')).toBeTruthy());
+    expect(screen.queryByLabelText('Transcript')).toBeNull();
+  });
 });
