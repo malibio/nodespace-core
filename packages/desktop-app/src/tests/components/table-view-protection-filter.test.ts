@@ -10,82 +10,24 @@
  *
  * The detail form already filtered these out (see
  * generic-schema-form-protection-filter.test.ts), so the two views disagreed.
- * These tests mirror that file and pin the table side, using the real field
- * shapes from core_schemas.rs.
+ * These tests mirror that file and pin the table side, using the real core
+ * field shapes from the shared fixtures in `../helpers/schema-fixtures`.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/svelte';
-import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
 
 import { mockTauriCore } from '../helpers/mock-tauri-core';
 
 vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 import TableView from '$lib/components/query/table-view.svelte';
-
-function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
-  return { protection: 'user', indexed: false, friendlyName: partial.name, ...partial };
-}
-
-function schemaWith(id: string, isCore: boolean, fields: SchemaField[]): SchemaNode {
-  return {
-    id,
-    content: id,
-    createdAt: '2026-01-01T00:00:00Z',
-    modifiedAt: '2026-01-01T00:00:00Z',
-    version: 1,
-    isCore,
-    schemaVersion: 1,
-    fields
-  };
-}
-
-/** person, verbatim from core_schemas.rs. */
-const PERSON_FIELDS: SchemaField[] = [
-  field({ name: 'name', friendlyName: 'Name', type: 'string', protection: 'core' }),
-  field({ name: 'email', friendlyName: 'Email', type: 'string', protection: 'core' }),
-  field({
-    name: '_possible_duplicate',
-    friendlyName: 'Possible duplicate',
-    type: 'boolean',
-    protection: 'system',
-    default: false
-  })
-];
-
-/** ai-chat's top-level fields, verbatim from core_schemas.rs: 4 visible, 6 system. */
-const AI_CHAT_FIELDS: SchemaField[] = [
-  field({ name: 'provider', friendlyName: 'Provider', type: 'string', protection: 'core' }),
-  field({ name: 'model', friendlyName: 'Model', type: 'string', protection: 'core' }),
-  field({ name: 'status', friendlyName: 'Conversation status', type: 'enum', protection: 'core' }),
-  field({ name: 'last_active', friendlyName: 'Last active', type: 'date', protection: 'system' }),
-  field({
-    name: 'context_tokens',
-    friendlyName: 'Context tokens',
-    type: 'number',
-    protection: 'system'
-  }),
-  field({
-    name: 'created_nodes',
-    friendlyName: 'Created nodes',
-    type: 'array',
-    protection: 'system'
-  }),
-  field({ name: 'messages', friendlyName: 'Messages', type: 'array', protection: 'core' }),
-  field({
-    name: 'capture:session_id',
-    friendlyName: 'Session id',
-    type: 'string',
-    protection: 'system'
-  }),
-  field({
-    name: 'capture:transcript',
-    friendlyName: 'Transcript',
-    type: 'text',
-    protection: 'system'
-  }),
-  field({ name: 'capture:summary', friendlyName: 'Summary', type: 'text', protection: 'system' })
-];
+import {
+  field,
+  schemaWith,
+  PERSON_FIELDS,
+  AI_CHAT_FIELDS,
+  AI_CHAT_SYSTEM_LABELS
+} from '../helpers/schema-fixtures';
 
 function headerTexts(container: HTMLElement): string[] {
   return [...container.querySelectorAll('thead th')].map((th) => th.textContent?.trim() ?? '');
@@ -123,14 +65,7 @@ describe('TableView — protection-level filtering', () => {
       }
     });
 
-    for (const label of [
-      'Last active',
-      'Context tokens',
-      'Created nodes',
-      'Session id',
-      'Transcript',
-      'Summary'
-    ]) {
+    for (const label of AI_CHAT_SYSTEM_LABELS) {
       expect(queryByText(label)).toBeNull();
     }
     // Non-system fields survive, in schema order — note `messages` still follows

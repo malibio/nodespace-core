@@ -9,11 +9,11 @@
  * raw PTY scrollback documented as possibly containing secrets and tokens.
  *
  * Same class of bug the table view had, on a different surface — so the fix is
- * the same shared `isUserVisibleField` predicate. Fixtures below are copied
- * verbatim from core_schemas.rs.
+ * the same shared `isUserVisibleField` predicate, and these cases mirror
+ * `table-view-protection-filter.test.ts`. Both files draw their core-schema
+ * shapes from the shared fixtures in `../helpers/schema-fixtures`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
 
 vi.mock('$lib/utils/logger', () => ({
   createLogger: () => ({
@@ -34,72 +34,17 @@ vi.mock('$lib/services/backend-adapter', () => ({
 
 import { backendAdapter } from '$lib/services/backend-adapter';
 import { fetchTargetSchemaFields } from '$lib/services/relationship-viewer-service';
+import {
+  field,
+  schemaWith,
+  PERSON_FIELDS,
+  PERSON_VISIBLE_NAMES,
+  AI_CHAT_FIELDS,
+  AI_CHAT_VISIBLE_NAMES,
+  AI_CHAT_SYSTEM_NAMES
+} from '../helpers/schema-fixtures';
 
-const getSchema = backendAdapter.getSchema as unknown as ReturnType<typeof vi.fn>;
-
-function field(partial: Partial<SchemaField> & { name: string; type: string }): SchemaField {
-  return { protection: 'user', indexed: false, friendlyName: partial.name, ...partial };
-}
-
-function schemaWith(id: string, isCore: boolean, fields: SchemaField[]): SchemaNode {
-  return {
-    id,
-    content: id,
-    createdAt: '2026-01-01T00:00:00Z',
-    modifiedAt: '2026-01-01T00:00:00Z',
-    version: 1,
-    isCore,
-    schemaVersion: 1,
-    fields
-  };
-}
-
-/** person, verbatim from core_schemas.rs. */
-const PERSON_FIELDS: SchemaField[] = [
-  field({ name: 'name', friendlyName: 'Name', type: 'string', protection: 'core' }),
-  field({ name: 'email', friendlyName: 'Email', type: 'string', protection: 'core' }),
-  field({
-    name: '_possible_duplicate',
-    friendlyName: 'Possible duplicate',
-    type: 'boolean',
-    protection: 'system',
-    default: false
-  })
-];
-
-/** ai-chat's top-level fields, verbatim from core_schemas.rs: 4 visible, 6 system. */
-const AI_CHAT_FIELDS: SchemaField[] = [
-  field({ name: 'provider', friendlyName: 'Provider', type: 'string', protection: 'core' }),
-  field({ name: 'model', friendlyName: 'Model', type: 'string', protection: 'core' }),
-  field({ name: 'status', friendlyName: 'Conversation status', type: 'enum', protection: 'core' }),
-  field({ name: 'last_active', friendlyName: 'Last active', type: 'date', protection: 'system' }),
-  field({
-    name: 'context_tokens',
-    friendlyName: 'Context tokens',
-    type: 'number',
-    protection: 'system'
-  }),
-  field({
-    name: 'created_nodes',
-    friendlyName: 'Created nodes',
-    type: 'array',
-    protection: 'system'
-  }),
-  field({ name: 'messages', friendlyName: 'Messages', type: 'array', protection: 'core' }),
-  field({
-    name: 'capture:session_id',
-    friendlyName: 'Session id',
-    type: 'string',
-    protection: 'system'
-  }),
-  field({
-    name: 'capture:transcript',
-    friendlyName: 'Transcript',
-    type: 'text',
-    protection: 'system'
-  }),
-  field({ name: 'capture:summary', friendlyName: 'Summary', type: 'text', protection: 'system' })
-];
+const getSchema = vi.mocked(backendAdapter.getSchema);
 
 beforeEach(() => {
   getSchema.mockReset();
@@ -109,7 +54,7 @@ describe('fetchTargetSchemaFields — protection-level filtering', () => {
   it('omits person’s system-managed _possible_duplicate', async () => {
     getSchema.mockResolvedValue(schemaWith('person', true, PERSON_FIELDS));
 
-    expect(await fetchTargetSchemaFields('person')).toEqual(['name', 'email']);
+    expect(await fetchTargetSchemaFields('person')).toEqual(PERSON_VISIBLE_NAMES);
   });
 
   it('omits all six of ai-chat’s system fields, transcript included', async () => {
@@ -117,19 +62,12 @@ describe('fetchTargetSchemaFields — protection-level filtering', () => {
 
     const names = await fetchTargetSchemaFields('ai-chat');
 
-    for (const name of [
-      'last_active',
-      'context_tokens',
-      'created_nodes',
-      'capture:session_id',
-      'capture:transcript',
-      'capture:summary'
-    ]) {
+    for (const name of AI_CHAT_SYSTEM_NAMES) {
       expect(names).not.toContain(name);
     }
     // Non-system names survive in schema order — `messages` still follows
     // `status` despite three system fields removed from between them.
-    expect(names).toEqual(['provider', 'model', 'status', 'messages']);
+    expect(names).toEqual(AI_CHAT_VISIBLE_NAMES);
   });
 
   it('applies the same filter to a user-defined (schema-only) target type', async () => {
