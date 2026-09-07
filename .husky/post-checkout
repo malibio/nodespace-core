@@ -1,3 +1,25 @@
+# Skip the install while a rebase, merge, or cherry-pick is replaying.
+#
+# Git checks out the base commit to start a rebase, which fires this hook. The
+# install that follows rewrites bun.lock — the committed lockfile carries a
+# `configVersion` key that older Bun releases strip — so the tree is dirty
+# before the first commit is replayed, and the rebase stops with "cannot
+# rebase: You have unstaged changes". Retrying re-runs the hook and re-dirties
+# the tree, so the rebase cannot make progress without disabling hooks
+# wholesale.
+#
+# Nothing is lost by skipping: a sequencing operation ends on a real checkout
+# of the final branch, which fires this hook again with dependencies resolved
+# once, against the finished tree, instead of once per replayed commit.
+#
+# `--git-path` rather than a literal .git/ path: it resolves correctly inside a
+# worktree, where these live under .git/worktrees/<name>/.
+for state in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD; do
+  if [ -e "$(git rev-parse --git-path "$state")" ]; then
+    exit 0
+  fi
+done
+
 if [ "$3" = "1" ]; then
   bun install
 fi
