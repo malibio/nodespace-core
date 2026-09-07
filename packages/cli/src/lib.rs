@@ -98,7 +98,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Override the socket path (default: ~/.nodespace/daemon.sock).
+    /// Override the socket path. With no flag and no environment variable, the
+    /// CLI dials ~/.nodespace/daemon.sock, or auto-discovers a running dev/Pro
+    /// daemon's socket if that one is absent.
     /// Honors the `NODESPACED_SOCKET` environment variable when this flag is absent.
     #[arg(long, global = true, env = "NODESPACED_SOCKET")]
     pub socket: Option<String>,
@@ -178,11 +180,11 @@ pub fn resolve_socket_path(override_: Option<&str>) -> std::path::PathBuf {
     if let Some(p) = override_ {
         return std::path::PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+    if let Ok(p) = std::env::var(nodespace_proto::socket::SOCKET_ENV_VAR) {
         return std::path::PathBuf::from(p);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    discover_socket_in(&std::path::PathBuf::from(home).join(".nodespace"))
+    discover_socket_in(&std::path::PathBuf::from(home).join(nodespace_proto::socket::STATE_DIR))
 }
 
 /// Pick the daemon socket to dial when none is set explicitly. The daemon socket
@@ -194,20 +196,17 @@ pub fn resolve_socket_path(override_: Option<&str>) -> std::path::PathBuf {
 /// path so the caller reports a clean "is the daemon running?" error.
 #[cfg(unix)]
 fn discover_socket_in(dir: &std::path::Path) -> std::path::PathBuf {
-    // Order = preference: canonical first, then the other build variants.
-    const VARIANTS: [&str; 4] = [
-        "daemon.sock",         // release community (canonical / CLI default)
-        "daemon-pro.sock",     // release Pro
-        "daemon-dev.sock",     // dev community
-        "daemon-dev-pro.sock", // dev Pro
-    ];
-    for name in VARIANTS {
+    // Order = preference: canonical first, then the other build variants. The
+    // names come from the shared transport contract so this probe list cannot
+    // drift from what the daemon actually binds.
+    use nodespace_proto::socket::DAEMON_SOCKET_NAMES;
+    for name in DAEMON_SOCKET_NAMES {
         let candidate = dir.join(name);
         if candidate.exists() {
             return candidate;
         }
     }
-    dir.join(VARIANTS[0])
+    dir.join(DAEMON_SOCKET_NAMES[0])
 }
 
 /// Build a tonic `Channel` connected over a Unix Domain Socket.

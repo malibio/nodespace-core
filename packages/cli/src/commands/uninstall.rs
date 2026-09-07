@@ -70,9 +70,15 @@ fn remove_bin_dir(home: &Path) {
     let _ = fs::remove_dir_all(&bin_dir);
 }
 
+/// Remove every build variant's socket, not just the community one. A single
+/// `nodespace` binary uninstalls whichever app is installed, and it cannot tell
+/// from its own build which variant left a socket behind — a stale Pro or dev
+/// socket file would otherwise survive an uninstall.
 fn remove_sock(home: &Path) {
-    let sock = home.join(".nodespace").join("daemon.sock");
-    let _ = fs::remove_file(&sock);
+    let dir = home.join(nodespace_proto::socket::STATE_DIR);
+    for name in nodespace_proto::socket::DAEMON_SOCKET_NAMES {
+        let _ = fs::remove_file(dir.join(name));
+    }
 }
 
 fn remove_claude_skill(home: &Path) {

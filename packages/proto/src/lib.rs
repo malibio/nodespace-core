@@ -1,3 +1,5 @@
+pub mod socket;
+
 /// Generated gRPC types for the `nodespace` proto package.
 ///
 /// Contains client/server stubs and all request/response message types.
