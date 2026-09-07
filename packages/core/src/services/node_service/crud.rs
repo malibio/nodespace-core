@@ -86,42 +86,32 @@ impl NodeService {
             start.elapsed().as_millis()
         );
 
-        // Step 1.5: Apply schema defaults, validate, and add version
-        // Fetch schema ONCE and reuse for all operations (performance fix)
-        // Schema processing: Only fetch schema from DB for types with meaningful schema fields.
-        // Currently only "task" has schema-defined fields; text, date, etc. have no fields.
-        // This avoids a ~760ms database lookup for every node creation.
+        // Step 1.5: Normalize properties, then apply schema defaults and validate.
+        //
+        // Schema nodes are excluded throughout: their properties (`fields`,
+        // `relationships`, `title_template`) are the schema itself, stored flat,
+        // and validating a schema against its own type would be circular.
         //
         // NOTE: We ONLY apply schema defaults, NOT behavior defaults.
         // Behavior defaults (markdown_enabled, auto_save, etc.) are UI preferences
         // that should be handled client-side, not stored in database properties.
         // The properties field is for user data and schema-defined fields only.
-        if node.node_type == "task" {
-            let schema_start = std::time::Instant::now();
-            // Fetch schema ONCE and reuse it for all operations
+        if node.node_type != "schema" {
+            // Normalization needs no schema — see
+            // `normalize_flat_properties_to_namespace`.
+            node.properties =
+                Self::normalize_flat_properties_to_namespace(&node.node_type, &node.properties);
+
+            // Defaults and validation do need the schema, and every type that has
+            // one gets them — user-defined types included. The fetch is a single
+            // primary-key read (`get_schema` is `get_node(node_type)`), tens of
+            // microseconds, so there is nothing to gate on.
             if let Some(schema_json) = self.get_schema_for_type(&node.node_type).await? {
-                tracing::debug!(
-                    "create_node: schema fetched in {}ms",
-                    schema_start.elapsed().as_millis()
-                );
-                // Parse schema fields
                 if let Some(fields_json) = schema_json.get("fields") {
                     if let Ok(fields) = serde_json::from_value::<Vec<crate::models::SchemaField>>(
                         fields_json.clone(),
                     ) {
-                        // Normalize flat properties to namespaced format before processing
-                        // Clients send: { "status": "open" }
-                        // Storage format: { "task": { "status": "open" } }
-                        node.properties = Self::normalize_flat_properties_to_namespace(
-                            &node.node_type,
-                            &node.properties,
-                            Some(&fields),
-                        );
-
-                        // Apply defaults from schema fields only
                         self.apply_schema_defaults_with_fields(&mut node, &fields)?;
-
-                        // Validate with the same fields
                         self.validate_node_with_fields(&node, &fields)?;
                     }
                 }
@@ -129,13 +119,6 @@ impl NodeService {
             tracing::debug!(
                 "create_node: schema processing complete at {}ms",
                 start.elapsed().as_millis()
-            );
-        } else if node.node_type != "schema" {
-            // Non-task, non-schema types: normalize properties without DB lookup
-            node.properties = Self::normalize_flat_properties_to_namespace(
-                &node.node_type,
-                &node.properties,
-                None,
             );
         }
 
@@ -360,11 +343,7 @@ impl NodeService {
         // (create_node will normalize again, but the result is idempotent)
         let title = {
             let normalized_props = if params.node_type != "schema" {
-                Self::normalize_flat_properties_to_namespace(
-                    &params.node_type,
-                    &params.properties,
-                    None,
-                )
+                Self::normalize_flat_properties_to_namespace(&params.node_type, &params.properties)
             } else {
                 params.properties.clone()
             };
@@ -646,11 +625,8 @@ impl NodeService {
             } else {
                 // Client sends: { "status": "done" }
                 // We convert to: { "task": { "status": "done" } } before merging with existing namespaced properties
-                let normalized_properties = Self::normalize_flat_properties_to_namespace(
-                    &updated.node_type,
-                    &properties,
-                    None, // Schema fields are fetched later if needed
-                );
+                let normalized_properties =
+                    Self::normalize_flat_properties_to_namespace(&updated.node_type, &properties);
                 // Deep-merge namespaced properties
                 Self::deep_merge_namespaced_properties(
                     &mut updated.properties,
@@ -776,11 +752,8 @@ impl NodeService {
                 // Schema nodes use flat properties format (relationships, fields, etc.)
                 Self::deep_merge_namespaced_properties(&mut updated.properties, properties);
             } else {
-                let normalized_properties = Self::normalize_flat_properties_to_namespace(
-                    &updated.node_type,
-                    &properties,
-                    None,
-                );
+                let normalized_properties =
+                    Self::normalize_flat_properties_to_namespace(&updated.node_type, &properties);
                 // Deep-merge namespaced properties
                 Self::deep_merge_namespaced_properties(
                     &mut updated.properties,
@@ -793,10 +766,10 @@ impl NodeService {
         self.behaviors.validate_node(&updated)?;
 
         // Step 2: Schema validation (USER-EXTENSIBLE)
-        // Only validate against schema for node types that have meaningful schema fields.
-        // Currently only "task" has schema-defined fields; text, date, etc. have no fields.
-        // This avoids a ~760ms database lookup for every update.
-        if updated.node_type == "task" {
+        // Every type that declares a schema is validated, user-defined types
+        // included; `validate_node_against_schema` no-ops for types without one.
+        // The lookup behind it is a single primary-key read.
+        if updated.node_type != "schema" {
             self.validate_node_against_schema(&updated).await?;
         }
 
@@ -1671,41 +1644,62 @@ impl NodeService {
         }
     }
 
-    /// Normalize flat properties input into namespaced storage format
+    /// Normalize flat properties input into namespaced storage format.
+    ///
+    /// Callers supply properties in the flat, bare-name shape the write surfaces
+    /// document (`--property status=done`, `NodeUpdate.properties`); this moves
+    /// them under the type's own namespace (`{ "task": { "status": "done" } }`),
+    /// which is the shape storage and `flatten_namespaced_properties` agree on.
+    ///
+    /// Field vs. sibling-namespace is decided by the key's `_` prefix alone, not
+    /// by the value's JSON type. `_`-prefixed keys (`_seed`, `_schema_version`)
+    /// are internal bookkeeping that must land at a fixed, type-independent path,
+    /// so they stay at the top level; every other key is a field of this type and
+    /// is namespaced whatever its value — object-valued fields included.
+    ///
+    /// The `_` prefix is reserved for that bookkeeping on both sides of the
+    /// round-trip: `flatten_namespaced_properties` already drops `_`-prefixed
+    /// keys from every read surface, so treating them as non-fields here makes
+    /// the write path agree with the read path rather than diverging from it.
+    ///
+    /// Classifying on the value's type instead would be ambiguous in exactly the
+    /// case that matters: an object-valued field of a user-defined type is
+    /// indistinguishable from a namespace by shape, and treating it as a
+    /// namespace hoists it out of the type key where every read path looks,
+    /// dropping the value with no error. Deciding on the key prefix removes the
+    /// ambiguity without consulting the schema, so no read is needed here.
+    ///
+    /// Dormant namespaces (an old type's key left behind by a type change) are
+    /// not this function's concern — they only ever exist in *stored* properties,
+    /// which are merged with this function's output rather than passed through
+    /// it, and the flattener already hides them from read output.
     pub(crate) fn normalize_flat_properties_to_namespace(
         node_type: &str,
         properties: &serde_json::Value,
-        schema_fields: Option<&[crate::models::SchemaField]>,
     ) -> serde_json::Value {
         let Some(props_obj) = properties.as_object() else {
             return properties.clone();
         };
 
-        // Build a set of known schema field names for the current type
-        let schema_field_names: std::collections::HashSet<&str> = schema_fields
-            .map(|fields| fields.iter().map(|f| f.name.as_str()).collect())
-            .unwrap_or_default();
-
-        // Check if properties are already namespaced by looking for the node_type key
-        // with an object value containing schema fields
+        // Already in storage shape - return as-is. This is what makes the
+        // function idempotent, which `create_node_with_parent` relies on: it
+        // normalizes once to compute the title, then hands the result to
+        // `create_node`, which normalizes again. Without this a second pass
+        // would nest the type key inside itself.
         if let Some(type_namespace) = props_obj.get(node_type) {
             if type_namespace.is_object() {
-                // Already namespaced - return as-is (preserves dormant namespaces too)
                 return properties.clone();
             }
         }
 
-        // Separate flat properties (to be namespaced) from already-namespaced ones
+        // Separate internal bookkeeping keys from the type's own fields
         let mut namespaced = serde_json::Map::new();
         let mut flat_props = serde_json::Map::new();
 
         for (key, value) in props_obj {
-            // Check if this key looks like a namespace (an object with nested properties)
-            if value.is_object() && !schema_field_names.contains(key.as_str()) {
-                // This is likely a namespace (dormant or active) - preserve it
+            if key.starts_with('_') {
                 namespaced.insert(key.clone(), value.clone());
             } else {
-                // This is a flat property - collect for namespacing
                 flat_props.insert(key.clone(), value.clone());
             }
         }

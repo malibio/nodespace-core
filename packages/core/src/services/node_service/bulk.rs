@@ -135,12 +135,8 @@ impl NodeService {
         let nodes_normalized: Vec<_> = nodes
             .into_iter()
             .map(|(id, node_type, content, parent_id, order, properties)| {
-                let schema_fields = schema_cache.get(&node_type).and_then(|opt| opt.as_ref());
-                let normalized_props = Self::normalize_flat_properties_to_namespace(
-                    &node_type,
-                    &properties,
-                    schema_fields.map(|v| v.as_slice()),
-                );
+                let normalized_props =
+                    Self::normalize_flat_properties_to_namespace(&node_type, &properties);
                 (id, node_type, content, parent_id, order, normalized_props)
             })
             .collect();
@@ -248,12 +244,8 @@ impl NodeService {
         let nodes_normalized: Vec<_> = nodes
             .into_iter()
             .map(|(id, node_type, content, parent_id, order, properties)| {
-                let schema_fields = schema_cache.get(&node_type).and_then(|opt| opt.as_ref());
-                let normalized_props = Self::normalize_flat_properties_to_namespace(
-                    &node_type,
-                    &properties,
-                    schema_fields.map(|v| v.as_slice()),
-                );
+                let normalized_props =
+                    Self::normalize_flat_properties_to_namespace(&node_type, &properties);
                 (id, node_type, content, parent_id, order, normalized_props)
             })
             .collect();
@@ -353,11 +345,8 @@ impl NodeService {
         let nodes_normalized: Vec<_> = nodes
             .into_iter()
             .map(|(id, node_type, content, parent_id, order, properties)| {
-                let normalized_props = Self::normalize_flat_properties_to_namespace(
-                    &node_type,
-                    &properties,
-                    None, // No schema fields - import properties are simple
-                );
+                let normalized_props =
+                    Self::normalize_flat_properties_to_namespace(&node_type, &properties);
                 (id, node_type, content, parent_id, order, normalized_props)
             })
             .collect();
@@ -536,7 +525,6 @@ impl NodeService {
                     let normalized = Self::normalize_flat_properties_to_namespace(
                         &updated.node_type,
                         properties,
-                        None,
                     );
                     Self::deep_merge_namespaced_properties(&mut updated.properties, normalized);
                 }

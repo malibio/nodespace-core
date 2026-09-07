@@ -1415,12 +1415,12 @@ pub fn prepare_nodes_from_template(
     // title is the one thing seed_nodes_from_templates can rely on to find
     // "the same template" again).
     //
-    // Nested under a single `_seed` object key rather than flat top-level
-    // keys: `normalize_flat_properties_to_namespace` (crud.rs) moves flat
+    // Nested under a single `_seed` key rather than flat top-level keys:
+    // `normalize_flat_properties_to_namespace` (crud.rs) moves flat
     // properties into a `{node_type: {...}}` namespace on create, which
     // would otherwise bury these under `properties[root_node_type]` — a
-    // different path depending on the template's type. An object-valued key
-    // is preserved as its own namespace, so `_seed` lands at a fixed,
+    // different path depending on the template's type. `_`-prefixed keys are
+    // exempt from that hoisting, so `_seed` lands at a fixed,
     // type-independent path every time.
     let seed_version = compute_seed_version(&nodes);
     if let Some(root_props) = nodes[0].properties.as_object_mut() {

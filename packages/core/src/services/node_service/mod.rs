@@ -1427,11 +1427,11 @@ impl NodeService {
     /// by [`crate::markdown::prepare_nodes_from_template`], which stamps the
     /// root node's properties with a `_seed` object containing `key` (the
     /// template's stable title), `version` (a content hash), and `tier`
-    /// (`"system"` or `"starter"`). Nested under one object key (rather than
-    /// flat top-level keys) so [`Self::normalize_flat_properties_to_namespace`]
-    /// preserves it as a dormant namespace instead of hoisting its contents
-    /// into `properties[node_type]` on write — the same pattern the `tool`
-    /// seed template comment (`skill_pipeline.rs`) uses for the same reason.
+    /// (`"system"` or `"starter"`). Its `_` prefix is what keeps it at the top
+    /// level: [`Self::normalize_flat_properties_to_namespace`] leaves
+    /// `_`-prefixed keys where they are instead of hoisting them into
+    /// `properties[node_type]` on write, so `_seed` sits at a fixed,
+    /// type-independent path that reconciliation can look up by key.
     ///
     /// Reconciliation is per node, keyed by `_seed.key` within each `node_type`:
     ///
@@ -5565,15 +5565,14 @@ mod tests {
         assert_eq!(nodes[0].properties["skill"]["description"], "Search v2");
     }
 
-    /// `tool` seed templates pre-namespace their own properties under a `"tool"`
-    /// key (see `skill_pipeline.rs::seed_tool_nodes`) for an unrelated reason —
-    /// `tool` isn't a core schema, so `normalize_flat_properties_to_namespace`
-    /// wouldn't hoist it on its own; the pre-namespacing exists to protect the
-    /// nested `parameter_schema` object from being misclassified. This proves
-    /// `_seed` (stamped alongside that pre-existing `"tool"` namespace) doesn't
-    /// collide with it and both survive independently.
+    /// `tool` seed templates carry a nested `parameter_schema` object as a plain
+    /// flat property (see `skill_pipeline.rs::seed_tool_nodes`). That object must
+    /// be namespaced under `"tool"` alongside the scalar fields rather than
+    /// hoisted out beside it, where the read-path flattener would never find it.
+    /// This also proves `_seed`, stamped on the same properties, still lands at
+    /// the top level and does not collide with the type's namespace.
     #[tokio::test]
-    async fn reseed_replaces_tool_tier_node_with_pre_namespaced_properties() {
+    async fn reseed_replaces_tool_tier_node_with_object_valued_property() {
         use crate::markdown::{prepare_nodes_from_template, NodeTemplate, SeedTier};
 
         let (service, _temp) = create_test_service().await;
@@ -5583,13 +5582,11 @@ mod tests {
             content: None,
             root_node_type: "tool".to_string(),
             root_properties: json!({
-                "tool": {
-                    "handler": "search_nodes",
-                    "description": description,
-                    "parameter_schema": {"type": "object"},
-                    "source": "internal",
-                    "enabled": true,
-                }
+                "handler": "search_nodes",
+                "description": description,
+                "parameter_schema": {"type": "object"},
+                "source": "internal",
+                "enabled": true,
             }),
             child_node_type: None,
             child_properties: None,
@@ -5607,9 +5604,18 @@ mod tests {
         let nodes = service.query_nodes_by_type("tool", None).await.unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].properties["tool"]["description"], "Search v1");
+        assert_eq!(
+            nodes[0].properties["tool"]["parameter_schema"],
+            json!({"type": "object"}),
+            "the object-valued field must land inside the type namespace, not beside it"
+        );
+        assert!(
+            nodes[0].properties.get("parameter_schema").is_none(),
+            "the object-valued field must not be hoisted out as a sibling namespace"
+        );
         assert!(
             nodes[0].properties.get("_seed").is_some(),
-            "_seed must coexist with the pre-namespaced 'tool' key, not be swallowed by it"
+            "_seed must stay at the top level, not be swallowed by the type namespace"
         );
 
         service

@@ -673,7 +673,21 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
+                    // Two orthogonal state machines share this one key (see the
+                    // module docs on `AiChatNode`): the turn state the daemon
+                    // drives while inference runs, and the session lifecycle the
+                    // PTY path uses. Both sets must be declared here — a value
+                    // the runtime writes but the schema omits is rejected by
+                    // create/update schema validation.
                     core_values: Some(vec![
+                        EnumValue {
+                            value: "idle".to_string(),
+                            label: "Idle".to_string(),
+                        },
+                        EnumValue {
+                            value: "processing".to_string(),
+                            label: "Processing".to_string(),
+                        },
                         EnumValue {
                             value: "active".to_string(),
                             label: "Active".to_string(),

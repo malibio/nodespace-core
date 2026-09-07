@@ -482,20 +482,12 @@ pub fn seed_tool_nodes() -> Vec<NodeTemplate> {
                 title: def.name.clone(),
                 content: None,
                 root_node_type: "tool".to_string(),
-                // Pre-namespace under "tool" so normalize_flat_properties_to_namespace
-                // detects the existing namespace key and returns early (crud.rs:1633),
-                // preserving the nested parameter_schema object. Without pre-namespacing
-                // the normalizer misclassifies parameter_schema (an object) as a dormant
-                // namespace, hoisting it out of the "tool" key so flatten_properties_for_api
-                // later silently drops it.
                 root_properties: serde_json::json!({
-                    "tool": {
-                        "handler": def.name,
-                        "description": def.description,
-                        "parameter_schema": def.parameters_schema,
-                        "source": "internal",
-                        "enabled": true,
-                    }
+                    "handler": def.name,
+                    "description": def.description,
+                    "parameter_schema": def.parameters_schema,
+                    "source": "internal",
+                    "enabled": true,
                 }),
                 child_node_type: None,
                 child_properties: None,
@@ -1364,11 +1356,9 @@ mod tests {
         for seed in seed_tool_nodes() {
             assert_eq!(seed.root_node_type, "tool");
 
-            // Properties are pre-namespaced under "tool" to survive the normalizer
-            let ns = seed
-                .root_properties
-                .get("tool")
-                .expect("tool namespace must be present");
+            // Flat, bare field names — the normalizer moves them under the
+            // "tool" namespace on create, `parameter_schema` object included.
+            let ns = &seed.root_properties;
 
             let handler = ns.get("handler").and_then(|v| v.as_str()).unwrap_or("");
             assert!(
@@ -1414,8 +1404,7 @@ mod tests {
         for seed in seed_tool_nodes() {
             let handler = seed
                 .root_properties
-                .get("tool")
-                .and_then(|ns| ns.get("handler"))
+                .get("handler")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             assert!(
