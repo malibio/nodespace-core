@@ -305,6 +305,10 @@ nodespace schema create --params '{"name":"ADR","description":"An architecture d
 
 # Update an existing schema — add/remove/rename fields, without re-creating it
 nodespace schema update --params '{"schema_id":"ticket","add_fields":[{"name":"sprint","type":"text"}]}'
+
+# Delete a schema — clear its relationship declarations first (see below)
+nodespace schema update --params '{"schema_id":"adr","remove_relationships":["decided_by","supersedes"]}'
+nodespace schema delete adr
 ```
 
 `create`/`update` take a single JSON `--params` blob (or `--params-file <path>` for a file) rather than per-field flags — the params shape mirrors `CreateSchemaParams`/`UpdateSchemaParams` in the daemon.
@@ -319,6 +323,23 @@ If `create` rejects the schema with a validation error (not "already exists") �
 **Editing:** to add, remove, or rename a field, or change a relationship on an existing schema, use `schema update` with only the fields that need changing (`add_fields`/`remove_fields`/`rename_fields`, or an updated `description`/`title_template`). Don't re-create the whole schema for a small change.
 
 **Rename vs. relabel:** `rename_fields` can rename a field's storage key or relabel its display name only — see the tool schema for the `from`/`to`/`friendlyName` shape of each. A user asking to relabel what a field is called on screen almost always means the display label, not a storage rename.
+
+**Deleting a schema.** A node type can be removed — `nodespace schema delete <schema_id>`. Reach for it whenever the user asks to remove, drop, undo or clean up a type, including a throwaway type created earlier in the session; never report deletion as unsupported, and never propose stripping a schema to an empty shell as a substitute.
+
+Relationship declarations are the one prerequisite: a schema that still declares relationships, or is still targeted by another type's declaration, is rejected with `schema_has_declarations` and the remaining count. Clear them with `schema update` first, then delete:
+
+```bash
+# 1. Drop the relationships this type declares
+nodespace schema update --params '{"schema_id":"adr","remove_relationships":["decided_by","supersedes"]}'
+# 2. Drop declarations on OTHER types that target it (`schema list --json` shows them)
+nodespace schema update --params '{"schema_id":"ticket","remove_relationships":["related_adr"]}'
+# 3. Delete the schema
+nodespace schema delete adr
+```
+
+This is the mirror of the `targetType` rule above: a relationship's target must **exist** before the relationship can be declared, and must be **absent** before the type it points at can be deleted.
+
+Two scoping notes. Only declarations *between schemas* block the delete — relationship edges between ordinary nodes are instance data and are not counted, so there is no need to unpick those first. And deleting the type does not delete its instances: they remain as nodes of that type, so remove them with `node delete` separately if the user wants them gone too.
 
 **Schema fields:** define only type-specific fields — don't add a `name` or `title` field; every node already has a built-in content/title field. Exception: if `title_template` uses a `{name}` placeholder, `name` must be defined as a field (any placeholder in `title_template` must have a matching field).
 
@@ -560,6 +581,10 @@ Inspect and manage node type schema definitions
 
 - `--params <PARAMS>` — JSON params. For `create`: {"name", "description"?, "fields"?, "relationships"?, "title_template"?, ...} — see CreateSchemaParams. For `update`: {"schema_id", "add_fields"?, "remove_fields"?, "rename_fields"?, "add_relationships"?, "remove_relationships"?, ...} — see UpdateSchemaParams. Mutually exclusive with `--params-file`
 - `--params-file <PARAMS_FILE>` — Path to a file containing the JSON params (alternative to inline `--params`)
+
+**`nodespace schema delete`** — Delete a schema definition by ID
+
+- `<ID>` — Schema ID to delete (node type identifier, e.g. `adr`, `person`) (required)
 
 ### `nodespace relationship`
 

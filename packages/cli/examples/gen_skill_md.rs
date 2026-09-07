@@ -37,7 +37,7 @@
 
 use clap::{ArgAction, Command as ClapCommand, CommandFactory};
 use nodespace_agent::skill_rules::{
-    EDIT_DONT_RECREATE, ENUM_EDGE_FIELDS, ENUM_FORMAT, FIELDS_FROM_REQUEST_ONLY,
+    DELETE_A_SCHEMA, EDIT_DONT_RECREATE, ENUM_EDGE_FIELDS, ENUM_FORMAT, FIELDS_FROM_REQUEST_ONLY,
     NAME_PLACEHOLDER_EXCEPTION, NO_NAME_TITLE_FIELD, ONE_SCHEMA_PER_REQUEST, RELATIONSHIP_VS_FIELD,
     RENAME_VS_RELABEL, SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY,
     TARGET_TYPE_MUST_EXIST, TITLE_TEMPLATE_PLACEHOLDERS, UNIQUE_FIELD_FLAGS,
@@ -121,6 +121,7 @@ fn render_schema_rules_block() -> String {
         "{one_schema_per_request}\n\n{schema_already_exists}\n\n{schema_validation_error_retry}\n\n\
          {edit_dont_recreate}\n\n\
          {rename_vs_relabel}\n\n\
+         {delete_a_schema}\n\n\
          **Schema fields:** {no_name_title_field} {name_placeholder_exception}\n\n\
          {fields_from_request_only}\n\n\
          {enum_format}\n\n\
@@ -133,6 +134,7 @@ fn render_schema_rules_block() -> String {
         schema_validation_error_retry = SCHEMA_VALIDATION_ERROR_RETRY.prose,
         edit_dont_recreate = EDIT_DONT_RECREATE.prose,
         rename_vs_relabel = RENAME_VS_RELABEL.prose,
+        delete_a_schema = DELETE_A_SCHEMA.prose,
         no_name_title_field = NO_NAME_TITLE_FIELD.prose,
         name_placeholder_exception = NAME_PLACEHOLDER_EXCEPTION.prose,
         fields_from_request_only = FIELDS_FROM_REQUEST_ONLY.prose,

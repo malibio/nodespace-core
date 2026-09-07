@@ -81,6 +81,19 @@ pub const RENAME_VS_RELABEL: SchemaRule = SchemaRule {
     prose: "**Rename vs. relabel:** `rename_fields` can rename a field's storage key or relabel its display name only — see the tool schema for the `from`/`to`/`friendlyName` shape of each. A user asking to relabel what a field is called on screen almost always means the display label, not a storage rename.",
 };
 
+/// The recognition trigger matters more than the conclusion here: an agent
+/// that has just created a throwaway schema, or is asked to "remove"/"undo"/
+/// "clean up" a type, is the one that needs this. Without it, `schema --help`
+/// reads as a closed set of verbs the agent already knows, and it reports
+/// deletion as unsupported rather than looking for it. The relationship
+/// prerequisite is stated up front because discovering it only through the
+/// runtime rejection reads as a second dead end.
+pub const DELETE_A_SCHEMA: SchemaRule = SchemaRule {
+    id: "delete-a-schema",
+    imperative: "DELETING A SCHEMA \u{2014} the capability exists, use it: When the user asks to remove, drop, undo or clean up a node type \u{2014} including a throwaway type you created yourself this session \u{2014} delete it. Do NOT report deletion as unsupported and do NOT propose stripping the schema to an empty shell as a workaround. PREREQUISITE: a schema carrying relationship declarations cannot be deleted; call update_schema with remove_relationships first, on THIS type for the relationships it declares AND on every other type that declares a relationship targeting it, then delete the schema node. This is the mirror of the targetType rule: a relationship's target must EXIST to declare it, and must be ABSENT to delete the type it points at. The rejection names the remaining declaration count \u{2014} act on it rather than giving up. Only declarations BETWEEN SCHEMAS block the delete: edges between ordinary nodes are instance data and do not count, so do not go hunting for those. Deleting the type does NOT delete its existing instances \u{2014} they remain as nodes; delete those separately with delete_node if the user wants them gone too.",
+    prose: "**Deleting a schema.** A node type can be removed \u{2014} `nodespace schema delete <schema_id>`. Reach for it whenever the user asks to remove, drop, undo or clean up a type, including a throwaway type created earlier in the session; never report deletion as unsupported, and never propose stripping a schema to an empty shell as a substitute.\n\nRelationship declarations are the one prerequisite: a schema that still declares relationships, or is still targeted by another type's declaration, is rejected with `schema_has_declarations` and the remaining count. Clear them with `schema update` first, then delete:\n\n```bash\n# 1. Drop the relationships this type declares\nnodespace schema update --params '{\"schema_id\":\"adr\",\"remove_relationships\":[\"decided_by\",\"supersedes\"]}'\n# 2. Drop declarations on OTHER types that target it (`schema list --json` shows them)\nnodespace schema update --params '{\"schema_id\":\"ticket\",\"remove_relationships\":[\"related_adr\"]}'\n# 3. Delete the schema\nnodespace schema delete adr\n```\n\nThis is the mirror of the `targetType` rule above: a relationship's target must **exist** before the relationship can be declared, and must be **absent** before the type it points at can be deleted.\n\nTwo scoping notes. Only declarations *between schemas* block the delete \u{2014} relationship edges between ordinary nodes are instance data and are not counted, so there is no need to unpick those first. And deleting the type does not delete its instances: they remain as nodes of that type, so remove them with `node delete` separately if the user wants them gone too.",
+};
+
 pub const NO_NAME_TITLE_FIELD: SchemaRule = SchemaRule {
     id: "no-name-title-field",
     imperative: "Do NOT add a 'name' or 'title' field — every node already has a built-in content/title field.",
@@ -151,6 +164,7 @@ pub const SCHEMA_RULES: &[SchemaRule] = &[
     SCHEMA_VALIDATION_ERROR_RETRY,
     EDIT_DONT_RECREATE,
     RENAME_VS_RELABEL,
+    DELETE_A_SCHEMA,
     NO_NAME_TITLE_FIELD,
     FIELDS_FROM_REQUEST_ONLY,
     NAME_PLACEHOLDER_EXCEPTION,

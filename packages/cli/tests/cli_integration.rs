@@ -825,6 +825,104 @@ async fn schema_create_and_update_round_trip() {
 }
 
 #[tokio::test]
+async fn schema_delete_requires_relationship_declarations_removed_first() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    // A self-referential declaration is enough to trip the guard, and needs
+    // only one schema to set up.
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "name": "Memo",
+                    "fields": [{"name": "body", "type": "text"}],
+                    "relationships": [{
+                        "name": "supersedes",
+                        "targetType": "memo",
+                        "direction": "out",
+                        "cardinality": "one"
+                    }]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("schema create");
+
+    // The declaration blocks the delete, and the rejection names the fix.
+    let err = commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Delete(commands::schema::SchemaDeleteArgs {
+            id: "memo".into(),
+        }),
+        true,
+    )
+    .await
+    .expect_err("delete must be refused while a declaration remains");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("schema_has_declarations"),
+        "rejection should name the guard: {msg}"
+    );
+    assert!(
+        msg.contains("update_schema"),
+        "rejection should name the fix: {msg}"
+    );
+    // The guidance tells agents to act on the count, so the count has to be
+    // in the message. A self-reference is one stored edge, not two, even
+    // though it touches this schema at both ends.
+    assert!(
+        msg.contains("1 relationship declaration(s)"),
+        "rejection should name how many declarations remain: {msg}"
+    );
+
+    // Clearing the declaration unblocks it.
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Update(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "schema_id": "memo",
+                    "remove_relationships": ["supersedes"]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("schema update removing the declaration");
+
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Delete(commands::schema::SchemaDeleteArgs {
+            id: "memo".into(),
+        }),
+        true,
+    )
+    .await
+    .expect("schema delete after clearing declarations");
+
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Get(commands::schema::SchemaGetArgs { id: "memo".into() }),
+        true,
+    )
+    .await
+    .expect_err("the deleted schema must no longer resolve");
+
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
 async fn schema_create_rejects_malformed_params() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
     let mut client = connect(&sock, DatabaseIdInterceptor::none())
