@@ -4,6 +4,8 @@ import {
   groupDisplayLabel,
   groupEdgeColumns,
   groupLayout,
+  findGroupByKey,
+  findRowByKey,
   groupSupportsEdgeEditing,
   partitionGroups,
   humanizeName,
@@ -428,5 +430,116 @@ describe('relationship-grouping: groupSupportsEdgeEditing', () => {
     // The group still renders as a table (it has edge data) but offers no editor.
     expect(group.layout).toBe('table');
     expect(groupSupportsEdgeEditing(group)).toBe(false);
+  });
+});
+
+describe('relationship-grouping: findGroupByKey / findRowByKey', () => {
+  const related = (id: string, edge: Record<string, unknown> = {}) => ({
+    id,
+    nodeType: 'adr',
+    title: id,
+    contentPreview: '',
+    edgeProperties: edge
+  });
+
+  function viewOf(groups: RawRelationshipGroup[]) {
+    return buildRelationshipsView({ nodeId: 'adr-1', nodeType: 'adr', groups }).groups;
+  }
+
+  const populated = () =>
+    viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: 2,
+        related: [related('adr-2', { reason: 'first' }), related('adr-3', { reason: 'second' })]
+      })
+    ]);
+
+  it('resolves a group by its stable key', () => {
+    const groups = populated();
+    const key = groups[0].key;
+    expect(findGroupByKey(groups, key)).toBe(groups[0]);
+  });
+
+  it('returns null for a null key or a key no longer present', () => {
+    const groups = populated();
+    expect(findGroupByKey(groups, null)).toBeNull();
+    expect(findGroupByKey(groups, 'out:removed:adr')).toBeNull();
+    expect(findGroupByKey([], groups[0].key)).toBeNull();
+  });
+
+  it('resolves a (group key, row id) pair to the CURRENT objects, not a snapshot', () => {
+    // The staleness this guards: a reload rebuilds the whole object graph, so a
+    // resolver must hand back the new row carrying the new edge values.
+    const before = populated();
+    const key = before[0].key;
+
+    const after = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: 2,
+        related: [related('adr-2', { reason: 'edited' }), related('adr-3', { reason: 'second' })]
+      })
+    ]);
+
+    const resolved = findRowByKey(after, key, 'adr-2');
+    expect(resolved?.row.edgeValues.reason).toBe('edited');
+    // Identity check: it is the post-reload row, not the one we started from.
+    expect(resolved?.row).not.toBe(before[0].rows[0]);
+    expect(resolved?.group).toBe(after[0]);
+  });
+
+  it('returns null once the row it points at is gone, so an open editor closes', () => {
+    const groups = populated();
+    const key = groups[0].key;
+    // The edge was removed by another action while the editor was open.
+    const afterRemoval = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: 1,
+        related: [related('adr-3', { reason: 'second' })]
+      })
+    ]);
+    expect(findRowByKey(afterRemoval, key, 'adr-2')).toBeNull();
+  });
+
+  it('returns null when the whole group is gone, not just the row', () => {
+    const groups = populated();
+    expect(findRowByKey([], groups[0].key, 'adr-2')).toBeNull();
+  });
+
+  it('returns null for a missing key or row id', () => {
+    const groups = populated();
+    expect(findRowByKey(groups, null, 'adr-2')).toBeNull();
+    expect(findRowByKey(groups, groups[0].key, null)).toBeNull();
+  });
+
+  it('does not confuse same-named groups facing opposite directions', () => {
+    // Both groups share `relationshipName`; only the key distinguishes them, and
+    // an editor keyed to the outbound one must never resolve to the inbound.
+    const groups = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        count: 1,
+        related: [related('adr-2')]
+      }),
+      makeGroup({
+        relationshipName: 'supersedes',
+        direction: 'in',
+        reverseName: 'superseded_by',
+        count: 1,
+        related: [related('adr-9')]
+      })
+    ]);
+    const [outbound, inbound] = groups;
+    expect(outbound.key).not.toBe(inbound.key);
+    expect(findGroupByKey(groups, outbound.key)?.direction).toBe('out');
+    expect(findGroupByKey(groups, inbound.key)?.direction).toBe('in');
+    // The outbound group holds adr-2, the inbound adr-9 — no cross-resolution.
+    expect(findRowByKey(groups, outbound.key, 'adr-9')).toBeNull();
+    expect(findRowByKey(groups, inbound.key, 'adr-2')).toBeNull();
   });
 });

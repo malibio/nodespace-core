@@ -61,6 +61,8 @@
     fetchNodesProperties
   } from '$lib/services/relationship-viewer-service';
   import {
+    findGroupByKey,
+    findRowByKey,
     groupSupportsEdgeEditing,
     partitionGroups,
     type NodeRelationshipsView,
@@ -137,15 +139,21 @@
   // property-fetch effect never double-fetches or loops.
   let requestedPropIds = new Set<string>();
 
-  // The one row whose edge properties are open in EdgePropertiesModal, if any.
+  // The one row whose edge properties are open in EdgePropertiesModal, if any,
+  // held as a (group key, row id) pair rather than as the objects themselves.
   // Scoped to a single edge on purpose: opening it must not change the state of
   // any other row, nor of the panel behind it.
-  let editing = $state<{ group: RelationshipGroupView; row: RelationshipRowView } | null>(null);
+  //
+  // Keys, not objects: every mutation reloads `view` into a new object graph, so
+  // a captured group/row would leave the editor rendering — and saving — values
+  // from before the reload. Resolving per render also closes the editor by
+  // itself if the edge it points at disappears.
+  let editingKey = $state<{ groupKey: string; rowId: string } | null>(null);
   // Whether the "Add relationship" type chooser is open.
   let addChooserOpen = $state(false);
 
-  // Target picker (one group open at a time).
-  let addGroup = $state<RelationshipGroupView | null>(null);
+  // Target picker (one group open at a time), keyed for the same reason.
+  let addGroupKey = $state<string | null>(null);
   let addQuery = $state('');
   let addResults = $state<Node[]>([]);
   let addSearching = $state(false);
@@ -161,11 +169,17 @@
   // relationship is folded into the single Add chooser instead of standing open
   // as an empty section. When BOTH are empty there is nothing to offer at all,
   // and the "no typed relationships" placeholder takes over.
-  const partitioned = $derived(
-    partitionGroups(view?.groups ?? [])
-  );
+  const partitioned = $derived(partitionGroups(view?.groups ?? []));
   const populatedGroups = $derived(partitioned.populated);
   const addableGroups = $derived(partitioned.addable);
+
+  // Both resolve against the CURRENT view every render, so an open editor or
+  // picker always reflects the latest reload — and collapses to null (closing
+  // itself) if the group or edge it refers to is gone.
+  const editing = $derived(
+    findRowByKey(view?.groups ?? [], editingKey?.groupKey ?? null, editingKey?.rowId ?? null)
+  );
+  const addGroup = $derived(findGroupByKey(view?.groups ?? [], addGroupKey));
 
   $effect(() => {
     if (!open) {
@@ -180,9 +194,9 @@
 
   function resetTransient() {
     edgeDrafts = {};
-    editing = null;
+    editingKey = null;
     addChooserOpen = false;
-    addGroup = null;
+    addGroupKey = null;
     addQuery = '';
     addResults = [];
     addSearching = false;
@@ -451,7 +465,7 @@
     // other row's in-progress edit untouched.
     if (ok) {
       clearRowDraft(group, row);
-      editing = null;
+      editingKey = null;
     }
     // On failure the editor stays open with the draft intact so the surfaced
     // error can be acted on without retyping.
@@ -460,14 +474,15 @@
   /** Open the edge-property editor for one row. */
   function openEdit(group: RelationshipGroupView, row: RelationshipRowView) {
     mutationError = null;
-    editing = { group, row };
+    editingKey = { groupKey: group.key, rowId: row.id };
   }
 
   /** Close the editor, discarding only THIS row's unsaved draft. */
   function cancelEdit() {
-    if (!editing) return;
-    clearRowDraft(editing.group, editing.row);
-    editing = null;
+    // Read the resolved pair, not the key: the draft is keyed by group+row, and
+    // if the edge has already vanished there is no draft left to clear.
+    if (editing) clearRowDraft(editing.group, editing.row);
+    editingKey = null;
   }
 
   // --- Removal --------------------------------------------------------------
@@ -506,7 +521,7 @@
   }
 
   function openAdd(group: RelationshipGroupView) {
-    addGroup = group;
+    addGroupKey = group.key;
     addQuery = '';
     addResults = [];
     addSearching = false;
@@ -516,7 +531,7 @@
   }
 
   function closeAdd() {
-    addGroup = null;
+    addGroupKey = null;
     addQuery = '';
     addResults = [];
     addSearching = false;
@@ -533,6 +548,7 @@
   async function runSearch() {
     const group = addGroup;
     if (!group) return;
+    const requestedKey = group.key;
     const q = addQuery.trim();
     if (!q) {
       addResults = [];
@@ -541,8 +557,14 @@
     addSearching = true;
     try {
       const results = await searchTargets(group.targetType, q);
-      if (addGroup?.key !== group.key) return;
-      const existing = new Set(group.rows.map((r) => r.id));
+      // Discard a response for a picker that has since moved on.
+      if (addGroupKey !== requestedKey) return;
+      // Re-read the group AFTER the await: a mutation during the search would
+      // have reloaded the view, and filtering on the pre-search rows could
+      // offer a target that is already linked.
+      const current = addGroup;
+      if (!current) return;
+      const existing = new Set(current.rows.map((r) => r.id));
       addResults = results.filter((n) => !existing.has(n.id));
     } catch (error) {
       log.error('Target search failed', error);
@@ -782,6 +804,7 @@
                                   <button
                                     type="button"
                                     class="hover:text-primary text-left hover:underline"
+                                    aria-label="Open {row.label} to edit this relationship"
                                     onclick={() => navigateToOwner(row)}
                                   >
                                     <span class="font-medium">{row.label}</span>
@@ -852,12 +875,12 @@
                   {#each group.rows as row (row.id)}
                     <span
                       class="border-border bg-muted/40 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm"
-                      title={row.nodeType}
                     >
                       {#if inbound}
                         <button
                           type="button"
                           class="hover:text-primary inline-flex items-center gap-1.5 hover:underline"
+                          aria-label="Open {row.label} to edit this relationship"
                           onclick={() => navigateToOwner(row)}
                         >
                           <span class="font-medium">{row.label}</span>
@@ -909,7 +932,13 @@
                ONE control instead of getting a standing empty section. -->
           {#if addableGroups.length > 0}
             <div>
-              {#if addGroup && addableGroups.some((g) => g.key === addGroup?.key)}
+              <!-- The picker renders HERE only while its group is still empty.
+                   Once its first edge lands, the group moves to `populated` and
+                   its section renders the picker instead — but `confirmAdd`
+                   closes the picker on success, so that hand-off is never seen
+                   mid-interaction. It matters on the FAILURE path: the picker
+                   stays open, exactly where the user left it. -->
+              {#if addGroup && addableGroups.some((g) => g.key === addGroup.key)}
                 {@render targetPicker(addGroup)}
               {:else}
                 <Popover.Root bind:open={addChooserOpen}>
@@ -1070,14 +1099,13 @@
   column set — and the panel behind it stays exactly as it was.
 -->
 {#if editing}
-  {@const target = editing}
   <EdgePropertiesModal
-    relationshipLabel={target.group.label}
-    rowLabel={target.row.label}
-    fields={target.group.edgeFields}
-    valueFor={(name) => currentEdgeValue(target.group, target.row, name)}
-    onChange={(name, value) => setEdgeDraft(target.group, target.row, name, value)}
-    onSave={() => void saveRow(target.group, target.row)}
+    relationshipLabel={editing.group.label}
+    rowLabel={editing.row.label}
+    fields={editing.group.edgeFields}
+    valueFor={(name) => currentEdgeValue(editing.group, editing.row, name)}
+    onChange={(name, value) => setEdgeDraft(editing.group, editing.row, name, value)}
+    onSave={() => void saveRow(editing.group, editing.row)}
     onCancel={cancelEdit}
     {busy}
   />

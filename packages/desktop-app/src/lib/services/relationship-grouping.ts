@@ -253,10 +253,17 @@ export function resolveEdgeEndpoints(
 
 /**
  * A relationship group's edge properties can only be edited when the schema
- * declares fields to edit. A group carrying only ad-hoc edge keys (present on
- * stored edges but never declared) offers no editor, since there is no field
- * definition to render an input from. Inbound groups are never editable: the
- * edge is owned by the other node's schema.
+ * declares fields to edit. Inbound groups are never editable: the edge is owned
+ * by the other node's schema.
+ *
+ * A group carrying only AD-HOC edge keys — present on stored edges but never
+ * declared in `edgeFields` — is deliberately not editable either, even though
+ * `groupEdgeColumns` still surfaces those keys as read-only columns so the data
+ * stays visible. An undeclared key has no `type`, so an editor could only ever
+ * guess a free-text input, and the update path replaces edge properties
+ * wholesale — which would coerce a stored number or boolean into a string on
+ * the first save. Showing the value and declining to edit it is the honest
+ * option; declaring the field on the schema is how it becomes editable.
  */
 export function groupSupportsEdgeEditing(group: RelationshipGroupView): boolean {
   return group.direction === 'out' && group.edgeFields.length > 0;
@@ -292,6 +299,47 @@ export function partitionGroups(groups: RelationshipGroupView[]): PartitionedGro
     populated: groups.filter((group) => group.rows.length > 0),
     addable: groups.filter((group) => group.direction === 'out' && group.rows.length === 0)
   };
+}
+
+/** A group plus one of its rows, resolved together against the current view. */
+export interface ResolvedRow {
+  group: RelationshipGroupView;
+  row: RelationshipRowView;
+}
+
+/**
+ * Look a group up in the CURRENT view by its stable key.
+ *
+ * Every mutation reloads the view into a wholly new object graph, so UI state
+ * that outlives a mutation (an open editor, an open target picker) must hold a
+ * key and resolve it each time rather than capture the group object it started
+ * with — otherwise it goes on rendering, and writing from, a pre-reload
+ * snapshot. Returns `null` once the group is gone, which callers treat as
+ * "close the thing that was open".
+ */
+export function findGroupByKey(
+  groups: RelationshipGroupView[],
+  key: string | null
+): RelationshipGroupView | null {
+  if (!key) return null;
+  return groups.find((group) => group.key === key) ?? null;
+}
+
+/**
+ * Resolve a `(group key, row id)` pair against the current view, for UI state
+ * scoped to a single edge. Returns `null` when either half has gone — the group
+ * removed from the schema, or the row's edge deleted — so an editor left open
+ * over a vanished edge closes instead of saving against it.
+ */
+export function findRowByKey(
+  groups: RelationshipGroupView[],
+  groupKey: string | null,
+  rowId: string | null
+): ResolvedRow | null {
+  const group = findGroupByKey(groups, groupKey);
+  if (!group || !rowId) return null;
+  const row = group.rows.find((candidate) => candidate.id === rowId);
+  return row ? { group, row } : null;
 }
 
 /**

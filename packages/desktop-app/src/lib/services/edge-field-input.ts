@@ -80,7 +80,16 @@ export function edgeInputValue(kind: EdgeInputKind, value: unknown): string {
   return kind === 'datetime' ? toDateTimeLocalString(value) : toInputString(value);
 }
 
-/** Humanize an edge-field name for its input's label (`due_by` → `due by`). */
+/**
+ * Humanize an edge-field name for its input's label (`due_by` → `due by`).
+ *
+ * Deliberately NOT `humanizeName` from `relationship-grouping.ts`, which Title
+ * Cases every word. Callers here pair this with a `capitalize` CSS class, so the
+ * result renders as `Due by` — sentence case, which is what a form label wants.
+ * Routing this through `humanizeName` would yield `Due By`, capitalized twice
+ * over. The near-duplication is the point; consolidating the two silently
+ * changes how every edge-field label reads.
+ */
 export function formatEdgeFieldLabel(name: string): string {
   return name.replace(/[_-]+/g, ' ');
 }
