@@ -3,17 +3,31 @@
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Must match the label the bundled NodeSpace.app registers itself
+         under (daemon_setup.rs's launch_agent_label(), community build:
+         "app.nodespace.daemon") -- not an arbitrary pkg-specific name.
+         Under a different label, the .pkg's system-wide LaunchAgent and
+         the app's own first-launch registration are two independent
+         daemons instead of one, so a "Quit" from the tray only ever stops
+         the one the app itself started. -->
     <key>Label</key>
-    <string>com.nodespace.daemon</string>
+    <string>app.nodespace.daemon</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/nodespaced</string>
     </array>
 
-    <!-- Restart the daemon automatically if it exits for any reason. -->
+    <!-- Conditional restart: only on a nonzero/crash exit, not on every
+         exit. Bare `true` restarted the daemon even after a clean,
+         deliberate shutdown (e.g. the tray's "Quit"), undoing it within
+         about a hundred milliseconds. Matches daemon_setup.rs's write_plist
+         and the Linux systemd unit's Restart=on-failure. -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
 
     <!-- Start at login; do not require the user to manually launch. -->
     <key>RunAtLoad</key>
