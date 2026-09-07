@@ -60,7 +60,10 @@ const PRODUCERS: { prefix: string; command: string }[] = [
   { prefix: 'binaries/nodespace-skill-installer', command: 'bun run build:skill' },
   { prefix: 'resources/skill', command: 'bun run build:skill' },
   { prefix: 'binaries/', command: 'bun run build:sidecars --debug' },
-  { prefix: 'resources/models', command: 'bun run download:models' },
+  // `:bundle`, not the bare script — only `--bundle` targets
+  // resources/models; without it the download lands in ~/.nodespace/models
+  // and stages nothing here.
+  { prefix: 'resources/models', command: 'bun run download:models:bundle' },
 ];
 
 const producerFor = (path: string): string =>
@@ -179,10 +182,15 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-// --test-threads=2 matches the rest of `rust:test`. The =1 cap the pre-push
-// gate applies to this crate is for its `tests/*.rs` targets, each of which
-// spawns a real nodespaced; these unit tests are in-process and need no such
-// serialization (the one that touches process-global env takes its own lock).
+// `--lib --bins` and deliberately not `--tests`, which is where this differs
+// from `rust:test:workspace`: the `tests/*.rs` targets each spawn a real
+// nodespaced and need `NODESPACED_TEST_BIN` plus `--test-threads=1`, so the
+// pre-push gate runs them as its own step (ADR-048). Splitting them out is
+// what lets these in-process unit tests run in `test:all` at all.
+//
+// --test-threads=2 matches the rest of `rust:test`. The gate's =1 cap exists
+// for those daemon-spawning targets; these need no such serialization (the
+// ones touching process-global env take their own lock).
 const result = Bun.spawnSync(
   [
     'cargo',
