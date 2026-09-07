@@ -131,6 +131,15 @@ export const DEV_PROXY_CHANNEL_OPTIONS: grpc.ClientOptions = {
  * construction rather than by incidentally-unequal options. Verified: 200/200
  * unary calls and 4.19 MB through the proxy, versus 3 before.
  *
+ * Two independent barriers actually keep the connections apart, which is worth
+ * knowing before editing this object. Beyond the pool selection above, reuse
+ * inside a shared pool also requires `channelOptionsEqual` (`subchannel-pool.js`
+ * -> `channel-options.js`), an exact key-and-value comparison that this extra
+ * key already defeats. Deleting the key collapses both at once and silently
+ * restores a bug whose symptom is a 30s hang with no error — so keep it here
+ * rather than folding it into DEV_PROXY_CHANNEL_OPTIONS, and let
+ * `watch-stream-isolation.e2e.ts` be the thing that catches the mistake.
+ *
  * Switching the proxy to Node would also avoid the defect, but that trades a
  * one-line channel option for a runtime split against this repo's Bun-only
  * standard, and would change how the dev-proxy runs for developers rather than
@@ -192,6 +201,13 @@ export interface NodeSpaceGrpcClients {
   agentCall: <TReq, TRes>(method: Function, request: TReq) => Promise<TRes>;
   /** Server-streaming call on agentClient, gated on the channel being READY. */
   agentStream: <TReq, TEvent>(method: Function, request: TReq) => Promise<TEvent[]>;
+  /**
+   * Close every client this factory built. Callers that tear down should use
+   * this rather than closing clients individually: enumerating them by hand
+   * silently leaks whichever one a later change adds, and `watchClient`'s pool
+   * is per-channel, so nothing else reclaims it.
+   */
+  closeAll: () => void;
 }
 
 /**
@@ -260,5 +276,21 @@ export function createNodeSpaceClients(
         })
     );
 
-  return { address, nodeClient, agentClient, watchClient, ready, call, agentCall, agentStream };
+  const closeAll = (): void => {
+    nodeClient.close();
+    agentClient.close();
+    watchClient.close();
+  };
+
+  return {
+    address,
+    nodeClient,
+    agentClient,
+    watchClient,
+    ready,
+    call,
+    agentCall,
+    agentStream,
+    closeAll
+  };
 }
