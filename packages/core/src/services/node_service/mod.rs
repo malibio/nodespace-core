@@ -1838,11 +1838,16 @@ pub struct CompletenessResult {
     pub missing_relationships: Vec<String>,
 }
 
-/// Depth ceiling for the in-memory tree rebuild.
+/// Depth ceiling for the in-memory tree rebuild, measured in edges below the
+/// root — the root itself sits at depth 0.
 ///
-/// Matches the `depth < 100` bound on the `WITH RECURSIVE` walk in
-/// `get_subtree_with_relationships`, so any subtree the SQL collector accepts
-/// is one this builder accepts too.
+/// Aligned with the `WITH RECURSIVE` walk in `get_subtree_with_relationships`,
+/// which seeds direct children at `depth = 1` and expands while
+/// `s.depth < 100`, so the deepest row it emits is 100 edges below the root.
+/// Rejecting at `depth > MAX_TREE_DEPTH` — not `>=` — is what keeps the two in
+/// step: every subtree the SQL collector returns is one this builder accepts,
+/// and only data beyond its reach (which therefore came from a cycle or a
+/// corrupt relationship set) is refused.
 const MAX_TREE_DEPTH: usize = 100;
 
 /// Recursively build a tree structure from flat node data
@@ -1875,13 +1880,27 @@ fn build_node_tree_guarded(
     depth: usize,
     visited: &mut HashSet<String>,
 ) -> Result<serde_json::Value, NodeServiceError> {
-    if depth >= MAX_TREE_DEPTH {
+    // Both guards log before returning: the error reaches the user as a failed
+    // page open, which says nothing about *where* the bad edge is. These lines
+    // are the only server-side record that the stored graph is corrupt.
+    if depth > MAX_TREE_DEPTH {
+        tracing::warn!(
+            node_id = %node.id,
+            depth,
+            max_depth = MAX_TREE_DEPTH,
+            "Hierarchy exceeds the maximum tree depth; refusing to build the subtree"
+        );
         return Err(NodeServiceError::hierarchy_violation(format!(
-            "Maximum tree depth ({}) exceeded at node '{}'",
+            "maximum tree depth ({}) exceeded at node '{}'",
             MAX_TREE_DEPTH, node.id
         )));
     }
     if !visited.insert(node.id.clone()) {
+        tracing::warn!(
+            node_id = %node.id,
+            depth,
+            "Cyclic has_child edge in stored hierarchy; refusing to build the subtree"
+        );
         return Err(NodeServiceError::circular_reference(format!(
             "node '{}' appears more than once on the same branch",
             node.id
@@ -5965,22 +5984,57 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_node_tree_recursive_returns_error_beyond_max_depth() {
-        // A chain longer than the ceiling: acyclic, so only the depth guard
-        // can stop it.
-        let ids: Vec<String> = (0..=MAX_TREE_DEPTH + 5).map(|i| format!("n{i}")).collect();
+    /// Build a straight acyclic chain `n0 -> n1 -> ... -> n{edges}` and run the
+    /// builder over it from `n0`. Acyclic by construction, so only the depth
+    /// guard can stop it.
+    fn build_chain_of_depth(edges: usize) -> Result<serde_json::Value, NodeServiceError> {
+        let ids: Vec<String> = (0..=edges).map(|i| format!("n{i}")).collect();
         let child_ids: Vec<Vec<&str>> = ids.windows(2).map(|pair| vec![pair[1].as_str()]).collect();
-        let edges: Vec<(&str, &[&str])> = ids
+        let spec: Vec<(&str, &[&str])> = ids
             .iter()
             .zip(child_ids.iter())
             .map(|(parent, children)| (parent.as_str(), children.as_slice()))
             .collect();
 
-        let (node_map, adjacency_list) = tree_fixture(&edges);
-        let root = node_map.get("n0").unwrap();
+        let (node_map, adjacency_list) = tree_fixture(&spec);
+        let root = node_map.get("n0").unwrap().clone();
+        build_node_tree_recursive(&root, &node_map, &adjacency_list)
+    }
 
-        let err = build_node_tree_recursive(root, &node_map, &adjacency_list)
+    /// The ceiling must line up exactly with the SQL walk that feeds this
+    /// builder. `get_subtree_with_relationships` seeds direct children at
+    /// `depth = 1` and expands while `s.depth < 100`, so it emits rows up to
+    /// MAX_TREE_DEPTH edges below the root. Accepting one edge fewer would
+    /// reject a hierarchy the store returns happily — a page that fails to
+    /// open on data that is not actually corrupt.
+    ///
+    /// Both sides of the boundary are asserted: a test that only checks a
+    /// comfortably-too-deep chain passes under an off-by-one bound too.
+    #[test]
+    fn build_node_tree_recursive_accepts_a_chain_at_exactly_max_depth() {
+        let tree = build_chain_of_depth(MAX_TREE_DEPTH).unwrap_or_else(|e| {
+            panic!(
+                "a chain {MAX_TREE_DEPTH} edges deep is within the SQL walk's reach \
+                 and must build, but the depth guard rejected it: {e}"
+            )
+        });
+
+        // Walk to the bottom to prove the whole chain materialized, not just
+        // the root.
+        let mut node = &tree;
+        for edge in 0..MAX_TREE_DEPTH {
+            let children = node["children"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing children array at edge {edge}"));
+            assert_eq!(children.len(), 1, "chain node at edge {edge} has one child");
+            node = &children[0];
+        }
+        assert_eq!(node["id"], format!("n{MAX_TREE_DEPTH}"));
+    }
+
+    #[test]
+    fn build_node_tree_recursive_returns_error_one_edge_past_max_depth() {
+        let err = build_chain_of_depth(MAX_TREE_DEPTH + 1)
             .expect_err("a chain deeper than MAX_TREE_DEPTH must return an error");
 
         assert!(
