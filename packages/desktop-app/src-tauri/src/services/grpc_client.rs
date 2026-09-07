@@ -665,9 +665,26 @@ mod tests {
 #[cfg(all(test, windows))]
 mod windows_tests {
     use super::{resolve_pipe_name, resolve_socket_path};
+    use std::sync::Mutex;
+
+    /// Both tests below mutate `NODESPACED_SOCKET`, which is process-global, so
+    /// serialize them — unlike the unix module's pair, these two genuinely race
+    /// each other at the `--test-threads=2` this binary now runs under. Same
+    /// shape as the unix `ENV_LOCK` above and `tests.rs`'s.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Recover from a poisoned lock rather than cascading: the guarded blocks
+    /// are plain env read/write assertions, so an earlier panic holding the
+    /// lock shouldn't fail every later test too.
+    fn env_lock_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn resolve_pipe_name_honors_env_override_then_falls_back() {
+        let _guard = env_lock_guard();
         let prev = std::env::var_os("NODESPACED_SOCKET");
 
         std::env::set_var("NODESPACED_SOCKET", r"\\.\pipe\ns-test");
@@ -692,6 +709,7 @@ mod windows_tests {
 
     #[test]
     fn resolve_socket_path_delegates_to_pipe_name() {
+        let _guard = env_lock_guard();
         let prev = std::env::var_os("NODESPACED_SOCKET");
         std::env::remove_var("NODESPACED_SOCKET");
 

@@ -32,15 +32,15 @@ async function run(label: string, cmd: () => Promise<unknown>) {
   }
 }
 
-// nodespace-app's build.rs (tauri_build::build()) hard-fails if any declared
-// `resources`/`externalBin` entry in tauri.conf.json doesn't physically exist
-// yet — same class of requirement as the sidecar binaries, but cheap enough (a
-// tsc build + file copy) to just run unconditionally here rather than rely on a
-// prior `dev:tauri`/`tauri:build` having staged it. This now runs BEFORE
-// `test:all`, because `rust:test` compiles that crate to cover its `src/` unit
-// tests. The other two sidecars this crate needs aren't staged here — a cold
+// Stages two of the things nodespace-app's build.rs (tauri_build::build())
+// insists on: the `nodespace-skill-installer` externalBin and the
+// `resources/skill/**/*` glob, neither of which has a tracked file to fall
+// back on. Cheap enough (a tsc build + file copy) to run unconditionally
+// rather than rely on a prior `dev:tauri`/`tauri:build` having staged it. This
+// now runs BEFORE `test:all`, because `rust:test` compiles that crate to cover
+// its `src/` unit tests. The remaining sidecars aren't staged here — a cold
 // build of them takes minutes, too much for every push — so `rust:test` checks
-// for all three up front and names the command that produces each.
+// every required path up front and names the command that produces each.
 await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
 await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
 await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);

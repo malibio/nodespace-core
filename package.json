@@ -60,7 +60,7 @@
     "review:help": "bun run scripts/review-manager.ts --help",
     "rust:test": "bun run rust:test:workspace && bun run rust:test:app-units",
     "rust:test:workspace": "cargo test --lib --bins --tests --workspace --exclude nodespace-app --exclude nodespace-app-test-support -- --test-threads=2",
-    "rust:test:app-units": "bun run scripts/check-app-build-prereqs.ts && cargo test --lib --bins -p nodespace-app -p nodespace-app-test-support -- --test-threads=2",
+    "rust:test:app-units": "bun run scripts/test-app-units.ts",
     "rust:test:lib": "cargo test --lib -p nodespace-core -- --test-threads=2",
     "rust:test:long": "RUN_LONG_TESTS=1 cargo test --lib -p nodespace-core -- --test-threads=2",
     "rust:test:doc": "cargo test --doc",
