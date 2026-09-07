@@ -1598,9 +1598,13 @@ impl SqliteStore {
     ) -> Result<(Vec<Node>, Vec<RelationshipRecord>)> {
         let start = std::time::Instant::now();
 
-        // WITH RECURSIVE to collect all descendants
-        let mut id_rows = self.read().await?.query(
-            r#"WITH RECURSIVE subtree(node_id, depth) AS (
+        // WITH RECURSIVE to collect all descendants. Scoped so the cursor drops
+        // before the `get_node` below checks out a second reader connection —
+        // see `ReadRows` in `connections.rs`.
+        let mut descendant_ids = vec![root_id.to_string()];
+        {
+            let mut id_rows = self.read().await?.query(
+                r#"WITH RECURSIVE subtree(node_id, depth) AS (
                 SELECT out_node, 1 FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
                 UNION ALL
                 SELECT r.out_node, s.depth + 1 FROM relationship r
@@ -1608,12 +1612,12 @@ impl SqliteStore {
                 WHERE r.relationship_type = 'has_child' AND s.depth < 100
             )
             SELECT DISTINCT node_id FROM subtree"#,
-            libsql::params![root_id.to_string()],
-        ).await.context("Failed to query descendants")?;
+                libsql::params![root_id.to_string()],
+            ).await.context("Failed to query descendants")?;
 
-        let mut descendant_ids = vec![root_id.to_string()];
-        while let Some(row) = id_rows.next().await? {
-            descendant_ids.push(row.get(0)?);
+            while let Some(row) = id_rows.next().await? {
+                descendant_ids.push(row.get(0)?);
+            }
         }
 
         if descendant_ids.len() == 1 {
@@ -1856,14 +1860,21 @@ impl SqliteStore {
                 .iter()
                 .map(|id| libsql::Value::Text(id.to_string()))
                 .collect();
-            let mut rows = self
-                .read()
-                .await?
-                .query(&sql, params)
-                .await
-                .context("Failed to validate root-only membership on reparent")?;
-            if let Some(row) = rows.next().await? {
-                let offender: String = row.get(0)?;
+            // Drain and drop the cursor before `get_node_memberships` checks out a
+            // second reader connection — see `ReadRows` in `connections.rs`.
+            let offender: Option<String> = {
+                let mut rows = self
+                    .read()
+                    .await?
+                    .query(&sql, params)
+                    .await
+                    .context("Failed to validate root-only membership on reparent")?;
+                match rows.next().await? {
+                    Some(row) => Some(row.get(0)?),
+                    None => None,
+                }
+            };
+            if let Some(offender) = offender {
                 let memberships = self.get_node_memberships(&offender).await?;
                 return Err(anyhow::anyhow!(
                     "member_of_not_root: node '{}' holds collection membership ({}) and cannot be moved under a parent — only root nodes may hold collection membership (ADR-059 §2). Remove it from the collection(s) first, or move its root instead.",
@@ -2647,52 +2658,59 @@ impl SqliteStore {
     /// the node row, relationships from `get_schema_declarations` — no consumer
     /// needs to know declarations aren't stored in `properties`.
     pub async fn get_schema_node(&self, id: &str) -> Result<Option<crate::models::SchemaNode>> {
-        let mut rows = self
-            .read()
-            .await?
-            .query(
-                "SELECT * FROM node WHERE id = ?1 AND node_type = 'schema' LIMIT 1",
-                libsql::params![id.to_string()],
-            )
-            .await
-            .context("Failed to query schema node")?;
-
-        if let Some(row) = rows.next().await? {
-            let node = Self::row_to_node(&row)?;
-            match crate::models::SchemaNode::from_node(node) {
-                Ok(mut schema) => {
-                    schema.relationships = self.get_schema_declarations(id).await?;
-                    Ok(Some(schema))
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse schema node '{}': {}", id, e);
-                    Ok(None)
-                }
+        // Drain and drop the cursor before `get_schema_declarations` checks out a
+        // second reader connection — see `ReadRows` in `connections.rs`.
+        let node = {
+            let mut rows = self
+                .read()
+                .await?
+                .query(
+                    "SELECT * FROM node WHERE id = ?1 AND node_type = 'schema' LIMIT 1",
+                    libsql::params![id.to_string()],
+                )
+                .await
+                .context("Failed to query schema node")?;
+            match rows.next().await? {
+                Some(row) => Self::row_to_node(&row)?,
+                None => return Ok(None),
             }
-        } else {
-            Ok(None)
+        };
+
+        match crate::models::SchemaNode::from_node(node) {
+            Ok(mut schema) => {
+                schema.relationships = self.get_schema_declarations(id).await?;
+                Ok(Some(schema))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse schema node '{}': {}", id, e);
+                Ok(None)
+            }
         }
     }
 
     /// All schemas, each with `relationships` hydrated from declaration edges
     /// (one batched query — no per-schema round trip).
     pub async fn get_all_schemas(&self) -> Result<Vec<crate::models::SchemaNode>> {
-        let mut rows = self
-            .read()
-            .await?
-            .query(
-                "SELECT * FROM node WHERE node_type = 'schema' ORDER BY id",
-                (),
-            )
-            .await
-            .context("Failed to query all schema nodes")?;
-
+        // Drain and drop the cursor before `get_all_schema_declarations` checks out
+        // a second reader connection — see `ReadRows` in `connections.rs`.
         let mut schemas = Vec::new();
-        while let Some(row) = rows.next().await? {
-            let node = Self::row_to_node(&row)?;
-            match crate::models::SchemaNode::from_node(node) {
-                Ok(schema) => schemas.push(schema),
-                Err(e) => tracing::warn!("Skipping invalid schema node: {}", e),
+        {
+            let mut rows = self
+                .read()
+                .await?
+                .query(
+                    "SELECT * FROM node WHERE node_type = 'schema' ORDER BY id",
+                    (),
+                )
+                .await
+                .context("Failed to query all schema nodes")?;
+
+            while let Some(row) = rows.next().await? {
+                let node = Self::row_to_node(&row)?;
+                match crate::models::SchemaNode::from_node(node) {
+                    Ok(schema) => schemas.push(schema),
+                    Err(e) => tracing::warn!("Skipping invalid schema node: {}", e),
+                }
             }
         }
 

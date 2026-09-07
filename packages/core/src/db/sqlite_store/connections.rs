@@ -24,9 +24,17 @@
 //! been *handed* one can clone it and keep it past the guard. That is visible
 //! and deliberate at its one call site (a test that needs a raw held
 //! `BEGIN IMMEDIATE`), not something a caller does by accident.
+//!
+//! Also not enforced by the type system: a [`ReadRows`] cursor owns its
+//! connection until it drops, so a store method that calls another store method
+//! while its own cursor is still live pins two connections where one would do.
+//! Nothing makes that a compile error — the cursor is simply still in scope.
+//! [`ReaderGauge`] makes it *observable* instead, so a test can assert the
+//! bound a call path actually needs rather than leaving the rule to review.
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Idle reader connections beyond this count are closed instead of pooled.
@@ -83,6 +91,51 @@ pub(crate) struct Connections {
     /// failure into a queue. Reads are unaffected — they run on their own
     /// connections.
     writer: tokio::sync::Mutex<libsql::Connection>,
+    /// Live reader checkouts, and the high-water mark they have reached.
+    ///
+    /// This exists to make the "do not issue a read under a live cursor" rule
+    /// *checkable* rather than merely documented. A nested read inflates the
+    /// peak beyond what the call actually needs — two connections pinned where
+    /// one would do — and [`SqliteStore::peak_readers_in_flight`] lets a test
+    /// assert the bound directly instead of trusting review to catch it.
+    ///
+    /// Not an assertion: the store is legitimately read concurrently by many
+    /// tasks, so no fixed bound holds globally. The bound is a property of a
+    /// *single sequential* call path, which is what the tests exercise.
+    readers_in_flight: Arc<ReaderGauge>,
+}
+
+/// Counts live reader checkouts and remembers their high-water mark.
+#[derive(Default)]
+pub(crate) struct ReaderGauge {
+    live: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl ReaderGauge {
+    fn checkout(&self) {
+        let live = self.live.fetch_add(1, Ordering::Relaxed) + 1;
+        self.peak.fetch_max(live, Ordering::Relaxed);
+    }
+
+    fn release(&self) {
+        self.live.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// The most reader connections ever checked out at once since the last
+    /// [`ReaderGauge::reset_peak`].
+    #[cfg(test)]
+    pub(crate) fn peak(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+
+    /// Re-baseline the high-water mark to the number currently live, so a test
+    /// can measure one call path without the setup before it.
+    #[cfg(test)]
+    pub(crate) fn reset_peak(&self) {
+        self.peak
+            .store(self.live.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
 }
 
 impl Connections {
@@ -105,6 +158,7 @@ impl Connections {
             database,
             readers: Arc::new(Mutex::new(Vec::new())),
             writer: tokio::sync::Mutex::new(writer),
+            readers_in_flight: Arc::new(ReaderGauge::default()),
         })
     }
 
@@ -138,11 +192,19 @@ impl Connections {
             Some(conn) => conn,
             None => open_reader(&self.database).await?,
         };
+        self.readers_in_flight.checkout();
         Ok(ReadConn {
             conn: Some(conn),
             pool: self.readers.clone(),
+            gauge: self.readers_in_flight.clone(),
             healthy: true,
         })
+    }
+
+    /// The reader-checkout high-water mark. See [`ReaderGauge`].
+    #[cfg(test)]
+    pub(crate) fn readers_in_flight(&self) -> &ReaderGauge {
+        &self.readers_in_flight
     }
 }
 
@@ -213,6 +275,9 @@ pub(crate) struct ReadConn {
     /// `Some` until `Drop` hands the connection back.
     conn: Option<libsql::Connection>,
     pool: Arc<Mutex<Vec<libsql::Connection>>>,
+    /// Decremented on drop, so the gauge tracks checkouts that are actually
+    /// live rather than merely created.
+    gauge: Arc<ReaderGauge>,
     /// Cleared when a statement on this connection fails. An errored connection
     /// is closed rather than pooled: most read errors are benign (bad SQL), but
     /// the ones that are not — I/O failure, corruption, an interrupted
@@ -256,6 +321,7 @@ impl ReadConn {
 impl Drop for ReadConn {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
+            self.gauge.release();
             if !self.healthy {
                 return;
             }
