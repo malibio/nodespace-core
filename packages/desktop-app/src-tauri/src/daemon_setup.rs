@@ -203,6 +203,25 @@ pub fn kill_stale_daemon_sync() {
     let _ = std::fs::remove_file(&socket_path);
 }
 
+/// This process's own executable path, symlinks resolved — the value every
+/// platform hands the daemon as `NODESPACE_UI_BINARY`.
+///
+/// This function runs inside `nodespace-app`, so `current_exe()` *is* the UI
+/// binary the daemon needs in order to re-launch the GUI from the tray.
+/// `canonicalize()` resolves the symlinks and wrapper paths some macOS and
+/// Linux launch contexts produce, so the daemon is handed a path that still
+/// resolves from a different process with a different working directory.
+///
+/// Shared by all three service definitions (launchd plist, systemd unit,
+/// Windows direct spawn) so the variable cannot come to mean three subtly
+/// different things depending on the platform.
+fn current_exe_canonical() -> Result<PathBuf> {
+    std::env::current_exe()
+        .context("Cannot resolve current executable path for NODESPACE_UI_BINARY")?
+        .canonicalize()
+        .context("Cannot canonicalize current executable path for NODESPACE_UI_BINARY")
+}
+
 fn resolve_sidecar_path_sync() -> Option<PathBuf> {
     sidecar_path_from_exe(
         &std::env::current_exe().ok()?,
@@ -802,16 +821,7 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
     let bin_escaped = xml_escape(&bin_str);
     let label_escaped = xml_escape(launch_agent_label());
 
-    // The UI binary path: this function runs inside nodespace-app, so current_exe()
-    // returns the path the daemon needs to re-launch the GUI from the tray.
-    // canonicalize() resolves symlinks/wrapper paths that some macOS launch contexts produce.
-    let ui_binary = xml_escape(
-        &std::env::current_exe()
-            .context("Cannot resolve current executable path for NODESPACE_UI_BINARY")?
-            .canonicalize()
-            .context("Cannot canonicalize current executable path for NODESPACE_UI_BINARY")?
-            .to_string_lossy(),
-    );
+    let ui_binary = xml_escape(&current_exe_canonical()?.to_string_lossy());
 
     // Pro edition: inject the deployment-wide Supabase endpoint the sync daemon
     // needs. Only the project URL and publishable anon key are baked in — both are
@@ -948,6 +958,19 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     // If bootstrap still fails, try kickstart as a last resort (handles the
     // case where bootout succeeded but the job is immediately re-registered by
     // launchd's KeepAlive before our retry can bootstrap it).
+    //
+    // Note what kickstart does NOT do: it restarts the job definition launchd
+    // already has loaded, and never re-reads the plist we just wrote. So a
+    // daemon started this way runs with whatever `EnvironmentVariables` were
+    // in force when the job was last *bootstrapped*, which on an upgrade can
+    // predate a variable the current plist adds. `NODESPACE_UI_BINARY` is the
+    // one that has been observed missing this way; the tray now falls back to
+    // the standard install locations rather than depending on it, so a
+    // stale-env daemon is recoverable instead of leaving a dead menu item.
+    // `NODESPACED_SOCKET` and `NODESPACED_DB_PATH` are safe to lose here:
+    // the daemon's own defaults are byte-identical to the values written into
+    // the plist (`$HOME/.nodespace/daemon.sock` and the default database dir),
+    // so a daemon missing them serves exactly the same socket and database.
     let retry_stderr = String::from_utf8_lossy(&retry.stderr);
     tracing::warn!(
         "launchctl bootstrap retry failed ({}); attempting kickstart",
@@ -974,7 +997,10 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
             err = ks_err.trim()
         ));
     }
-    tracing::info!("launchd agent kickstarted successfully");
+    tracing::warn!(
+        "launchd agent kickstarted from its already-loaded job definition — the plist just \
+         written was NOT re-read, so this daemon may be running with a stale environment"
+    );
     Ok(())
 }
 
@@ -1081,15 +1107,7 @@ fn write_systemd_service(home: &Path, service_path: &Path, daemon_bin: &Path) ->
     let log_out = format!("{}/{}/nodespaced.log", home_str, DAEMON_LOG_DIR);
     let log_err = format!("{}/{}/nodespaced-error.log", home_str, DAEMON_LOG_DIR);
 
-    // This function runs inside nodespace-app, so current_exe() is the UI binary
-    // the daemon needs to re-launch the GUI from the tray.
-    // canonicalize() resolves any symlinks that some Linux launch contexts produce.
-    let ui_binary = std::env::current_exe()
-        .context("Cannot resolve current executable path for NODESPACE_UI_BINARY")?
-        .canonicalize()
-        .context("Cannot canonicalize current executable path for NODESPACE_UI_BINARY")?
-        .to_string_lossy()
-        .into_owned();
+    let ui_binary = current_exe_canonical()?.to_string_lossy().into_owned();
 
     // systemd Environment= values with spaces must be single-quoted. Escape embedded
     // single quotes as '\'' (end quote, literal single quote, reopen quote).
@@ -1252,11 +1270,34 @@ fn spawn_daemon_windows(daemon_bin: &Path, log_dir: &Path) -> Result<()> {
 
     let (stdout_path, stderr_path) = daemon_log_paths(log_dir);
 
-    Command::new(daemon_bin)
+    let mut command = Command::new(daemon_bin);
+    command
         .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
         .stdin(Stdio::null())
         .stdout(daemon_log_stdio(&stdout_path))
-        .stderr(daemon_log_stdio(&stderr_path))
+        .stderr(daemon_log_stdio(&stderr_path));
+
+    // Windows is the one platform where the app spawns the daemon itself
+    // rather than handing it to a service manager, so it is also the only
+    // place that has to pass `NODESPACE_UI_BINARY` explicitly. The daemon
+    // otherwise inherits this process's environment, which does not contain
+    // it — the launchd plist and systemd unit are where it is set on the other
+    // two platforms — and the tray's "Open NodeSpace" would have nothing to
+    // launch. A failure to resolve our own executable path is not worth
+    // aborting the daemon spawn over: the tray falls back to the standard
+    // install locations, so log it and start the daemon regardless.
+    match current_exe_canonical() {
+        Ok(ui_binary) => {
+            command.env("NODESPACE_UI_BINARY", &ui_binary);
+        }
+        Err(e) => tracing::warn!(
+            error = ?e,
+            "Cannot resolve NODESPACE_UI_BINARY for the spawned daemon; the tray will fall \
+             back to standard install locations"
+        ),
+    }
+
+    command
         .spawn()
         .with_context(|| format!("Failed to spawn {}", daemon_bin.display()))?;
     tracing::info!(
@@ -1515,6 +1556,44 @@ mod macos_plist_keepalive_tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    /// `NODESPACE_UI_BINARY` is what lets the daemon's tray re-launch the GUI,
+    /// and it is only ever set from here (and the systemd unit / the Windows
+    /// spawn) -- nothing else in the daemon's environment supplies it. The
+    /// value must be this process's own canonicalized executable, since that
+    /// is by definition the UI binary.
+    ///
+    /// The tray falls back to the standard install locations when this is
+    /// absent, so losing it is no longer fatal; it is still the preferred
+    /// source, because it is the only one that stays correct for an app
+    /// installed somewhere non-standard.
+    #[test]
+    fn plist_exports_the_ui_binary_the_tray_relaunches() {
+        let home = scratch_dir("uibinary");
+        let plist_path = home.join("Library/LaunchAgents/app.nodespace.daemon.plist");
+        let daemon_bin = home.join("bin/nodespaced");
+
+        write_plist(&home, &plist_path, &daemon_bin).expect("write_plist should succeed");
+        let contents = std::fs::read_to_string(&plist_path).expect("plist should be written");
+
+        let expected = std::env::current_exe()
+            .expect("current_exe")
+            .canonicalize()
+            .expect("canonicalize");
+        assert!(
+            contents.contains("<key>NODESPACE_UI_BINARY</key>"),
+            "the plist must export NODESPACE_UI_BINARY, or a launchd-started daemon has no \
+             configured way to find the GUI: {contents}"
+        );
+        assert!(
+            contents.contains(&format!("<string>{}</string>", expected.display())),
+            "NODESPACE_UI_BINARY must be this process's own canonicalized executable \
+             ({}), not a guess: {contents}",
+            expected.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn keep_alive_dict_is_well_formed_xml() {
         let home = scratch_dir("wellformed");
@@ -1587,6 +1666,32 @@ mod pkg_plist_matches_app_plist_tests {
             contents.contains("<key>SuccessfulExit</key>\n        <false/>"),
             "the .pkg's plist must use the conditional {{SuccessfulExit: false}} form, matching \
              write_plist: {contents}"
+        );
+    }
+
+    /// This one asserts an *absence*, and the reasoning matters more than the
+    /// assertion. Unlike `write_plist`, this file is static: it is written
+    /// before any NodeSpace process runs, so it cannot call `current_exe()`
+    /// and has no way to learn where the app was installed. It therefore sets
+    /// no `NODESPACE_UI_BINARY`, and a daemon started by the .pkg's
+    /// LaunchAgent has never had one -- the tray's "Open NodeSpace" depended
+    /// entirely on the daemon later being restarted by the *app's* plist.
+    ///
+    /// That is fine only because `tray::resolve_ui_binary` now falls back to
+    /// the standard install locations, which is where the .pkg puts the app.
+    /// If someone adds a hardcoded `NODESPACE_UI_BINARY` here, it would be a
+    /// guess baked in at build time that outranks that live check and goes
+    /// stale the moment the user moves the app -- exactly the stale-variable
+    /// failure the fallback exists to absorb. Delete this test only alongside
+    /// a real mechanism for learning the install path.
+    #[test]
+    fn pkg_plist_does_not_hardcode_a_ui_binary_path() {
+        let contents = pkg_plist_contents();
+        assert!(
+            !contents.contains("NODESPACE_UI_BINARY"),
+            "the .pkg's static plist cannot know where the app was installed, so it must \
+             leave NODESPACE_UI_BINARY unset and let the tray resolve it from the standard \
+             install locations at click time: {contents}"
         );
     }
 }

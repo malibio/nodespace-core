@@ -198,6 +198,10 @@ struct TrayState {
     _tray: tray_icon::TrayIcon,
     status_item: MenuItem,
     ui_binary: Option<PathBuf>,
+    /// Retained (not just its id) so [`TrayState::refresh_ui_binary`] can
+    /// re-label and re-enable it when the UI binary appears or disappears
+    /// while the daemon is running.
+    open_item: MenuItem,
     open_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     /// Databases submenu, repopulated whenever a registry snapshot arrives.
@@ -207,17 +211,37 @@ struct TrayState {
     database_items: Vec<(MenuItem, DatabaseId)>,
 }
 
+/// Label for the "Open NodeSpace" item.
+///
+/// When no UI binary can be resolved the item is disabled, and a disabled item
+/// reading plain "Open NodeSpace" says only that the action is unavailable,
+/// not why. Naming the reason in the label is the only channel the tray has —
+/// a `tracing::warn!` into a log file is invisible to someone looking at a
+/// menu.
+fn open_item_label(ui_available: bool) -> &'static str {
+    if ui_available {
+        "Open NodeSpace"
+    } else {
+        "Open NodeSpace (app not found)"
+    }
+}
+
 /// Build the tray menu. Status starts at "0 active calls" because the daemon
 /// hasn't accepted any RPCs yet at the point the tray comes up.
-fn build_menu() -> Result<(
-    Menu,
-    MenuItem,
-    Submenu,
-    tray_icon::menu::MenuId,
-    tray_icon::menu::MenuId,
-)> {
+///
+/// `ui_available` reflects whether [`resolve_ui_binary`] found a UI binary. It
+/// gates "Open NodeSpace" rather than being ignored: an enabled item that does
+/// nothing when clicked is the worst of the options, since the user gets no
+/// signal at all that the daemon cannot find the GUI. Greyed out, the tray at
+/// least says so.
+/// Returns the "Open NodeSpace" item itself rather than only its id, because
+/// its enabled state is not fixed for the tray's lifetime — see
+/// [`TrayState::refresh_ui_binary`].
+fn build_menu(
+    ui_available: bool,
+) -> Result<(Menu, MenuItem, Submenu, MenuItem, tray_icon::menu::MenuId)> {
     let menu = Menu::new();
-    let open = MenuItem::new("Open NodeSpace", true, None);
+    let open = MenuItem::new(open_item_label(ui_available), ui_available, None);
     // Starts empty and disabled; the first registry snapshot fills it. The
     // daemon builds the registry after the tray is already up, so an empty
     // submenu is the honest state until then rather than a missing one.
@@ -235,13 +259,7 @@ fn build_menu() -> Result<(
         .context("append separator")?;
     menu.append(&quit).context("append Quit item")?;
 
-    Ok((
-        menu,
-        status,
-        databases,
-        open.id().clone(),
-        quit.id().clone(),
-    ))
+    Ok((menu, status, databases, open, quit.id().clone()))
 }
 
 fn load_icon() -> Result<Icon> {
@@ -252,13 +270,82 @@ fn load_icon() -> Result<Icon> {
     Icon::from_rgba(image.into_raw(), w, h).context("build tray Icon from RGBA buffer")
 }
 
-/// Resolve the Tauri UI binary path. Honors `NODESPACE_UI_BINARY` so dev
-/// builds and packaged installs can point at different artifacts without
-/// recompiling. Returns `None` if unset — in that case "Open NodeSpace" logs
-/// a warning and is otherwise inert, which is the right behavior in tests
-/// and headless daemon runs.
+/// Standard install locations for the UI binary, in the order they are tried
+/// after `NODESPACE_UI_BINARY`. Split out as a pure function so the fallback
+/// list is assertable in tests without touching the real filesystem.
+///
+/// macOS covers both the system-wide install (`/Applications`, what the .pkg
+/// and the Homebrew cask write) and a per-user copy under `~/Applications`,
+/// which is where a user who drags the app out of the .dmg without admin
+/// rights ends up. Linux has no single canonical location for a Tauri
+/// AppImage/deb payload, so only the deb/rpm prefix is listed. Windows uses
+/// the per-user install root Tauri's NSIS/MSI bundles default to.
+fn ui_binary_install_candidates(home: Option<&Path>) -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        const BUNDLE_REL: &str = "NodeSpace.app/Contents/MacOS/nodespace-app";
+        let mut candidates = vec![PathBuf::from("/Applications").join(BUNDLE_REL)];
+        if let Some(home) = home {
+            candidates.push(home.join("Applications").join(BUNDLE_REL));
+        }
+        candidates
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = home;
+        vec![PathBuf::from("/usr/bin/nodespace-app")]
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        home.map(|home| {
+            home.join("AppData")
+                .join("Local")
+                .join("NodeSpace")
+                .join("nodespace-app.exe")
+        })
+        .into_iter()
+        .collect()
+    }
+}
+
+/// Resolve the Tauri UI binary path for the tray's "Open NodeSpace" item.
+///
+/// `NODESPACE_UI_BINARY` wins when set, so dev builds and packaged installs
+/// can point at different artifacts without recompiling — but it is no longer
+/// the only source. The app writes that variable into the launchd plist /
+/// systemd unit it installs, and the daemon therefore loses it whenever it is
+/// restarted from a job definition that predates the variable: `launchctl
+/// kickstart` (the last fallback in the app's bootstrap) restarts the
+/// *already-loaded* job rather than re-reading the plist, so an upgrade can
+/// leave a perfectly healthy daemon running with no way to find the GUI. The
+/// install-location fallback makes that recoverable without another restart.
+///
+/// Every candidate is checked for existence — a path that does not resolve to
+/// a real file is worse than `None`, because it would leave the menu item
+/// enabled and then fail at spawn time. `None` (nothing set, nothing
+/// installed) is still the correct answer for tests and headless daemon runs,
+/// and the caller greys the menu item out rather than leaving it inert.
 fn resolve_ui_binary() -> Option<PathBuf> {
-    std::env::var_os("NODESPACE_UI_BINARY").map(PathBuf::from)
+    if let Some(from_env) = std::env::var_os("NODESPACE_UI_BINARY") {
+        let path = PathBuf::from(from_env);
+        if path.is_file() {
+            return Some(path);
+        }
+        // A stale env var — the app moved or was uninstalled since the service
+        // definition was written — is worth saying out loud, since it is the
+        // one case where the configured answer and the working answer differ.
+        tracing::warn!(
+            path = %path.display(),
+            "NODESPACE_UI_BINARY points at a missing file; falling back to install locations"
+        );
+    }
+
+    let home = dirs::home_dir();
+    ui_binary_install_candidates(home.as_deref())
+        .into_iter()
+        .find(|candidate| candidate.is_file())
 }
 
 /// Run the tray on the calling thread. **Must be the main thread on macOS.**
@@ -389,7 +476,7 @@ pub fn run<T>(seed_controller: impl FnOnce(TrayController) -> T) -> Result<T> {
 
 fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
     let icon = load_icon()?;
-    let (menu, status_item, databases_menu, open_id, quit_id) = build_menu()?;
+    let (menu, status_item, databases_menu, open_item, quit_id) = build_menu(ui_binary.is_some())?;
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("NodeSpace")
@@ -397,10 +484,12 @@ fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
         .build()
         .context("build TrayIcon")?;
 
+    let open_id = open_item.id().clone();
     Ok(TrayState {
         _tray: tray,
         status_item,
         ui_binary,
+        open_item,
         open_id,
         quit_id,
         databases_menu,
@@ -409,6 +498,34 @@ fn initialize_tray(ui_binary: Option<PathBuf>) -> Result<TrayState> {
 }
 
 impl TrayState {
+    /// Re-run [`resolve_ui_binary`] and bring the "Open NodeSpace" item's
+    /// label and enabled state back in line with the answer.
+    ///
+    /// The daemon long outlives any single state of the filesystem — a
+    /// LaunchAgent starts it at login, which can easily be before the app
+    /// reaches /Applications on a first install, and it keeps running while
+    /// the app is moved, upgraded or reinstalled underneath it. Resolving once
+    /// at startup would freeze whichever answer happened to be true then, so a
+    /// daemon that came up too early would grey the item out permanently even
+    /// after the app appeared.
+    ///
+    /// Returns whether a UI binary is currently available, so callers that
+    /// need the answer don't have to re-inspect the field.
+    fn refresh_ui_binary(&mut self) -> bool {
+        let resolved = resolve_ui_binary();
+        let available = resolved.is_some();
+
+        // Only touch the native menu item when the answer actually changed:
+        // this runs on every click and every registry snapshot, and a no-op
+        // set_text/set_enabled pair on each one is needless platform churn.
+        if resolved != self.ui_binary {
+            self.open_item.set_text(open_item_label(available));
+            self.open_item.set_enabled(available);
+            self.ui_binary = resolved;
+        }
+        available
+    }
+
     /// Replace the Databases submenu contents with `snapshot`.
     ///
     /// Removes the previously-appended items rather than the whole submenu, so
@@ -426,9 +543,16 @@ impl TrayState {
         }
         self.database_items.clear();
 
+        // Every database item opens the UI, so without a UI binary they are as
+        // inert as "Open NodeSpace" would be — disable them for the same
+        // reason, on top of whatever the entry itself says about the database.
+        // Re-resolving here (rather than reading the startup snapshot) is also
+        // what refreshes "Open NodeSpace" itself for a daemon that is never
+        // clicked but does receive registry snapshots.
+        let ui_available = self.refresh_ui_binary();
         let mut failed = 0usize;
         for entry in database_menu_entries(snapshot) {
-            let item = MenuItem::new(&entry.label, entry.enabled, None);
+            let item = MenuItem::new(&entry.label, entry.enabled && ui_available, None);
             match self.databases_menu.append(&item) {
                 Ok(()) => self.database_items.push((item, entry.id)),
                 Err(e) => {
@@ -484,13 +608,22 @@ impl TrayState {
     /// already-running instance focuses its window and switches to the
     /// requested database in place on receiving it.
     fn open_ui(&mut self, database: Option<DatabaseId>) -> Result<()> {
-        let Some(path) = self.ui_binary.as_ref() else {
-            tracing::warn!(
-                "Open NodeSpace selected but NODESPACE_UI_BINARY is unset; \
-                 ignoring (set the env var or wire installation defaults)"
-            );
-            return Ok(());
-        };
+        // Re-resolve before using the startup snapshot. The daemon outlives
+        // any single state of the filesystem: it is started at login by a
+        // LaunchAgent that can easily come up before the app is in
+        // /Applications, and it survives the app being moved, reinstalled or
+        // upgraded underneath it. A path cached at startup would be wrong in
+        // exactly those cases, and re-checking costs one `stat` per click.
+        self.refresh_ui_binary();
+
+        // Unreachable through the menu — the items that call this are built
+        // disabled when `ui_binary` is `None`. Kept as a hard error rather than
+        // an `Ok(())` so that if a future caller does reach it, the failure
+        // surfaces instead of being swallowed into a successful-looking no-op.
+        let path = self.ui_binary.as_ref().context(
+            "no NodeSpace UI binary found: NODESPACE_UI_BINARY is unset or stale and the app \
+             is not installed in a standard location",
+        )?;
 
         let mut command = build_ui_command(path, database.as_ref());
         let mut child = command
@@ -675,21 +808,107 @@ mod tests {
         drop(icon);
     }
 
-    // Both halves of the env-var contract live in one test: parallel tests
-    // share the process env, so a separate "unset" test would race with the
-    // "set" test and flake.
+    /// Every `resolve_ui_binary` case that touches the process env lives in
+    /// this one test: parallel tests share the process env, so splitting them
+    /// into separate `#[test]` fns would let them race and flake.
+    ///
+    /// Two properties, both load-bearing:
+    ///
+    /// 1. The env var must name a real file to win. The old contract accepted
+    ///    any string, which is what let a stale variable — the app moved or
+    ///    was uninstalled since the service definition was written — resolve
+    ///    to a path that then failed at spawn time, behind an enabled menu
+    ///    item.
+    /// 2. Resolution re-reads the filesystem on every call rather than
+    ///    memoizing. A daemon started at login by a LaunchAgent routinely
+    ///    comes up before the app is in place on a first install; if the "no
+    ///    UI binary" answer stuck, its tray would stay greyed out for the rest
+    ///    of the session even once the app appeared.
     #[test]
-    fn resolve_ui_binary_honors_env_var() {
-        std::env::set_var("NODESPACE_UI_BINARY", "/opt/nodespace/ui");
-        let set_result = resolve_ui_binary();
-        std::env::remove_var("NODESPACE_UI_BINARY");
-        let unset_result = resolve_ui_binary();
+    fn resolve_ui_binary_requires_the_env_var_to_name_a_real_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ui = dir.path().join("nodespace-app");
 
-        assert_eq!(
-            set_result.as_deref(),
-            Some(std::path::Path::new("/opt/nodespace/ui"))
+        // Same path, twice, either side of the file coming into existence.
+        std::env::set_var("NODESPACE_UI_BINARY", &ui);
+        let before_it_exists = resolve_ui_binary();
+        std::fs::write(&ui, b"#!/bin/sh\n").expect("write fake UI binary");
+        let after_it_exists = resolve_ui_binary();
+
+        std::env::remove_var("NODESPACE_UI_BINARY");
+
+        assert_ne!(
+            before_it_exists.as_deref(),
+            Some(ui.as_path()),
+            "a stale env var must never be returned — it would leave the menu item enabled \
+             and fail only at spawn time"
         );
-        assert!(unset_result.is_none());
+        assert_eq!(
+            after_it_exists.as_deref(),
+            Some(ui.as_path()),
+            "an env var naming a real file must win outright, and the same path must start \
+             resolving as soon as the file exists — resolution cannot be memoized, or a \
+             daemon that started before the app was installed stays broken all session"
+        );
+    }
+
+    /// The fallback list is what makes the tray survive a daemon restarted
+    /// without the plist's `EnvironmentVariables` — a `launchctl kickstart`
+    /// restarts the already-loaded job and never re-reads the plist, so the
+    /// variable can simply be absent from an otherwise healthy daemon.
+    #[test]
+    fn install_candidates_cover_the_standard_locations() {
+        let home = PathBuf::from("/Users/example");
+        let candidates = ui_binary_install_candidates(Some(&home));
+
+        assert!(
+            !candidates.is_empty(),
+            "every supported platform needs at least one install location to fall back to"
+        );
+        assert!(
+            candidates.iter().all(|c| c.is_absolute()),
+            "candidates are probed with `is_file()` from the daemon's own working \
+             directory, so a relative path would resolve unpredictably: {candidates:?}"
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                candidates,
+                vec![
+                    PathBuf::from("/Applications/NodeSpace.app/Contents/MacOS/nodespace-app"),
+                    home.join("Applications/NodeSpace.app/Contents/MacOS/nodespace-app"),
+                ],
+                "the system-wide install must be preferred over a per-user copy"
+            );
+        }
+    }
+
+    /// Without a home directory the list must degrade rather than panic or
+    /// produce a path rooted at nothing.
+    #[test]
+    fn install_candidates_without_a_home_dir_stay_absolute() {
+        let candidates = ui_binary_install_candidates(None);
+        assert!(candidates.iter().all(|c| c.is_absolute()));
+    }
+
+    /// The heart of the fix: a resolvable UI binary leaves the item clickable,
+    /// and an unresolvable one greys it out AND says why. An enabled item that
+    /// silently does nothing is the exact failure this replaces.
+    #[test]
+    fn open_item_is_labelled_with_the_reason_when_no_ui_binary_exists() {
+        assert_eq!(open_item_label(true), "Open NodeSpace");
+
+        let unavailable = open_item_label(false);
+        assert_ne!(
+            unavailable, "Open NodeSpace",
+            "a disabled item must not read identically to a working one — the label is the \
+             only channel the tray has to explain why the action is unavailable"
+        );
+        assert!(
+            unavailable.contains("not found"),
+            "the label should name the reason, got {unavailable:?}"
+        );
     }
 
     /// A plain "Open NodeSpace" (no database requested) must not set the env
