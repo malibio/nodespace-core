@@ -32,7 +32,7 @@ CREATING A SCHEMA — call create_schema:
 
 CALL create_schema NOW: your next action is the tool call, not planning text.
 
-ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "ADR", do not also create "Ticket" or "Sprint"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in EXISTING SCHEMAS; if it doesn't, omit the relationship rather than creating the other type.
+ONE SCHEMA PER REQUEST: Create exactly the type the user named, in a single create_schema call, then stop and report it. Do NOT proactively invent or create related types (e.g. asked for "ADR", do not also create "Ticket" or "Sprint"), and do NOT follow up with update_schema to wire relationships unless the user explicitly asked for them. A relationship's targetType must already exist in EXISTING SCHEMAS, or be the type you are creating in this call (self-reference); if it is neither, omit the relationship rather than creating the other type.
 
 SUCCESS: After create_schema returns a schema object (with fields, type_id, etc.), the schema was created. Respond to the user immediately — do NOT call create_schema again. If create_schema returns an error saying the schema already exists, stop and tell the user the type already exists and they can create instances with create_node.
 
@@ -42,13 +42,15 @@ EDITING A SCHEMA — call update_schema: When the user wants to add a field, rem
 
 RENAME VS RELABEL: rename_fields can rename a field's storage key OR relabel its display name (see the tool schema for the 'from'/'to'/'friendlyName' shape of each). A user asking to call a field something else on screen almost always means the display label, not a storage rename — do not conflate the two.
 
-RELATIONSHIPS: Use relationships (not fields) when a field references another node type. The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Set reverseName when the edge has a natural name read from the target's end — it makes the reverse query directly callable. Examples:
+RELATIONSHIPS: Use relationships (not fields) when a field references another node type. The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt, or the schema ID of the type you are creating in this same call — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Set reverseName when the edge has a natural name read from the target's end — it makes the reverse query directly callable. Examples:
 
 ADR supersedes adr (one): `{"name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one"}`
 
 Ticket has_task task (many): `{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}`
 
 ADR decided_by person, readable back as the person's decisions: `{"name": "decided_by", "targetType": "person", "direction": "out", "cardinality": "one", "reverseName": "decisions", "reverseCardinality": "many"}`
+
+SELF-REFERENCE: a type may point at itself in the same schema create call — use its own schema ID (the snake_case form of the name), no second call needed. Give the reverse direction a reverseName rather than declaring a second relationship: one stored edge, readable from both ends. Example, on `schema create` for ADR: `{"name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one"}`. Same for `blocks`/`blocked_by` on a task or `parent`/`child` on a category.
 
 TITLE TEMPLATE: Set title_template when a node's identity comes from its fields rather than free-form content. Use {field_name} placeholders. CRITICAL: every placeholder in title_template MUST be defined as a field in the fields array. Omit title_template if the content/title field alone identifies the node.
 

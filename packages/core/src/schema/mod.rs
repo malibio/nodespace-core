@@ -372,22 +372,37 @@ async fn schema_is_core(
 /// Reject relationships whose `targetType` does not name an existing schema.
 ///
 /// `TARGET_TYPE_MUST_EXIST` (`skill_rules.rs`) already tells the model this in
-/// prose, but nothing previously enforced it: `handle_create_schema`,
-/// `handle_update_schema`, and `handle_add_schema_relationship` all persisted
-/// a relationship's `targetType` verbatim with no existence check, so a model
-/// that ignored the prose rule (or split one request into two schemas and
-/// referenced the second before it existed) got a silent success and a
-/// dangling reference instead of an actionable error. `targetType: None` is
-/// left unvalidated — omitting the target entirely is the documented escape
-/// hatch for "the type doesn't exist yet."
+/// prose, but nothing previously enforced it: `handle_create_schema` and
+/// `handle_update_schema` both persisted a relationship's `targetType`
+/// verbatim with no existence check, so a model that ignored the prose rule
+/// (or split one request into two schemas and referenced the second before it
+/// existed) got a silent success and a dangling reference instead of an
+/// actionable error. `targetType: None` is left unvalidated — omitting the
+/// target entirely is the documented escape hatch for "the type doesn't exist
+/// yet."
+///
+/// `pending_schema_id` names the schema the calling operation is creating,
+/// which does not exist yet and so cannot be found by lookup. A relationship
+/// targeting it is nonetheless always resolvable — the target is guaranteed to
+/// exist the moment the call commits — so it is accepted rather than treated
+/// as dangling. Self-reference is a routine modelling shape (`supersedes` on
+/// an ADR, `blocks` on a task, `parent` on a category), and rejecting it was a
+/// false positive, not a safety property. Every other target keeps the lookup:
+/// those genuinely can dangle, which is the case this guard was written for.
+/// `handle_update_schema` passes `None` — the schema it edits already exists,
+/// so a self-reference there resolves through the ordinary lookup.
 async fn validate_relationship_targets_exist(
     node_service: &Arc<NodeService>,
     relationships: &[crate::models::schema::SchemaRelationship],
+    pending_schema_id: Option<&str>,
 ) -> Result<(), MarkdownError> {
     for rel in relationships {
         let Some(target_type) = rel.target_type.as_deref() else {
             continue;
         };
+        if pending_schema_id == Some(target_type) {
+            continue;
+        }
         let exists = node_service
             .get_schema_node(target_type)
             .await
@@ -397,7 +412,9 @@ async fn validate_relationship_targets_exist(
             return Err(MarkdownError::invalid_params(format!(
                 "Relationship '{}' targets '{}', which is not an existing schema. \
                  targetType must name a schema that already exists — omit the relationship \
-                 entirely if the target type doesn't exist yet, rather than inventing one.",
+                 entirely if the target type doesn't exist yet, rather than inventing one. \
+                 (A relationship pointing back at the schema being created is allowed: \
+                 give its schema ID, the snake_case form of the name.)",
                 rel.name, target_type
             )));
         }
@@ -567,15 +584,19 @@ pub async fn handle_create_schema(
     // Get relationships (default to empty)
     let relationships = params.relationships.unwrap_or_default();
 
+    // Generate schema ID. Needed before validation so a relationship targeting
+    // the schema this call is creating can be recognised as self-referential.
+    let schema_id = crate::services::node_service::normalize_schema_id(&params.name);
+
     // Reject reserved relationship names and dangling targetTypes BEFORE the
     // schema node exists, so a bad declaration can't leave a half-created
     // schema behind. (`set_schema_relationships` re-checks reserved names —
-    // via the same shared predicate — as the write-path invariant.)
+    // via the same shared predicate — as the write-path invariant.) A target
+    // naming `schema_id` itself is the one case that cannot dangle, so it is
+    // accepted here rather than deferred to a post-write check — validation
+    // still runs in full before the first write.
     reject_reserved_relationship_names(&relationships)?;
-    validate_relationship_targets_exist(node_service, &relationships).await?;
-
-    // Generate schema ID
-    let schema_id = crate::services::node_service::normalize_schema_id(&params.name);
+    validate_relationship_targets_exist(node_service, &relationships, Some(&schema_id)).await?;
 
     // Check if schema already exists — return a clear error so the agent knows
     // to use create_node instead of retrying create_schema. The rejection
@@ -1114,8 +1135,10 @@ pub async fn handle_update_schema(
         }
         reject_reserved_relationship_names(add_rels)?;
         // Reject a targetType that doesn't exist yet — see
-        // validate_relationship_targets_exist.
-        validate_relationship_targets_exist(node_service, add_rels).await?;
+        // validate_relationship_targets_exist. No pending schema here: the
+        // schema being edited was loaded above, so a relationship targeting
+        // it resolves through the ordinary existence lookup.
+        validate_relationship_targets_exist(node_service, add_rels, None).await?;
         relationships_added = add_rels.len();
         relationships.extend(add_rels.clone());
     }

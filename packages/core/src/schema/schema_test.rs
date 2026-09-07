@@ -2849,6 +2849,331 @@ async fn test_update_schema_add_relationships_to_existing_target_type_succeeds()
 }
 
 // ============================================================================
+// self-referential relationships
+// ============================================================================
+//
+// A relationship whose targetType names the schema being created is the one
+// target that cannot dangle — it is guaranteed to resolve the moment the call
+// commits. Rejecting it was a false positive, and it is a routine modelling
+// shape (supersedes on an ADR, blocks on a task, parent on a category). These
+// tests pin both halves: self-reference is accepted, and every other target
+// keeps the existing dangling-reference guard unchanged.
+
+#[tokio::test]
+async fn test_create_schema_accepts_self_referential_relationship() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "ADR",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect("a relationship targeting the schema being created must be accepted");
+
+    assert_eq!(result["schemaId"], "adr");
+
+    // The declaration actually landed — not merely accepted and dropped.
+    let schema = svc
+        .get_schema_node("adr")
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    let rel = schema
+        .get_relationship("supersedes")
+        .expect("self-referential declaration should be persisted");
+    assert_eq!(rel.target_type.as_deref(), Some("adr"));
+}
+
+#[tokio::test]
+async fn test_create_schema_accepts_self_reference_alongside_existing_target() {
+    let (svc, _tmp) = create_test_service().await;
+
+    create_base_schema(&svc, "Ticket", &["title"]).await;
+
+    // Mixed batch: the self-reference is exempt from the lookup, the other
+    // target still goes through it.
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "ADR",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
+                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "many" }
+            ]
+        }),
+    )
+    .await
+    .expect("self-reference alongside an existing target should be accepted");
+
+    assert_eq!(result["schemaId"], "adr");
+
+    let schema = svc
+        .get_schema_node("adr")
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    assert_eq!(schema.relationships.len(), 2);
+}
+
+#[tokio::test]
+async fn test_create_schema_self_reference_reverse_edge_resolves() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The forward/reverse pair a self-referential type actually needs. Both
+    // declarations point at the same schema and must both persist with their
+    // own direction.
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "ADR",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
+                { "name": "superseded_by", "targetType": "adr", "direction": "in", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect("a self-referential forward/reverse pair must be accepted");
+
+    let schema = svc
+        .get_schema_node("adr")
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+
+    let forward = schema
+        .get_relationship("supersedes")
+        .expect("forward edge should be persisted");
+    let reverse = schema
+        .get_relationship("superseded_by")
+        .expect("reverse edge should be persisted");
+
+    assert_eq!(forward.target_type.as_deref(), Some("adr"));
+    assert_eq!(reverse.target_type.as_deref(), Some("adr"));
+    assert_ne!(
+        forward.direction, reverse.direction,
+        "the two edges of a self-referential pair must keep distinct directions"
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_self_reference_uses_normalized_schema_id() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // The exemption keys off the schema ID (snake_case of the name), which is
+    // also the only string a later lookup could resolve. A multi-word name
+    // must therefore self-reference by its normalized ID.
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Design Decision",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "design_decision", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect("self-reference by normalized schema ID must be accepted");
+
+    let schema = svc
+        .get_schema_node("design_decision")
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    assert_eq!(
+        schema
+            .get_relationship("supersedes")
+            .expect("declaration should be persisted")
+            .target_type
+            .as_deref(),
+        Some("design_decision")
+    );
+}
+
+#[tokio::test]
+async fn test_create_schema_self_reference_by_display_name_is_rejected() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // "Design Decision" is not a schema ID and never resolves through a
+    // lookup, so it must still be rejected — the exemption is for the ID the
+    // call is actually creating, not for anything resembling the name.
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Design Decision",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "Design Decision", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("a targetType that is not the schema ID must still be rejected");
+
+    assert!(
+        err.to_string().contains("Design Decision"),
+        "error should name the unresolvable target: {err}"
+    );
+    assert!(
+        svc.get_schema_node("design_decision")
+            .await
+            .expect("get_schema_node failed")
+            .is_none(),
+        "a rejected create must persist no schema node"
+    );
+}
+
+#[tokio::test]
+async fn test_self_reference_does_not_bypass_the_already_exists_check() {
+    let (svc, _tmp) = create_test_service().await;
+
+    create_base_schema(&svc, "ADR", &["status"]).await;
+
+    // The self-reference exemption skips only the target lookup. Re-creating a
+    // schema that already exists must still be rejected by the duplicate check
+    // that runs immediately after validation.
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "ADR",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("re-creating an existing schema must still be rejected");
+
+    assert!(
+        err.to_string().contains("already exists"),
+        "the duplicate-schema rejection must still fire: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_schema_accepts_self_referential_relationship() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let adr_id = create_base_schema(&svc, "ADR", &["status"]).await;
+
+    handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": adr_id,
+            "add_relationships": [
+                { "name": "supersedes", "targetType": adr_id, "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect("add_relationships targeting the schema being edited must be accepted");
+
+    let schema = svc
+        .get_schema_node(&adr_id)
+        .await
+        .expect("get_schema_node failed")
+        .expect("schema should exist");
+    assert_eq!(
+        schema
+            .get_relationship("supersedes")
+            .expect("self-referential declaration should be persisted")
+            .target_type
+            .as_deref(),
+        Some(adr_id.as_str())
+    );
+}
+
+// ============================================================================
+// a rejected create persists nothing
+// ============================================================================
+//
+// Exempting self-reference must not weaken the guarantee the pre-check stands
+// in for: `handle_create_schema` is not atomic, so every rejection has to
+// return before the first write. These pin that for each rejection reason.
+
+#[tokio::test]
+async fn test_rejected_create_persists_no_schema_node() {
+    // (relationships, why) — every declaration-level rejection reason.
+    let cases: Vec<(serde_json::Value, &str)> = vec![
+        (
+            json!([
+                { "name": "has_child", "targetType": "adr", "direction": "out", "cardinality": "many" }
+            ]),
+            "reserved built-in relationship name",
+        ),
+        (
+            json!([
+                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one" }
+            ]),
+            "target type that does not exist",
+        ),
+        (
+            json!([
+                { "name": "supersedes", "targetType": "adrr", "direction": "out", "cardinality": "one" }
+            ]),
+            "typo'd targetType that is neither the pending schema nor an existing one",
+        ),
+        (
+            json!([
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
+                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one" }
+            ]),
+            "a valid self-reference batched with an invalid target",
+        ),
+    ];
+
+    for (relationships, why) in cases {
+        let (svc, _tmp) = create_test_service().await;
+
+        let result = handle_create_schema(
+            &svc,
+            json!({
+                "name": "ADR",
+                "fields": [
+                    { "name": "status", "type": "string", "protection": "user", "indexed": false }
+                ],
+                "relationships": relationships,
+            }),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "create should be rejected for {why}: {result:?}"
+        );
+        assert!(
+            svc.get_schema_node("adr")
+                .await
+                .expect("get_schema_node failed")
+                .is_none(),
+            "no schema node may be written when a create is rejected for {why}"
+        );
+    }
+}
+
+// ============================================================================
 // friendly_name write-boundary defaulting
 // ============================================================================
 
