@@ -18,13 +18,21 @@
 //! each of the three read surfaces that flatten independently — `get_node`,
 //! `query_nodes`, and `get_related_nodes` — because they reach the flattener by
 //! different routes and could drift apart.
+//!
+//! They also pin the reservation that makes the rule safe. Because `_` now
+//! decides classification, a schema that could *declare* a `_`-prefixed field
+//! would relocate the same silent loss rather than close it: the write path
+//! would store such a field top-level and every read would drop it. Both routes
+//! to that state — declaring one at `create_schema`, and renaming an existing
+//! field into one — are rejected, and the tests assert the failure, not just
+//! that the happy path still works.
 
 use anyhow::Result;
 use nodespace_core::{
     db::SqliteStore,
-    models::Node,
+    models::{Node, NodeUpdate},
     ops::{node_ops, rel_ops},
-    schema::handle_create_schema,
+    schema::{handle_create_schema, handle_update_schema},
     services::{InsertPositionOwned, NodeService},
 };
 use serde_json::json;
@@ -233,6 +241,155 @@ async fn object_property_survives_an_update() -> Result<()> {
         props.get("capacity"),
         Some(&json!(1500)),
         "an untouched sibling must survive the deep merge"
+    );
+    Ok(())
+}
+
+/// `bulk_update` normalizes through its own call site rather than the one
+/// `update_node` uses, so it could drift from the single-node path. An empty
+/// object is included because `{}` is the one value whose two readings —
+/// "an object-valued field" and "an empty namespace" — used to be genuinely
+/// indistinguishable.
+#[tokio::test]
+async fn object_property_survives_a_bulk_update() -> Result<()> {
+    let (svc, _tmp) = create_test_service().await?;
+    seed_venue_schema(&svc).await?;
+    let id = create_venue(&svc).await?;
+
+    svc.bulk_update(vec![(
+        id.clone(),
+        NodeUpdate {
+            node_type: None,
+            content: None,
+            properties: Some(json!({ "address": { "city": "Hamburg" }, "notes": {} })),
+            title: None,
+            lifecycle_status: None,
+        },
+    )])
+    .await?;
+
+    let node = node_ops::get_node(&svc, node_ops::GetNodeInput { node_id: id }).await?;
+    let props = properties_of(&node);
+    assert_eq!(
+        props.get("address").and_then(|a| a.get("city")),
+        Some(&json!("Hamburg")),
+        "bulk_update must namespace an object-valued field like the single-node path"
+    );
+    assert_eq!(
+        props.get("notes"),
+        Some(&json!({})),
+        "an empty object is a field value, not an empty namespace to be hoisted"
+    );
+    Ok(())
+}
+
+/// A schema may not declare a `_`-prefixed field, because such a field could be
+/// written but never read back: the write path leaves it outside the type
+/// namespace and the flattener drops it from every read surface.
+///
+/// Without this gate the data loss this file exists to close would simply move
+/// — `create_schema` would accept `_internal_id`, a write would store it
+/// top-level, and every read would omit it with no error. Rejected at schema
+/// creation rather than warned about, because unlike a name that merely shadows
+/// a reserved core property (which stores a field that does work), this one is
+/// unreadable by construction.
+#[tokio::test]
+async fn schema_cannot_declare_an_underscore_prefixed_field() -> Result<()> {
+    let (svc, _tmp) = create_test_service().await?;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Widget",
+            "fields": [{ "name": "_internal_id", "type": "number" }]
+        }),
+    )
+    .await
+    .expect_err("a leading '_' must be rejected, not stored");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("_internal_id") && msg.contains('_'),
+        "the error must name the offending field and its reserved prefix, got: {msg}"
+    );
+
+    // Rejected before any write — a half-created schema would be worse than
+    // the silent loss it replaces.
+    assert!(
+        svc.get_node("widget").await?.is_none(),
+        "a rejected create must leave no schema node behind"
+    );
+    Ok(())
+}
+
+/// Renaming an existing field *to* a `_`-prefixed name is the same loss by
+/// another route, and a worse one: a rename migrates every instance's property
+/// data as it executes, so accepting it would move real stored values into a
+/// key no read path can see.
+#[tokio::test]
+async fn a_field_cannot_be_renamed_to_an_underscore_prefixed_name() -> Result<()> {
+    let (svc, _tmp) = create_test_service().await?;
+    seed_venue_schema(&svc).await?;
+    let id = create_venue(&svc).await?;
+
+    let err = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "venue",
+            "rename_fields": [{ "from": "capacity", "to": "_capacity" }]
+        }),
+    )
+    .await
+    .expect_err("renaming to a reserved prefix must be rejected");
+
+    assert!(
+        err.to_string().contains("_capacity"),
+        "the error must name the destination, got: {err}"
+    );
+
+    // The rejection must land before the migration, not after it: the value is
+    // still readable under its original name.
+    let node = node_ops::get_node(&svc, node_ops::GetNodeInput { node_id: id }).await?;
+    assert_eq!(
+        properties_of(&node).get("capacity"),
+        Some(&json!(1500)),
+        "a rejected rename must not have migrated any instance data"
+    );
+    Ok(())
+}
+
+/// The reservation is on the *stored key*, which is the field name verbatim.
+/// A namespaced name stores under `custom:_internal`, which does not begin with
+/// `_`, so it survives the flattener and stays legal — the gate must not
+/// over-reach into names that round-trip correctly.
+#[tokio::test]
+async fn a_namespaced_field_may_contain_an_underscore_after_the_prefix() -> Result<()> {
+    let (svc, _tmp) = create_test_service().await?;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Gadget",
+            "fields": [{ "name": "custom:_internal", "type": "text" }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("custom:_internal must stay legal: {e}"))?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    svc.create_node(Node::new_with_id(
+        id.clone(),
+        "gadget".to_string(),
+        "Sprocket".to_string(),
+        json!({ "custom:_internal": "kept" }),
+    ))
+    .await?;
+
+    let node = node_ops::get_node(&svc, node_ops::GetNodeInput { node_id: id }).await?;
+    assert_eq!(
+        properties_of(&node).get("custom:_internal"),
+        Some(&json!("kept")),
+        "a prefixed name is a normal field and must round-trip"
     );
     Ok(())
 }

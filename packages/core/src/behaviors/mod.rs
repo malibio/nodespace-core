@@ -1275,6 +1275,20 @@ pub struct SchemaNodeBehavior;
 /// here would reject names the rest of the system handles correctly: CEL strips
 /// the prefix, the graph resolver matches with and without it, and identifier
 /// validation in the query path permits it.
+///
+/// A leading `_` is the one exception, and it is rejected rather than warned
+/// about. `_` marks internal bookkeeping on both sides of the property
+/// round-trip: the write path leaves such keys outside the type's namespace,
+/// and `flatten_namespaced_properties` drops them from every read surface
+/// unconditionally. A field declared with that prefix could therefore be
+/// written but never read back — accepting it would store data that is
+/// unreachable by construction, so this is a hard error rather than a warning
+/// like the reserved-core-property collision (which stores a field that does
+/// work, and only *may* be shadowed later).
+///
+/// The check is on the stored key, which is the full name verbatim, so only a
+/// leading `_` on the whole name is fatal: `custom:_internal` stores under a
+/// key beginning `c`, survives the flattener, and stays legal.
 pub(crate) fn validate_schema_field_name(name: &str) -> Result<(), NodeValidationError> {
     let invalid = |reason: &str| {
         Err(NodeValidationError::InvalidProperties(format!(
@@ -1282,6 +1296,13 @@ pub(crate) fn validate_schema_field_name(name: &str) -> Result<(), NodeValidatio
             name, reason
         )))
     };
+
+    if name.starts_with('_') {
+        return invalid(
+            "a leading '_' is reserved for internal bookkeeping — such a field is \
+             dropped from every read path, so it could be written but never read back",
+        );
+    }
 
     let is_valid_segment =
         |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
