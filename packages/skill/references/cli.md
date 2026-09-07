@@ -12,10 +12,16 @@ judgment calls that a generator cannot produce.
 All commands accept `--json` for machine-readable output.
 
 **Node JSON shape.** Every command that emits a node returns objects of this
-shape; list-returning commands wrap them as `{"count": N, "nodes": [...]}`. The
-one exception is a **schema** node reached through `relationship get`, which
-comes back in the schema's own shape (`name`, `fields`, `relationships`) rather
-than the node shape — read schemas with `schema get` instead.
+shape; list-returning commands wrap them as `{"count": N, "nodes": [...]}`.
+Every key shown below is present on every node, so parse against these names
+and nothing else. `relationship get` may additionally include `title`,
+`mentions` and `mentioned_in`.
+
+The one real exception is a **schema** node reached through `relationship get`.
+It comes back in the schema's own shape rather than the node shape: camelCase
+keys (`isCore`, `schemaVersion`, `description`, `fields`, `relationships`) plus
+a `uri`, and no `node_type` or `properties` at all. Read schemas with
+`schema get` instead of traversing to them.
 
 ```json
 {

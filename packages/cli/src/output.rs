@@ -154,8 +154,17 @@ pub fn related_node_to_json(node: &serde_json::Value) -> serde_json::Value {
         ("lifecycleStatus", "lifecycle_status"),
         ("mentionedIn", "mentioned_in"),
     ];
-    // Keys the CLI's node shape defines. Anything else at the top level is a
-    // field the typed conversion promoted out of `properties`.
+    // Keys that are node fields in their own right. Anything else at the top
+    // level is a field the typed conversion promoted out of `properties`.
+    //
+    // The first eight are exactly what `node_to_json` emits, so the two shapes
+    // agree on every key a consumer can rely on. The last three are `Node`
+    // fields absent from the gRPC `NodeData` that `node_to_json` builds from:
+    // they are listed so that IF the daemon ever populates them they stay
+    // top-level rather than being misfiled as stored properties. Today the
+    // store leaves `mentions`/`mentioned_in` empty and both are
+    // `skip_serializing_if = "Vec::is_empty"`, so only `title` occurs in
+    // practice.
     const CLI_KEYS: &[&str] = &[
         "id",
         "node_type",
