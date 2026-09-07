@@ -1,10 +1,11 @@
 //! Shared wire types for NodeSpace.
 //!
 //! This crate provides the type definitions and conversion functions shared
-//! between `nodespace-core` (storage layer) and the Tauri command layer
-//! (`packages/desktop-app/src-tauri`). Both crates re-use these types
-//! directly, eliminating the hand-synced mirror that previously lived in
-//! `src-tauri/src/types.rs`.
+//! between `nodespace-core` (storage layer), the Tauri command layer
+//! (`packages/desktop-app/src-tauri`), and `nodespace-cli` (which uses
+//! `flatten_namespaced_properties` to honour the same property contract).
+//! All re-use these types directly, eliminating the hand-synced mirror that
+//! previously lived in `src-tauri/src/types.rs`.
 //!
 //! # Dependencies
 //!
@@ -19,7 +20,7 @@ mod schema;
 mod task;
 
 pub use ai_chat::{AiChatMessage, AiChatNode};
-pub use convert::{node_to_typed_value, nodes_to_typed_values};
+pub use convert::{flatten_namespaced_properties, node_to_typed_value, nodes_to_typed_values};
 pub use helpers::{is_valid_lifecycle_status, LIFECYCLE_STATUSES};
 pub use node::{
     DeleteResult, Node, NodeQuery, NodeReference, NodeUpdate, OrderBy, ValidationError,

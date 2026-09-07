@@ -1006,6 +1006,103 @@ async fn relationship_create_and_get() {
     let _ = shutdown.send(());
 }
 
+/// `relationship get` is a documented read path that does NOT go through
+/// `output.rs`, so it needs its own guard: the daemon builds
+/// `related_nodes_json` itself, and a plain `to_value(Node)` there would
+/// serialize properties exactly as stored — namespaced under the schema id.
+#[tokio::test]
+async fn relationship_get_emits_flat_properties() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "name": "Ticket",
+                    "fields": [{"name": "severity", "type": "string"}],
+                    "relationships": [
+                        {"name": "blocks", "target_type": "ticket", "direction": "out", "cardinality": "many"}
+                    ]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("create ticket schema");
+
+    let make_ticket = |content: &str, severity: &str| {
+        let mut raw = raw.clone();
+        let req = CreateNodeRequest {
+            node_type: "ticket".into(),
+            content: content.into(),
+            parent_id: None,
+            properties: serde_json::json!({"severity": severity}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        };
+        async move {
+            raw.create_node(req)
+                .await
+                .expect("seed ticket")
+                .into_inner()
+                .node_id
+        }
+    };
+
+    let source = make_ticket("source", "low").await;
+    let target = make_ticket("target", "high").await;
+
+    commands::relationship::run(
+        &mut client,
+        commands::relationship::RelationshipAction::Create(commands::relationship::CreateArgs {
+            from: source.clone(),
+            relationship_name: "blocks".into(),
+            to: target.clone(),
+            edge_data: None,
+        }),
+        true,
+    )
+    .await
+    .expect("create relationship");
+
+    let response = raw
+        .get_related_nodes(GetRelatedNodesRequest {
+            node_id: source.clone(),
+            relationship_name: "blocks".into(),
+            direction: "out".into(),
+        })
+        .await
+        .expect("get related nodes")
+        .into_inner();
+
+    let related: serde_json::Value =
+        serde_json::from_str(&response.related_nodes_json).expect("parse related_nodes_json");
+    let first = &related[0];
+
+    assert_eq!(
+        first["properties"]["severity"], "high",
+        "related nodes must carry flat properties like every other read path"
+    );
+    assert!(
+        first["properties"].get("ticket").is_none(),
+        "the schema id must not be observable in `relationship get` output"
+    );
+
+    let _ = shutdown.send(());
+}
+
 #[tokio::test]
 async fn relationship_create_rejects_relationship_undefined_on_source_schema() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
@@ -1163,6 +1260,124 @@ async fn node_update_sets_properties_and_preserves_content() {
     assert_eq!(
         props["text"]["existing"], "keep-me",
         "existing properties must be deep-merged, not replaced"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// The CLI must never expose the storage-layer property nesting.
+///
+/// A consumer that parsed `--json` and read `.properties.status` got `None`
+/// against the nested storage shape and could report "status unknown" about
+/// real data. These assert both halves of the contract at once: storage stays
+/// namespaced under the type key, while what the CLI emits is flat.
+#[tokio::test]
+async fn cli_json_output_is_flat_while_storage_stays_nested() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    // --- a core type -----------------------------------------------------
+    let task_id = raw
+        .create_node(CreateNodeRequest {
+            node_type: "task".into(),
+            content: "Buy groceries".into(),
+            parent_id: None,
+            properties: serde_json::json!({"status": "open"}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create task")
+        .into_inner()
+        .node_id;
+
+    let task = raw
+        .get_node(GetNodeRequest {
+            node_id: task_id.clone(),
+        })
+        .await
+        .expect("get task")
+        .into_inner()
+        .node_data
+        .expect("node_data");
+
+    // Storage is namespaced — unchanged by this fix.
+    let stored: serde_json::Value =
+        serde_json::from_str(&task.properties).expect("parse stored properties");
+    assert_eq!(
+        stored["task"]["status"], "open",
+        "storage must stay nested under the type key"
+    );
+
+    // The CLI surface is flat.
+    let emitted = nodespace_cli::output::node_to_json(&task);
+    assert_eq!(
+        emitted["properties"]["status"], "open",
+        "`jq '.properties.status'` must work with no second parse"
+    );
+    assert!(
+        emitted["properties"].get("task").is_none(),
+        "the schema id must not be observable in CLI output"
+    );
+    assert!(
+        emitted["properties"].get("_schema_version").is_none(),
+        "`_`-prefixed internals must not reach a CLI consumer"
+    );
+
+    // --- a user-defined type ---------------------------------------------
+    commands::schema::run(
+        &mut raw.clone(),
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "name": "Venue",
+                    "fields": [{"name": "capacity", "type": "number"}]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("schema create");
+
+    let venue_id = raw
+        .create_node(CreateNodeRequest {
+            node_type: "venue".into(),
+            content: "Grand Hall".into(),
+            parent_id: None,
+            properties: serde_json::json!({"capacity": 250}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create venue")
+        .into_inner()
+        .node_id;
+
+    let venue = raw
+        .get_node(GetNodeRequest { node_id: venue_id })
+        .await
+        .expect("get venue")
+        .into_inner()
+        .node_data
+        .expect("node_data");
+
+    let emitted = nodespace_cli::output::node_to_json(&venue);
+    assert_eq!(
+        emitted["properties"]["capacity"], 250,
+        "a user-defined type flattens by the same rule as a core type"
+    );
+    assert!(
+        emitted["properties"].get("venue").is_none(),
+        "the schema id must not be observable for user-defined types either"
     );
 
     let _ = shutdown.send(());

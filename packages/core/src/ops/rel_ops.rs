@@ -380,10 +380,19 @@ pub async fn get_related_nodes(
     };
 
     let count = nodes.len();
-    let related_nodes: Vec<Value> = nodes
-        .into_iter()
-        .map(|n| serde_json::to_value(n).unwrap_or(json!(null)))
-        .collect();
+    // Emit the same flat, API-facing shape every other read path produces.
+    // A plain `to_value(Node)` here would serialize properties exactly as
+    // stored — namespaced under the schema id — leaking a storage detail that
+    // must not cross the API boundary, and diverging from `node get`/`query`.
+    //
+    // Note this does more than de-nest: it also promotes type-specific fields
+    // to the top level for `task`/`ai-chat`, reshapes `schema` nodes via
+    // `SchemaNode::from_node`, and injects a `nodespace://` URI. That is the
+    // frontend's wire contract, so do not "simplify" this back to a plain
+    // `to_value` — the shapes are not equivalent. The CLI re-keys this into
+    // its own snake_case node shape (`output::related_node_to_json`).
+    let related_nodes: Vec<Value> =
+        crate::models::nodes_to_typed_values(nodes).map_err(OpsError::Internal)?;
 
     Ok(GetRelatedOutput {
         node_id: input.node_id,

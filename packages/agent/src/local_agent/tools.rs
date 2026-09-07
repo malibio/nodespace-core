@@ -2996,7 +2996,11 @@ impl GraphToolExecutor {
                         node_val.get("title").and_then(|v| v.as_str()).unwrap_or(""),
                         100
                     ),
-                    "type": node_val.get("node_type").or(node_val.get("type")).and_then(|v| v.as_str()).unwrap_or(""),
+                    // `nodeType` is the wire spelling: these nodes come from
+                    // `nodes_to_typed_values`, and `Node` is camelCase-serialized,
+                    // so a `node_type` lookup here never matched and reported
+                    // every node's type as empty.
+                    "type": node_val.get("nodeType").or(node_val.get("type")).and_then(|v| v.as_str()).unwrap_or(""),
                 });
                 // Label each hit with the traversal that actually ran, not the
                 // one requested: a declared `reverseName` resolves to the

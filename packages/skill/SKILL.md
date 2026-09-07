@@ -298,13 +298,19 @@ All `--json` commands output to stdout. Errors are written to stderr with a non-
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "node_type": "text",
-  "content": "Your content",
+  "node_type": "task",
+  "content": "Buy groceries",
   "parent_id": null,
-  "properties": {},
+  "properties": {
+    "status": "open",
+    "priority": "high"
+  },
   "version": 1,
   "lifecycle_status": "active",
   "created_at": "2026-01-01T00:00:00Z",
   "modified_at": "2026-01-01T00:00:00Z"
 }
 ```
+
+`properties` is flat, keyed by the schema's field names: read `jq '.properties.status'`
+directly. Those same bare names are what `--property` and `--filters` take. Empty is `{}`.

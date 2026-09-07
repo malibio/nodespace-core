@@ -11,6 +11,48 @@ judgment calls that a generator cannot produce.
 
 All commands accept `--json` for machine-readable output.
 
+**Node JSON shape.** Every command that emits a node returns objects of this
+shape; list-returning commands wrap them as `{"count": N, "nodes": [...]}`.
+Every key shown below is present on every node, so parse against these names
+and nothing else. `relationship get` may additionally include `title`,
+`mentions` and `mentioned_in`.
+
+The one real exception is a **schema** node reached through `relationship get`.
+It comes back in the schema's own shape rather than the node shape: camelCase
+keys (`isCore`, `schemaVersion`, `description`, `fields`, `relationships`) plus
+a `uri`, and no `node_type` or `properties` at all. Read schemas with
+`schema get` instead of traversing to them.
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "node_type": "task",
+  "content": "Buy groceries",
+  "properties": { "status": "open", "priority": "high" },
+  "version": 1,
+  "lifecycle_status": "active",
+  "created_at": "2026-01-01T00:00:00Z",
+  "modified_at": "2026-01-01T00:00:00Z"
+}
+```
+
+`properties` is a **flat** object keyed by the field names the type's schema
+defines — `jq '.properties.status'` reads a value directly, with no intermediate
+key and no second parse. These are the same bare names that
+`node update --property status=done` and `query --filters '{"property":"status"}'`
+accept, so what you parse and what you type always match. Internal bookkeeping
+keys are not part of the output. A node with no properties set returns `{}`.
+
+One gap to be aware of when you set an **object-valued** property — a value
+that is itself a JSON object, e.g. `--property address='{"city":"Berlin"}'`:
+the write path can store it outside the type's own namespace, in which case it
+will not appear in this output. This affects `node update` for every type
+(including `task`), and `node create` for every type except `task`. Scalars and
+arrays are unaffected everywhere. If you set a nested object and don't see it
+read back, that write is the cause, not the read — prefer scalar or array
+properties until it is fixed.
+
+
 **Selecting a database.** A single daemon can serve several local databases. The data commands that read or write a database (`node`, `query`, `search`, `mention`, `schema`, `relationship`, `import`, `diagnostics`) accept a global `--database <name|id>` flag that routes the request to a specific database; the `NODESPACE_DATABASE` environment variable sets the same target when the flag is absent. Without either, requests go to the daemon's default database. Model management (`nodespace model`) is daemon-global — the loaded inference model is shared across all databases, so the flag is accepted but has no effect there. Manage the set of databases with the `nodespace database` subcommands (below).
 
 ```bash
@@ -33,7 +75,7 @@ nodespace node create --type text --content "Meeting notes" --parent <parent-id>
 
 **Output:** JSON with `id`, `node_type`, `content`, `parent_id`, `created_at`
 
-**Creating an instance of a custom type:** read the schema first (`nodespace schema get <type>`) so you know its fields. Use the field name exactly as it appears in the schema's `fields[].name` — do not add namespace prefixes when setting properties on instances (namespace prefixing, where it applies, is a schema-authoring concern — see Schema fields below). If the schema has a `title_template`, `--content` only needs a brief descriptive label — the display title is generated from properties. If there's no `title_template`, set `--content` to the best human-readable name available.
+**Creating an instance of a custom type:** read the schema first (`nodespace schema get <type>`) so you know its fields. Use the field name exactly as it appears in the schema's `fields[].name` — do not add namespace prefixes when setting properties on instances (prefixes like `custom:` are part of a *field's name* at schema-authoring time, not something a caller adds — see Schema fields below). If the schema has a `title_template`, `--content` only needs a brief descriptive label — the display title is generated from properties. If there's no `title_template`, set `--content` to the best human-readable name available.
 
 Only include properties the schema actually defines as required, plus any optional ones the user gave a value for. Don't invent fields.
 
