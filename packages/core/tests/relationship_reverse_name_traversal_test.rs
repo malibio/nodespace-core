@@ -407,3 +407,72 @@ async fn reverse_name_is_scoped_to_its_declaring_type() -> Result<()> {
     );
     Ok(())
 }
+
+/// A self-referential relationship's `reverseName`.
+///
+/// Schema-authoring guidance recommends `reverseName` over a second
+/// declaration for self-reference (`supersedes` on `adr` reading back as
+/// `superseded_by`), because it is one stored edge readable from both ends.
+/// That recommendation is only sound if resolution handles the case where the
+/// declaring type and the target type are the SAME type — where the schema
+/// appears in its own inbound set and the forward name is reachable from both
+/// endpoints of the same edge.
+#[tokio::test]
+async fn self_referential_reverse_name_resolves() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Adr",
+            "fields": [{ "name": "status", "type": "string", "protection": "user", "indexed": false }],
+            "relationships": [{
+                "name": "supersedes",
+                "targetType": "adr",
+                "direction": "out",
+                "cardinality": "one",
+                "reverseName": "superseded_by",
+                "reverseCardinality": "one"
+            }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("adr schema: {e}"))?;
+
+    make_node(&svc, "adr_new", "adr").await?;
+    make_node(&svc, "adr_old", "adr").await?;
+    // The new ADR supersedes the old one.
+    svc.create_relationship("adr_new", "supersedes", "adr_old", json!({}))
+        .await?;
+
+    // Forward, from the superseding end.
+    let forward = rel_ops::get_related_nodes(&svc, get("adr_new", "supersedes", "out")).await?;
+    assert_eq!(
+        forward.count, 1,
+        "forward traversal should find the old ADR"
+    );
+    assert_eq!(forward.related_nodes[0]["id"], "adr_old");
+
+    // The reverse name, from the superseded end. This is the spelling the
+    // guidance tells authors to use, and the one that returned a silent zero
+    // before reverse-name resolution existed.
+    let reverse = rel_ops::get_related_nodes(&svc, get("adr_old", "superseded_by", "out")).await?;
+    assert_eq!(
+        reverse.count, 1,
+        "the declared reverseName must resolve on a self-referential relationship, \
+         not return a silent zero: {reverse:?}"
+    );
+    assert_eq!(
+        reverse.related_nodes[0]["id"], "adr_new",
+        "superseded_by should surface the ADR that supersedes this one"
+    );
+
+    // And it must agree with the pre-existing spelling of the same traversal.
+    let inbound_forward =
+        rel_ops::get_related_nodes(&svc, get("adr_old", "supersedes", "in")).await?;
+    assert_eq!(
+        inbound_forward.related_nodes[0]["id"], reverse.related_nodes[0]["id"],
+        "reverseName and `--type supersedes --direction in` must agree"
+    );
+    Ok(())
+}
