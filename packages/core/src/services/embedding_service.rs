@@ -365,7 +365,7 @@ impl NodeEmbeddingService {
     /// 2. `behavior.get_aggregated_content()` gathers child content
     /// 3. Chunks, generates vectors, and stores in the embedding table
     pub async fn embed_root_node(&self, root_id: &str) -> Result<(), NodeServiceError> {
-        // Get root node via accessor (applies business rules: mentions, migrations)
+        // Get root node via accessor (applies business rules: mentions, etc.)
         let root = self
             .node_accessor
             .get_node(root_id)

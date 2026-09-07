@@ -5,7 +5,7 @@
 **NodeSpace has ZERO users, NO production deployment, and NO releases.**
 
 - ❌ **NO backward compatibility code** - Delete old patterns immediately when replaced
-- ❌ **NO migration strategies** - We can reset the database anytime
+- ❌ **NO migration strategies** - We can reset the database anytime. This covers **internal data-shape changes**, not just product/version compatibility: a startup backfill, a lazy on-read format upgrade, or any code that carries existing rows from an old shape to a new one is exactly what this prohibits. **Instead: change the format and reset the database.**
 - ❌ **NO gradual rollouts** - Implement new architecture directly, delete old code
 - ❌ **NO transition periods** - No dual-mode support, no feature flags for compatibility
 - ❌ **NO version support** - Don't maintain multiple versions of any API/method
@@ -15,6 +15,10 @@
 - ❌ **NO `#[allow(dead_code)]`** - Delete unused code, don't suppress warnings
 
 Make breaking changes without hesitation. Fix breakage immediately in the same session. Implement final architecture directly — skip intermediate steps. If you find yourself writing "for backward compatibility" or "during the transition period" — **STOP. This is greenfield development.**
+
+If you catch yourself asking *"how do existing databases get the new shape?"* — that question is the signal, not the task. The answer is always: change the shape, reset the database. Writing a backfill to answer it is the prohibited thing, even when the change feels purely internal and no user-facing version is involved.
+
+**One exception, which shares the word but is not the same thing:** `packages/core/src/db/migrations/` is the **SQL schema bootstrap** — the versioned DDL that creates a database's tables at all. A fresh database still needs its schema created, so that runner is legitimate and stays. The rule above bans **data** migrations (moving existing rows between shapes), not **DDL** (creating the tables).
 
 ## Project Overview
 

@@ -24,7 +24,6 @@ use crate::db::events::DomainEvent;
 use crate::db::{SqliteStore, StoreChange, StoreOperation};
 use crate::models::{FilterOperator, Node, NodeFilter, NodeUpdate, PropertyFilter};
 use crate::services::error::NodeServiceError;
-use crate::services::migration_registry::MigrationRegistry;
 use crate::services::NodeAccessor;
 use async_trait::async_trait;
 use regex::Regex;
@@ -803,9 +802,6 @@ pub struct NodeService {
     /// Behavior registry for validation
     pub(crate) behaviors: Arc<NodeBehaviorRegistry>,
 
-    /// Migration registry for lazy schema upgrades
-    pub(crate) migration_registry: Arc<MigrationRegistry>,
-
     /// Broadcast channel for domain events (128 subscriber capacity)
     /// Changed from DomainEvent to EventEnvelope
     pub(crate) event_tx: broadcast::Sender<crate::db::events::EventEnvelope>,
@@ -874,7 +870,6 @@ impl Clone for NodeService {
         Self {
             store: self.store.clone(),
             behaviors: self.behaviors.clone(),
-            migration_registry: self.migration_registry.clone(),
             event_tx: self.event_tx.clone(),
             push_event_tx: self.push_event_tx.clone(),
             push_excluded_origin: self.push_excluded_origin.clone(),
@@ -919,10 +914,6 @@ impl NodeService {
     /// - On first launch: Seeds schemas and updates caches incrementally via `Arc::get_mut()`
     /// - On subsequent launches: Caches already populated by `SqliteStore::new()`
     pub async fn new(store: &mut Arc<SqliteStore>) -> Result<Self, NodeServiceError> {
-        // Create empty migration registry (no migrations registered yet - pre-deployment)
-        // Infrastructure exists for future schema evolution post-deployment
-        let migration_registry = MigrationRegistry::new();
-
         // Initialize broadcast channel for domain events (EventEnvelope)
         let (event_tx, _) = broadcast::channel(DOMAIN_EVENT_CHANNEL_CAPACITY);
 
@@ -1024,7 +1015,6 @@ impl NodeService {
         let service = Self {
             store: Arc::clone(store),
             behaviors: Arc::new(NodeBehaviorRegistry::new()),
-            migration_registry: Arc::new(migration_registry),
             event_tx,
             push_event_tx,
             push_excluded_origin,
@@ -1035,10 +1025,6 @@ impl NodeService {
             embedding_waker: std::sync::Arc::new(std::sync::OnceLock::new()),
             subtree_access_gate: Arc::new(std::sync::OnceLock::new()),
         };
-
-        // Backfill description subtrees for schemas that still have
-        // properties.description but no child nodes (databases created before this change).
-        service.backfill_schema_description_subtrees().await?;
 
         // ADR-037: every install has exactly one local PersonNode (the user).
         service.seed_local_person_if_needed().await?;
@@ -1620,116 +1606,6 @@ impl NodeService {
         Ok(())
     }
 
-    /// Backfill description child subtrees for schemas that still have `properties.description`.
-    ///
-    /// Runs at every startup; idempotent because `properties.description` is removed from the
-    /// schema node after a successful backfill. Schemas without that key are skipped in O(1).
-    async fn backfill_schema_description_subtrees(&self) -> Result<(), NodeServiceError> {
-        use crate::markdown::prepare_nodes_from_markdown;
-
-        let schemas = self.get_all_schemas().await.map_err(|e| {
-            NodeServiceError::QueryFailed(format!("Failed to fetch schemas for migration: {}", e))
-        })?;
-
-        let mut backfilled = 0usize;
-
-        for schema in schemas {
-            // Read the legacy description from properties — its presence is the migration trigger.
-            // Using child count as the check would be incorrect: schemas can now legitimately
-            // have non-description children, and would permanently skip backfill if any child
-            // exists before the description is migrated.
-            let description = self
-                .store
-                .get_node(&schema.id)
-                .await
-                .unwrap_or(None)
-                .and_then(|n| {
-                    n.properties
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                });
-
-            let description = match description {
-                Some(d) => d,
-                None => continue, // No legacy description to migrate (already migrated or never had one)
-            };
-
-            let prepared = match prepare_nodes_from_markdown(&description, Some(schema.id.clone()))
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(
-                        schema_id = %schema.id,
-                        error = %e,
-                        "Failed to prepare description subtree during migration, skipping"
-                    );
-                    continue;
-                }
-            };
-
-            if prepared.is_empty() {
-                continue;
-            }
-
-            let bulk_nodes: Vec<(
-                String,
-                String,
-                String,
-                Option<String>,
-                f64,
-                serde_json::Value,
-            )> = prepared
-                .into_iter()
-                .map(|n| {
-                    (
-                        n.id,
-                        n.node_type,
-                        n.content,
-                        n.parent_id,
-                        n.order,
-                        n.properties,
-                    )
-                })
-                .collect();
-
-            if let Err(e) = self.bulk_create_hierarchy(bulk_nodes).await {
-                tracing::warn!(
-                    schema_id = %schema.id,
-                    error = %e,
-                    "Failed to backfill description subtree, skipping"
-                );
-                continue;
-            }
-
-            // Clear the legacy properties.description so this schema is not re-migrated
-            // on the next startup (the subtree's existence is now the canonical description).
-            if let Err(e) = self
-                .store
-                .remove_property_key(&schema.id, "description")
-                .await
-            {
-                tracing::warn!(
-                    schema_id = %schema.id,
-                    error = %e,
-                    "Failed to clear legacy description property after backfill"
-                );
-            }
-
-            backfilled += 1;
-        }
-
-        if backfilled > 0 {
-            tracing::info!(
-                count = backfilled,
-                "Backfilled schema description subtrees (Issue #1351)"
-            );
-        }
-
-        Ok(())
-    }
-
     /// Get access to the underlying SqliteStore
     ///
     /// Useful for advanced operations that need direct database access
@@ -2007,11 +1883,11 @@ fn build_node_tree_recursive(
 /// NodeAccessor implementation for NodeService
 ///
 /// Delegates to existing NodeService methods, ensuring all business rules
-/// (mentions, migrations, etc.) apply when behaviors fetch related nodes.
+/// (mentions, etc.) apply when behaviors fetch related nodes.
 #[async_trait]
 impl NodeAccessor for NodeService {
     async fn get_node(&self, id: &str) -> Result<Option<Node>, NodeServiceError> {
-        // Delegate to NodeService's existing get_node (includes mentions, migrations, etc.)
+        // Delegate to NodeService's existing get_node (includes mentions, etc.)
         NodeService::get_node(self, id).await
     }
 
