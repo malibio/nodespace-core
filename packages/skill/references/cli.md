@@ -42,15 +42,8 @@ key and no second parse. These are the same bare names that
 `node update --property status=done` and `query --filters '{"property":"status"}'`
 accept, so what you parse and what you type always match. Internal bookkeeping
 keys are not part of the output. A node with no properties set returns `{}`.
-
-One gap to be aware of when you set an **object-valued** property — a value
-that is itself a JSON object, e.g. `--property address='{"city":"Berlin"}'`:
-the write path can store it outside the type's own namespace, in which case it
-will not appear in this output. This affects `node update` for every type
-(including `task`), and `node create` for every type except `task`. Scalars and
-arrays are unaffected everywhere. If you set a nested object and don't see it
-read back, that write is the cause, not the read — prefer scalar or array
-properties until it is fixed.
+Values of any JSON type round-trip, nested objects included — `--property
+address='{"city":"Berlin"}'` reads back as `.properties.address.city`.
 
 
 **Selecting a database.** A single daemon can serve several local databases. The data commands that read or write a database (`node`, `query`, `search`, `mention`, `schema`, `relationship`, `import`, `diagnostics`) accept a global `--database <name|id>` flag that routes the request to a specific database; the `NODESPACE_DATABASE` environment variable sets the same target when the flag is absent. Without either, requests go to the daemon's default database. Model management (`nodespace model`) is daemon-global — the loaded inference model is shared across all databases, so the flag is accepted but has no effect there. Manage the set of databases with the `nodespace database` subcommands (below).
