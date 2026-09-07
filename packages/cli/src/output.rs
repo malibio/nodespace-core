@@ -284,6 +284,21 @@ mod tests {
         assert_eq!(json["properties"]["n"], 42);
     }
 
+    /// An object-valued schema field inside the type namespace is a real value,
+    /// not a namespace, and must survive flattening intact. Only siblings of the
+    /// type namespace are filtered, and only in the already-flat fallback.
+    #[test]
+    fn node_to_json_preserves_object_valued_fields_inside_the_namespace() {
+        let mut node = sample_node();
+        node.node_type = "invoice".into();
+        node.properties = r#"{"invoice":{"billing":{"city":"Berlin"},"amount":42}}"#.into();
+
+        let json = node_to_json(&node);
+
+        assert_eq!(json["properties"]["billing"]["city"], "Berlin");
+        assert_eq!(json["properties"]["amount"], 42);
+    }
+
     /// A node whose only properties are internal renders as empty, not as a
     /// leaked namespace — and human mode omits the line entirely.
     #[test]
