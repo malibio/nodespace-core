@@ -1168,6 +1168,124 @@ async fn node_update_sets_properties_and_preserves_content() {
     let _ = shutdown.send(());
 }
 
+/// The CLI must never expose the storage-layer property nesting.
+///
+/// A consumer that parsed `--json` and read `.properties.status` got `None`
+/// against the nested storage shape and could report "status unknown" about
+/// real data. These assert both halves of the contract at once: storage stays
+/// namespaced under the type key, while what the CLI emits is flat.
+#[tokio::test]
+async fn cli_json_output_is_flat_while_storage_stays_nested() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    // --- a core type -----------------------------------------------------
+    let task_id = raw
+        .create_node(CreateNodeRequest {
+            node_type: "task".into(),
+            content: "Buy groceries".into(),
+            parent_id: None,
+            properties: serde_json::json!({"status": "open"}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create task")
+        .into_inner()
+        .node_id;
+
+    let task = raw
+        .get_node(GetNodeRequest {
+            node_id: task_id.clone(),
+        })
+        .await
+        .expect("get task")
+        .into_inner()
+        .node_data
+        .expect("node_data");
+
+    // Storage is namespaced — unchanged by this fix.
+    let stored: serde_json::Value =
+        serde_json::from_str(&task.properties).expect("parse stored properties");
+    assert_eq!(
+        stored["task"]["status"], "open",
+        "storage must stay nested under the type key"
+    );
+
+    // The CLI surface is flat.
+    let emitted = nodespace_cli::output::node_to_json(&task);
+    assert_eq!(
+        emitted["properties"]["status"], "open",
+        "`jq '.properties.status'` must work with no second parse"
+    );
+    assert!(
+        emitted["properties"].get("task").is_none(),
+        "the schema id must not be observable in CLI output"
+    );
+    assert!(
+        emitted["properties"].get("_schema_version").is_none(),
+        "`_`-prefixed internals must not reach a CLI consumer"
+    );
+
+    // --- a user-defined type ---------------------------------------------
+    commands::schema::run(
+        &mut raw.clone(),
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "name": "Venue",
+                    "fields": [{"name": "capacity", "type": "number"}]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("schema create");
+
+    let venue_id = raw
+        .create_node(CreateNodeRequest {
+            node_type: "venue".into(),
+            content: "Grand Hall".into(),
+            parent_id: None,
+            properties: serde_json::json!({"capacity": 250}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("create venue")
+        .into_inner()
+        .node_id;
+
+    let venue = raw
+        .get_node(GetNodeRequest { node_id: venue_id })
+        .await
+        .expect("get venue")
+        .into_inner()
+        .node_data
+        .expect("node_data");
+
+    let emitted = nodespace_cli::output::node_to_json(&venue);
+    assert_eq!(
+        emitted["properties"]["capacity"], 250,
+        "a user-defined type flattens by the same rule as a core type"
+    );
+    assert!(
+        emitted["properties"].get("venue").is_none(),
+        "the schema id must not be observable for user-defined types either"
+    );
+
+    let _ = shutdown.send(());
+}
+
 #[tokio::test]
 async fn node_update_rejects_empty_args() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;

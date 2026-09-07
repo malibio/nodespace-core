@@ -152,6 +152,16 @@ const PERSISTENCE_KEYS = new Set(["_schema_version"]);
  * A node that stores flat properties, or one carrying a key that merely shares
  * a name with some other type, is left exactly as it was - the wrapper is
  * identified by matching `node_type`, not by guessing from shape.
+ *
+ * NOTE: the CLI now flattens properties itself (`output.rs::node_to_json`), so
+ * against a current build this function's wrapper branch never fires and it
+ * simply copies. It is kept because `NS_BIN` is overridable and defaults to a
+ * prebuilt `target/release/nodespace` that can predate that change — exactly
+ * the stale-binary case `preflight.ts` already warns about. Unwrapping a shape
+ * the CLI no longer emits is harmless; failing to unwrap one an older binary
+ * still does would silently zero out `populatedCount` and red-line correct
+ * writes. This is input tolerance at the harness boundary, not a compatibility
+ * shim in the product.
  */
 export function flattenTypeKeyedProperties(
   props: Record<string, unknown>,
