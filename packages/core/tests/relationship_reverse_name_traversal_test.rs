@@ -347,9 +347,9 @@ async fn untyped_reverse_name_resolves_only_where_edges_reach() -> Result<()> {
 }
 
 /// Two schemas may declare the same forward name toward one type. The store's
-/// "in" query keys on the name alone, so a reverse name — declared by exactly
-/// one of them — must be narrowed to its own declaring type rather than
-/// sweeping in the other schema's edges and over-reporting the count.
+/// "in" query keys on the name alone, so each schema's reverse name must be
+/// narrowed to its own declaring type rather than sweeping in the other
+/// schema's edges and over-reporting the count.
 #[tokio::test]
 async fn reverse_name_is_scoped_to_its_declaring_type() -> Result<()> {
     let (svc, _t) = create_test_service().await?;
@@ -363,19 +363,19 @@ async fn reverse_name_is_scoped_to_its_declaring_type() -> Result<()> {
     .await
     .map_err(|e| anyhow::anyhow!("reviewer schema: {e}"))?;
 
-    // Both `adr` and `memo` declare `decided_by → reviewer`; only `adr` names the
-    // reverse `decisions`.
-    for (name, reverse) in [("Adr", Some("decisions")), ("Memo", None)] {
-        let mut rel = json!({
+    // Both `adr` and `memo` declare `decided_by → reviewer`, each naming its own
+    // reverse. Since every declaration must name the edge from both ends, the
+    // collision this test guards is now between two live reverse names sharing
+    // one forward name — not between a named and an unnamed one.
+    for (name, reverse) in [("Adr", "decisions"), ("Memo", "memos")] {
+        let rel = json!({
             "name": "decided_by",
             "targetType": "reviewer",
             "direction": "out",
-            "cardinality": "one"
+            "cardinality": "one",
+            "reverseName": reverse,
+            "reverseCardinality": "many"
         });
-        if let Some(reverse) = reverse {
-            rel["reverseName"] = json!(reverse);
-            rel["reverseCardinality"] = json!("many");
-        }
         handle_create_schema(
             &svc,
             json!({
@@ -403,6 +403,17 @@ async fn reverse_name_is_scoped_to_its_declaring_type() -> Result<()> {
     );
     assert_eq!(
         by_reverse.related_nodes[0]["id"], "adr1",
+        "wrong declaring type surfaced under the reverse name"
+    );
+
+    // The symmetric case: memo's own reverse name resolves only to memo's edge.
+    let by_memo_reverse = rel_ops::get_related_nodes(&svc, get("p1", "memos", "out")).await?;
+    assert_eq!(
+        by_memo_reverse.count, 1,
+        "`memos` is memo's reverse name — it must not also collect adr's edges"
+    );
+    assert_eq!(
+        by_memo_reverse.related_nodes[0]["id"], "memo1",
         "wrong declaring type surfaced under the reverse name"
     );
     Ok(())

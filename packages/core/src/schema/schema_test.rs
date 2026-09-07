@@ -2725,7 +2725,7 @@ async fn test_create_schema_rejects_relationship_to_nonexistent_target_type() {
                 { "name": "amount", "type": "number", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseName": "invoices", "reverseCardinality": "many" }
             ]
         }),
     )
@@ -2755,7 +2755,7 @@ async fn test_create_schema_with_relationship_to_existing_target_type_succeeds()
                 { "name": "amount", "type": "number", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseName": "invoices", "reverseCardinality": "many" }
             ]
         }),
     )
@@ -2783,7 +2783,7 @@ async fn test_create_schema_relationship_with_no_target_type_succeeds() {
                 { "name": "amount", "type": "number", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "billed_to", "direction": "out", "cardinality": "one" }
+                { "name": "billed_to", "direction": "out", "cardinality": "one", "reverseName": "invoices", "reverseCardinality": "many" }
             ]
         }),
     )
@@ -2807,7 +2807,7 @@ async fn test_update_schema_add_relationships_rejects_nonexistent_target_type() 
         json!({
             "schema_id": invoice_id,
             "add_relationships": [
-                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseName": "invoices", "reverseCardinality": "many" }
             ]
         }),
     )
@@ -2835,7 +2835,7 @@ async fn test_update_schema_add_relationships_to_existing_target_type_succeeds()
         json!({
             "schema_id": invoice_id,
             "add_relationships": [
-                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseName": "invoices", "reverseCardinality": "many" }
             ]
         }),
     )
@@ -2846,6 +2846,281 @@ async fn test_update_schema_add_relationships_to_existing_target_type_succeeds()
         "add_relationships targeting an existing schema should succeed: {:?}",
         result
     );
+}
+
+// ============================================================================
+// required reverse fields
+// ============================================================================
+//
+// A relationship is stored once — one row between the two schema nodes — but
+// read from both ends, so a declaration naming only the forward half leaves
+// the stored edge half-declared: the target's side had to synthesize a label
+// ("Invoice (Customer)" where the modeled answer is "Invoices") and carried no
+// cardinality at all. Naming the inverse is a modeling decision only the
+// author can make, so both halves are required rather than derived.
+
+/// The corrected example matters as much as the rejection: an agent repairing
+/// the call has only the error text to work from, so it must carry a payload
+/// that would be accepted.
+fn assert_reverse_field_error(msg: &str, expect_named: &[&str]) {
+    for field in expect_named {
+        assert!(
+            msg.contains(field),
+            "error must name the missing field '{field}': {msg}"
+        );
+    }
+    assert!(
+        msg.contains("Corrected:"),
+        "error must show a corrected example: {msg}"
+    );
+    assert!(
+        msg.contains("\"reverseName\":\"...\"") && msg.contains("\"reverseCardinality\":\"many\""),
+        "the corrected example must include both reverse keys: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn create_schema_rejects_a_relationship_without_reverse_name() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [{ "name": "amount", "type": "number" }],
+            "relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseCardinality": "many" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("a relationship without reverseName must be rejected");
+
+    let msg = err.to_string();
+    assert_reverse_field_error(&msg, &["reverseName", "billed_to"]);
+    assert!(
+        !msg.contains("\"reverseCardinality\" and"),
+        "only the genuinely missing field should be reported: {msg}"
+    );
+    // The rejection must not leave a half-created schema behind.
+    assert!(
+        svc.get_schema_node("invoice").await.unwrap().is_none(),
+        "a rejected create must persist no schema node"
+    );
+}
+
+#[tokio::test]
+async fn create_schema_rejects_a_relationship_without_reverse_cardinality() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [{ "name": "amount", "type": "number" }],
+            "relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseName": "invoices" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("a relationship without reverseCardinality must be rejected");
+
+    assert_reverse_field_error(&err.to_string(), &["reverseCardinality", "billed_to"]);
+    assert!(svc.get_schema_node("invoice").await.unwrap().is_none());
+}
+
+/// A null or blank value is the same defect as an absent key from the caller's
+/// side, and must produce the same actionable error rather than being stored
+/// as an empty reverse name.
+#[tokio::test]
+async fn create_schema_rejects_null_or_blank_reverse_fields() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+
+    for reverse_name in [json!(null), json!("   ")] {
+        let err = handle_create_schema(
+            &svc,
+            json!({
+                "name": "Invoice",
+                "fields": [{ "name": "amount", "type": "number" }],
+                "relationships": [{
+                    "name": "billed_to",
+                    "targetType": "customer",
+                    "direction": "out",
+                    "cardinality": "one",
+                    "reverseName": reverse_name,
+                    "reverseCardinality": "many"
+                }]
+            }),
+        )
+        .await
+        .expect_err("a null or blank reverseName must be rejected");
+
+        assert_reverse_field_error(&err.to_string(), &["reverseName"]);
+    }
+}
+
+/// The error names the offending entry by position, so a caller repairing a
+/// multi-relationship payload knows which one to fix.
+#[tokio::test]
+async fn create_schema_names_the_offending_relationship_entry() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+    create_base_schema(&svc, "Vendor", &["name"]).await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [{ "name": "amount", "type": "number" }],
+            "relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseName": "invoices", "reverseCardinality": "many" },
+                { "name": "supplied_by", "targetType": "vendor", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("the second relationship is missing both reverse fields");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("supplied_by") && msg.contains("entry 1"),
+        "error must identify the offending entry by name and position: {msg}"
+    );
+    assert!(
+        !msg.contains("billed_to"),
+        "the well-formed relationship must not be implicated: {msg}"
+    );
+}
+
+/// An untyped relationship (no `targetType`) is a documented shape, so the
+/// message must read correctly without a target type name rather than printing
+/// a placeholder where one belongs.
+#[tokio::test]
+async fn create_schema_reverse_error_reads_correctly_without_a_target_type() {
+    let (svc, _tmp) = create_test_service().await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [{ "name": "amount", "type": "number" }],
+            "relationships": [
+                { "name": "related", "direction": "out", "cardinality": "many" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("a relationship without reverse fields must be rejected");
+
+    let msg = err.to_string();
+    assert_reverse_field_error(&msg, &["reverseName", "reverseCardinality"]);
+    assert!(
+        !msg.contains("<targetType>"),
+        "the message must not print a placeholder where a type name belongs: {msg}"
+    );
+    assert!(
+        !msg.contains("\"targetType\""),
+        "the corrected example must omit targetType when the caller sent none: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn update_schema_rejects_an_added_relationship_without_reverse_fields() {
+    let (svc, _tmp) = create_test_service().await;
+    let invoice_id = create_base_schema(&svc, "Invoice", &["amount"]).await;
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+
+    let err = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": invoice_id,
+            "add_relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("update_schema must apply the same reverse-field rule as create");
+
+    assert_reverse_field_error(&err.to_string(), &["reverseName", "reverseCardinality"]);
+
+    // The rejection leaves the schema untouched — no partial declaration.
+    let schema = svc
+        .get_schema_node("invoice")
+        .await
+        .unwrap()
+        .expect("invoice schema");
+    assert!(
+        schema.relationships.is_empty(),
+        "a rejected add_relationships must declare nothing"
+    );
+}
+
+/// The end-to-end property the requirement exists for: a relationship declared
+/// with both fields is readable from the TARGET's end by the declared
+/// `reverseName`, with the declared `reverseCardinality` reported as the
+/// inbound group's cardinality.
+#[tokio::test]
+async fn declared_reverse_fields_govern_the_inbound_group() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Customer", &["first_name"]).await;
+
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Invoice",
+            "fields": [{ "name": "amount", "type": "number" }],
+            "relationships": [
+                { "name": "billed_to", "targetType": "customer", "direction": "out", "cardinality": "one", "reverseName": "invoices", "reverseCardinality": "many" }
+            ]
+        }),
+    )
+    .await
+    .expect("a fully declared relationship must be accepted");
+
+    for (id, node_type) in [("c1", "customer"), ("i1", "invoice")] {
+        svc.store()
+            .create_node(
+                crate::models::Node::new_with_id(
+                    id.to_string(),
+                    node_type.to_string(),
+                    id.to_string(),
+                    json!({}),
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    svc.create_relationship("i1", "billed_to", "c1", json!({}))
+        .await
+        .unwrap();
+
+    let inbound = crate::ops::rel_ops::get_node_relationships(&svc, "c1")
+        .await
+        .unwrap();
+    let group = inbound
+        .groups
+        .iter()
+        .find(|g| g.relationship_name == "billed_to" && g.direction == "in")
+        .expect("the customer must see the inbound group");
+
+    assert_eq!(
+        group.reverse_name, "invoices",
+        "the inbound group is labeled by the declared reverseName, not a synthesized name"
+    );
+    assert_eq!(
+        group.cardinality,
+        crate::models::schema::RelationshipCardinality::Many,
+        "the declared reverseCardinality governs the inbound side"
+    );
+    assert_eq!(group.count, 1);
+    assert_eq!(group.related[0].id, "i1");
 }
 
 // ============================================================================
@@ -2871,7 +3146,7 @@ async fn test_create_schema_accepts_self_referential_relationship() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -2908,8 +3183,8 @@ async fn test_create_schema_accepts_self_reference_alongside_existing_target() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
-                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "many" }
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" },
+                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "many", "reverseName": "decided_by", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -2941,8 +3216,8 @@ async fn test_create_schema_self_reference_reverse_edge_resolves() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
-                { "name": "superseded_by", "targetType": "adr", "direction": "in", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" },
+                { "name": "superseded_by", "targetType": "adr", "direction": "in", "cardinality": "one", "reverseName": "supersedes", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -2985,7 +3260,7 @@ async fn test_create_schema_self_reference_uses_normalized_schema_id() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "design_decision", "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "design_decision", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -3022,7 +3297,7 @@ async fn test_create_schema_self_reference_by_display_name_is_rejected() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "Design Decision", "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "Design Decision", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -3058,7 +3333,7 @@ async fn test_punctuation_only_name_does_not_make_the_exemption_vacuous() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "", "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -3092,8 +3367,8 @@ async fn test_self_referential_declaration_writes_a_self_loop_row() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
-                { "name": "superseded_by", "targetType": "adr", "direction": "in", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" },
+                { "name": "superseded_by", "targetType": "adr", "direction": "in", "cardinality": "one", "reverseName": "supersedes", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -3158,7 +3433,7 @@ async fn test_self_reference_does_not_bypass_the_already_exists_check() {
                 { "name": "status", "type": "string", "protection": "user", "indexed": false }
             ],
             "relationships": [
-                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -3182,7 +3457,7 @@ async fn test_update_schema_accepts_self_referential_relationship() {
         json!({
             "schema_id": adr_id,
             "add_relationships": [
-                { "name": "supersedes", "targetType": adr_id, "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": adr_id, "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" }
             ]
         }),
     )
@@ -3222,29 +3497,29 @@ async fn test_rejected_create_persists_no_schema_node() {
     let cases: Vec<(serde_json::Value, &str, &str)> = vec![
         (
             json!([
-                { "name": "has_child", "targetType": "adr", "direction": "out", "cardinality": "many" }
+                { "name": "has_child", "targetType": "adr", "direction": "out", "cardinality": "many", "reverseName": "parent", "reverseCardinality": "one" }
             ]),
             "reserved built-in relationship name",
             "reserved for a built-in structural relationship",
         ),
         (
             json!([
-                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one" }
+                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one", "reverseName": "decided_by", "reverseCardinality": "one" }
             ]),
             "target type that does not exist",
             "targets 'ticket', which is not an existing schema",
         ),
         (
             json!([
-                { "name": "supersedes", "targetType": "adrr", "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "adrr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" }
             ]),
             "typo'd targetType that is neither the pending schema nor an existing one",
             "targets 'adrr', which is not an existing schema",
         ),
         (
             json!([
-                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
-                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one" }
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one", "reverseName": "superseded_by", "reverseCardinality": "one" },
+                { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one", "reverseName": "decided_by", "reverseCardinality": "one" }
             ]),
             "a valid self-reference batched with an invalid target",
             "targets 'ticket', which is not an existing schema",
@@ -3559,6 +3834,8 @@ fn rel_with_enum_edge_field(core_values: serde_json::Value) -> serde_json::Value
         "targetType": "widget",
         "direction": "out",
         "cardinality": "many",
+        "reverseName": "grants",
+        "reverseCardinality": "many",
         "edgeFields": [{ "name": "access", "type": "enum", "coreValues": core_values }]
     })
 }
@@ -3602,6 +3879,8 @@ async fn create_schema_rejects_an_enum_edge_field_without_core_values() {
                 "targetType": "widget",
                 "direction": "out",
                 "cardinality": "many",
+                "reverseName": "grants",
+                "reverseCardinality": "many",
                 "edgeFields": [{ "name": "access", "type": "enum" }]
             }]
         }),
@@ -3631,6 +3910,8 @@ async fn create_schema_rejects_an_enum_edge_field_default_outside_the_set() {
                 "targetType": "widget",
                 "direction": "out",
                 "cardinality": "many",
+                "reverseName": "grants",
+                "reverseCardinality": "many",
                 "edgeFields": [{
                     "name": "access",
                     "type": "enum",
@@ -3663,6 +3944,8 @@ async fn update_schema_rejects_an_enum_edge_field_without_core_values() {
                 "targetType": "widget",
                 "direction": "out",
                 "cardinality": "many",
+                "reverseName": "grants",
+                "reverseCardinality": "many",
                 "edgeFields": [{ "name": "access", "type": "enum" }]
             }]
         }),
@@ -3719,6 +4002,8 @@ async fn schema_declaring_an_edge_field_on_a_builtin_relationship_is_rejected() 
                 "targetType": "collection",
                 "direction": "out",
                 "cardinality": "many",
+                "reverseName": "members",
+                "reverseCardinality": "many",
                 "edgeFields": [{
                     "name": "access",
                     "type": "enum",

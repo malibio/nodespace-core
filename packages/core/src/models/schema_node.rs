@@ -426,7 +426,9 @@ mod tests {
             "name": "widgets",
             "targetType": "widget",
             "direction": "out",
-            "cardinality": "many"
+            "cardinality": "many",
+            "reverseName": "gadget",
+            "reverseCardinality": "one"
         }))
         .unwrap()];
 

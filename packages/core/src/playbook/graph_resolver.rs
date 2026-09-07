@@ -703,9 +703,11 @@ mod tests {
                 "gr_issue",
                 json!([{
                     "name": "story",
-                    "target_type": "gr_story",
+                    "targetType": "gr_story",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "issues",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -743,9 +745,11 @@ mod tests {
                 "gr_issue_ct",
                 json!([{
                     "name": "story",
-                    "target_type": "gr_story_ct",
+                    "targetType": "gr_story_ct",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "issues",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -799,9 +803,11 @@ mod tests {
                 "gr_story3",
                 json!([{
                     "name": "epic",
-                    "target_type": "gr_epic",
+                    "targetType": "gr_epic",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "stories",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -810,9 +816,11 @@ mod tests {
                 "gr_task3",
                 json!([{
                     "name": "story",
-                    "target_type": "gr_story3",
+                    "targetType": "gr_story3",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "issues",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -871,9 +879,11 @@ mod tests {
                 "gr_task4",
                 json!([{
                     "name": "story",
-                    "target_type": "gr_story4",
+                    "targetType": "gr_story4",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "issues",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -911,9 +921,11 @@ mod tests {
                 "gr_parent",
                 json!([{
                     "name": "subtasks",
-                    "target_type": "gr_subtask",
+                    "targetType": "gr_subtask",
                     "direction": "out",
-                    "cardinality": "many"
+                    "cardinality": "many",
+                    "reverseName": "parent_task",
+                    "reverseCardinality": "one"
                 }]),
             )
             .await;
@@ -958,9 +970,11 @@ mod tests {
                 "gr_source5",
                 json!([{
                     "name": "target",
-                    "target_type": "gr_target5",
+                    "targetType": "gr_target5",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "sources",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -1041,9 +1055,11 @@ mod tests {
                 "gr_story8",
                 json!([{
                     "name": "epic",
-                    "target_type": "gr_epic8",
+                    "targetType": "gr_epic8",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "stories",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -1052,9 +1068,11 @@ mod tests {
                 "gr_task8",
                 json!([{
                     "name": "story",
-                    "target_type": "gr_story8",
+                    "targetType": "gr_story8",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "issues",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -1117,9 +1135,11 @@ mod tests {
                 "gr_parent9",
                 json!([{
                     "name": "items",
-                    "target_type": "gr_item9",
+                    "targetType": "gr_item9",
                     "direction": "out",
-                    "cardinality": "many"
+                    "cardinality": "many",
+                    "reverseName": "collection",
+                    "reverseCardinality": "one"
                 }]),
             )
             .await;
@@ -1166,9 +1186,11 @@ mod tests {
                 "gr_parent10",
                 json!([{
                     "name": "tasks",
-                    "target_type": "gr_sub10",
+                    "targetType": "gr_sub10",
                     "direction": "out",
-                    "cardinality": "many"
+                    "cardinality": "many",
+                    "reverseName": "parent_task",
+                    "reverseCardinality": "one"
                 }]),
             )
             .await;

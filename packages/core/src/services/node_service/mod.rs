@@ -4928,7 +4928,7 @@ mod tests {
             .iter()
             .find(|g| g.relationship_name == "assigned_to" && g.direction == "in")
             .expect("inbound assigned_to group present");
-        assert_eq!(group.reverse_name.as_deref(), Some("gadgets"));
+        assert_eq!(group.reverse_name, "gadgets");
         assert_eq!(group.source_type, "gadget");
         assert_eq!(group.target_type.as_deref(), Some("gadget"));
         assert_eq!(group.count, 1);
@@ -4987,7 +4987,8 @@ mod tests {
                 "targetType": "widget",
                 "direction": "out",
                 "cardinality": "many",
-                "reverseName": "gadgets"
+                "reverseName": "gadgets",
+                "reverseCardinality": "many"
             }]))
             .unwrap();
         service
@@ -6139,6 +6140,8 @@ mod tests {
                 "targetType": "widget",
                 "direction": "out",
                 "cardinality": "many",
+                "reverseName": "gadgets",
+                "reverseCardinality": "many",
                 "edgeFields": [
                     {
                         "name": "role",

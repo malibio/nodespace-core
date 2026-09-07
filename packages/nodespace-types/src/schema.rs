@@ -245,10 +245,36 @@ pub struct SchemaRelationship {
     pub cardinality: RelationshipCardinality,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reverse_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reverse_cardinality: Option<RelationshipCardinality>,
+    /// The name this edge reads by from the target's end. REQUIRED.
+    ///
+    /// A relationship is declared once — the storage model keeps a single
+    /// `relationship` row between the two schema nodes — but it is read from
+    /// both ends. Leaving this unset left that one stored edge only
+    /// half-declared: the target's side fell back to a synthesized
+    /// `"{SourceType} ({Relationship Name})"` label, so an invoice declaring
+    /// `billed_to → customer` surfaced on the customer as
+    /// "Invoice (Customer)" rather than "Invoices".
+    ///
+    /// Naming the inverse is a modeling decision only the author can make, so
+    /// it is required rather than derived. See the type-level note on
+    /// [`SchemaRelationship::reverse_cardinality`] for why both live in the
+    /// type rather than in a validator alone.
+    pub reverse_name: String,
+    /// The cardinality governing the target's end — how many sources may point
+    /// at one target. REQUIRED, and the counterpart to
+    /// [`SchemaRelationship::reverse_name`].
+    ///
+    /// Unset, the inbound group carried no cardinality at all, so nothing
+    /// downstream could reason about how many sources may point at a node.
+    ///
+    /// Carrying both halves in the type — not merely in a validator — is what
+    /// makes "every stored edge is named from both ends" an invariant every
+    /// reader can rely on instead of a convention that holds only on the paths
+    /// which happen to route through validation. `handle_create_schema` and
+    /// `handle_update_schema` reject a payload missing either field before
+    /// serde sees it, so a caller gets an actionable error naming the field
+    /// rather than a bare `missing field` message.
+    pub reverse_cardinality: RelationshipCardinality,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edge_fields: Option<Vec<EdgeField>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -966,8 +992,8 @@ mod tests {
             direction: RelationshipDirection::Out,
             cardinality: RelationshipCardinality::One,
             required: Some(true),
-            reverse_name: Some("invoices".to_string()),
-            reverse_cardinality: Some(RelationshipCardinality::Many),
+            reverse_name: "invoices".to_string(),
+            reverse_cardinality: RelationshipCardinality::Many,
             edge_fields: Some(vec![
                 EdgeField {
                     name: "billing_date".to_string(),
@@ -1036,10 +1062,10 @@ mod tests {
         assert_eq!(relationship.target_type, Some("person".to_string()));
         assert_eq!(relationship.direction, RelationshipDirection::Out);
         assert_eq!(relationship.cardinality, RelationshipCardinality::Many);
-        assert_eq!(relationship.reverse_name, Some("tasks".to_string()));
+        assert_eq!(relationship.reverse_name, "tasks");
         assert_eq!(
             relationship.reverse_cardinality,
-            Some(RelationshipCardinality::Many)
+            RelationshipCardinality::Many
         );
         assert!(relationship.required.is_none());
 
@@ -1051,12 +1077,15 @@ mod tests {
 
     #[test]
     fn test_schema_relationship_minimal() {
-        // Test minimal relationship (only required fields)
+        // The smallest legal declaration: the reverse half is part of it, so a
+        // "minimal" relationship still names the edge from both ends.
         let json = json!({
             "name": "parent_of",
             "targetType": "document",
             "direction": "out",
-            "cardinality": "many"
+            "cardinality": "many",
+            "reverseName": "children_of",
+            "reverseCardinality": "one"
         });
 
         let relationship: SchemaRelationship = serde_json::from_value(json).unwrap();
@@ -1065,11 +1094,51 @@ mod tests {
         assert_eq!(relationship.target_type, Some("document".to_string()));
         assert_eq!(relationship.direction, RelationshipDirection::Out);
         assert_eq!(relationship.cardinality, RelationshipCardinality::Many);
+        assert_eq!(relationship.reverse_name, "children_of");
+        assert_eq!(
+            relationship.reverse_cardinality,
+            RelationshipCardinality::One
+        );
         assert!(relationship.required.is_none());
-        assert!(relationship.reverse_name.is_none());
-        assert!(relationship.reverse_cardinality.is_none());
         assert!(relationship.edge_fields.is_none());
         assert!(relationship.description.is_none());
+    }
+
+    /// The reverse half is carried by the type, not merely by a validator.
+    ///
+    /// The schema-op validators produce the actionable, example-bearing error a
+    /// caller acts on; this asserts the floor beneath them — a payload missing
+    /// either field cannot become a `SchemaRelationship` at all, so no other
+    /// deserialization path can smuggle in a half-named edge.
+    #[test]
+    fn test_schema_relationship_requires_both_reverse_fields() {
+        let missing_name = json!({
+            "name": "parent_of",
+            "targetType": "document",
+            "direction": "out",
+            "cardinality": "many",
+            "reverseCardinality": "one"
+        });
+        let err = serde_json::from_value::<SchemaRelationship>(missing_name)
+            .expect_err("reverseName must be required");
+        assert!(
+            err.to_string().contains("reverseName"),
+            "error should name the missing field, got: {err}"
+        );
+
+        let missing_cardinality = json!({
+            "name": "parent_of",
+            "targetType": "document",
+            "direction": "out",
+            "cardinality": "many",
+            "reverseName": "children_of"
+        });
+        let err = serde_json::from_value::<SchemaRelationship>(missing_cardinality)
+            .expect_err("reverseCardinality must be required");
+        assert!(
+            err.to_string().contains("reverseCardinality"),
+            "error should name the missing field, got: {err}"
+        );
     }
 
     #[test]
@@ -1079,7 +1148,9 @@ mod tests {
             "name": "owned_by",
             "targetType": "organization",
             "direction": "in",
-            "cardinality": "one"
+            "cardinality": "one",
+            "reverseName": "owns",
+            "reverseCardinality": "many"
         });
 
         let relationship: SchemaRelationship = serde_json::from_value(json).unwrap();
@@ -1092,7 +1163,9 @@ mod tests {
         let json = json!({
             "name": "related",
             "direction": "out",
-            "cardinality": "many"
+            "cardinality": "many",
+            "reverseName": "related_from",
+            "reverseCardinality": "many"
         });
 
         let relationship: SchemaRelationship = serde_json::from_value(json).unwrap();
@@ -1108,8 +1181,8 @@ mod tests {
             direction: RelationshipDirection::Out,
             cardinality: RelationshipCardinality::Many,
             required: None,
-            reverse_name: None,
-            reverse_cardinality: None,
+            reverse_name: "related_from".to_string(),
+            reverse_cardinality: RelationshipCardinality::Many,
             edge_fields: None,
             description: None,
         };
@@ -1240,7 +1313,13 @@ mod tests {
     #[test]
     fn test_parse_relationships_valid_json_no_diagnostic() {
         let json = json!({
-            "relationships": [{ "name": "assigned_to", "direction": "out", "cardinality": "one" }]
+            "relationships": [{
+                "name": "assigned_to",
+                "direction": "out",
+                "cardinality": "one",
+                "reverseName": "tasks",
+                "reverseCardinality": "many"
+            }]
         });
         let (relationships, diagnostic) = parse_relationships(&json, "test-schema-id");
 

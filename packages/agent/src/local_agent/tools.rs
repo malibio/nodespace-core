@@ -1240,9 +1240,11 @@ fn def_create_schema() -> ToolDefinition {
                             "targetType": { "type": "string", "description": "Target node type ID — MUST be an existing type from the EXISTING SCHEMAS list (e.g., 'task', 'ticket', 'adr'). Do NOT invent types that don't exist yet." },
                             "direction": { "type": "string", "enum": ["out", "in"], "description": "Direction: 'out' (this→target, default) or 'in' (target→this)" },
                             "cardinality": { "type": "string", "enum": ["one", "many"], "description": "Cardinality: 'one' or 'many' (default)" },
+                            "reverseName": { "type": "string", "description": "REQUIRED. What this edge is called read from the target's end — one edge is stored and read from both sides, so it needs a name from each. Choose it: plural where the target may hold many (an invoice billed_to a customer reads back as 'invoices', NOT 'Invoice (Customer)')." },
+                            "reverseCardinality": { "type": "string", "enum": ["one", "many"], "description": "REQUIRED. How many sources may point at one target: 'one' or 'many'. An invoice billed_to one customer, where a customer may have many invoices, is cardinality 'one' with reverseCardinality 'many'." },
                             "description": { "type": "string", "description": "What this relationship represents" }
                         },
-                        "required": ["name", "targetType", "direction", "cardinality"]
+                        "required": ["name", "targetType", "direction", "cardinality", "reverseName", "reverseCardinality"]
                     }
                 }
             },
@@ -1319,9 +1321,11 @@ fn def_update_schema() -> ToolDefinition {
                             "name": { "type": "string" },
                             "targetType": { "type": "string" },
                             "direction": { "type": "string", "enum": ["out", "in"] },
-                            "cardinality": { "type": "string", "enum": ["one", "many"] }
+                            "cardinality": { "type": "string", "enum": ["one", "many"] },
+                            "reverseName": { "type": "string", "description": "REQUIRED. What this edge is called read from the target's end — one edge is stored and read from both sides, so it needs a name from each. Choose it: plural where the target may hold many (an invoice billed_to a customer reads back as 'invoices', NOT 'Invoice (Customer)')." },
+                            "reverseCardinality": { "type": "string", "enum": ["one", "many"], "description": "REQUIRED. How many sources may point at one target: 'one' or 'many'. An invoice billed_to one customer, where a customer may have many invoices, is cardinality 'one' with reverseCardinality 'many'." }
                         },
-                        "required": ["name", "targetType", "direction", "cardinality"]
+                        "required": ["name", "targetType", "direction", "cardinality", "reverseName", "reverseCardinality"]
                     }
                 },
                 "remove_relationships": {

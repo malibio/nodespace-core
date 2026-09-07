@@ -423,25 +423,42 @@ async fn validate_relationship_targets_exist(
 }
 
 /// Reject relationship declarations named after a built-in structural
-/// relationship (`has_child`, `mentions`, `member_of`, `has_role`).
+/// relationship (`has_child`, `mentions`, `member_of`, `has_role`) — in either
+/// direction.
 ///
-/// Declarations and the built-in primitives share the one `relationship`
-/// table's `relationship_type` column, so a name collision would make every
-/// type-keyed relationship query ambiguous — a correctness hazard, not just a
-/// display glitch. Checked here so the error surfaces before any write, and
-/// re-checked in `NodeService::set_schema_relationships` (the write path) via
-/// the same shared predicate.
+/// **Forward `name`.** Declarations and the built-in primitives share the one
+/// `relationship` table's `relationship_type` column, so a name collision would
+/// make every type-keyed relationship query ambiguous — a correctness hazard,
+/// not just a display glitch. Checked here so the error surfaces before any
+/// write, and re-checked in `NodeService::set_schema_relationships` (the write
+/// path) via the same shared predicate.
+///
+/// **`reverse_name`.** A different failure, so worth stating separately: a
+/// reverse name is never written to `relationship_type` — it is a resolution
+/// alias, matched by [`resolve_relationship_name`] to reach the inbound side of
+/// an edge stored under the forward name. It therefore cannot make stored data
+/// ambiguous. What it can do is nothing at all: that resolver short-circuits on
+/// `BUILTIN_RELATIONSHIP_NAMES` before it ever consults a declaration, so
+/// `reverseName: "has_child"` is unreachable — the built-in always wins, and
+/// the reverse spelling the author chose silently resolves to something else.
+/// Rejecting it keeps a declaration from being accepted as inert.
+///
+/// Both halves are checked because a relationship must name its edge from both
+/// ends, so both names land in a namespace a caller can traverse by.
 fn reject_reserved_relationship_names(
     relationships: &[crate::models::schema::SchemaRelationship],
 ) -> Result<(), MarkdownError> {
     for rel in relationships {
-        if crate::models::schema::is_builtin_relationship(&rel.name) {
-            return Err(MarkdownError::invalid_params(format!(
-                "Relationship name '{}' is reserved for a built-in structural relationship \
-                 ({}). Choose a different name.",
-                rel.name,
-                crate::models::schema::BUILTIN_RELATIONSHIP_NAMES.join(", ")
-            )));
+        for (which, name) in [("name", &rel.name), ("reverseName", &rel.reverse_name)] {
+            if crate::models::schema::is_builtin_relationship(name) {
+                return Err(MarkdownError::invalid_params(format!(
+                    "Relationship {} '{}' is reserved for a built-in structural relationship \
+                     ({}). Choose a different name.",
+                    which,
+                    name,
+                    crate::models::schema::BUILTIN_RELATIONSHIP_NAMES.join(", ")
+                )));
+            }
         }
     }
     Ok(())
@@ -538,6 +555,103 @@ fn validate_edge_field_declarations(
             }
         }
     }
+    Ok(())
+}
+
+/// Reject a relationship declaration that omits `reverseName` or
+/// `reverseCardinality`, before serde reports it as a bare `missing field`.
+///
+/// A relationship is declared once — one `relationship` row between the two
+/// schema nodes — but read from both ends, so a declaration that names only
+/// the forward half leaves the stored edge half-declared: the target's side
+/// had to synthesize a label (`"Invoice (Customer)"` rather than `"Invoices"`)
+/// and had no cardinality at all, so nothing downstream could say how many
+/// sources may point at a node. Naming the inverse is a modeling decision only
+/// the author can make, so it is required rather than derived.
+///
+/// [`SchemaRelationship`](crate::models::schema::SchemaRelationship) carries
+/// both as non-`Option` fields, which is what makes this an invariant every
+/// reader can rely on. This check exists because that type-level guarantee
+/// alone produces `missing field reverseName` — a message naming the key but
+/// not what to put in it. Sibling of [`describe_missing_top_level_keys`]: same
+/// reason, one level down. Reported per relationship (by name and array
+/// position) so a caller repairing a multi-relationship payload knows which
+/// entry to fix.
+fn describe_missing_reverse_fields(relationships: &Value) -> Result<(), MarkdownError> {
+    let Some(entries) = relationships.as_array() else {
+        return Ok(());
+    };
+
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(obj) = entry.as_object() else {
+            // A non-object entry is a different mistake; serde reports it with
+            // a clearer type error than this function could add.
+            continue;
+        };
+
+        // Absent, null, and (for the name) blank are the same defect from the
+        // caller's side: the reverse half was not supplied. Treat them alike so
+        // the repair instruction is the same in every case.
+        let mut missing: Vec<&str> = Vec::new();
+        match obj.get("reverseName") {
+            Some(Value::String(s)) if !s.trim().is_empty() => {}
+            _ => missing.push("reverseName"),
+        }
+        match obj.get("reverseCardinality") {
+            Some(Value::String(s)) if !s.trim().is_empty() => {}
+            _ => missing.push("reverseCardinality"),
+        }
+        if missing.is_empty() {
+            continue;
+        }
+
+        // Reflect the caller's own forward declaration back in the example, so
+        // the fix is a two-key addition to the entry they already sent rather
+        // than a rewrite of it.
+        let name = obj
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("<relationship>");
+        let direction = obj
+            .get("direction")
+            .and_then(Value::as_str)
+            .unwrap_or("out");
+        let cardinality = obj
+            .get("cardinality")
+            .and_then(Value::as_str)
+            .unwrap_or("many");
+        // `targetType` is legitimately omitted (an untyped relationship — the
+        // documented escape hatch for "the target type doesn't exist yet"), so
+        // the message has to read correctly without one rather than printing a
+        // placeholder where a type name belongs.
+        let target_type = obj.get("targetType").and_then(Value::as_str);
+        let target_phrase = match target_type {
+            Some(tt) => format!("a '{tt}'"),
+            None => "the target".to_string(),
+        };
+        let target_type_key = match target_type {
+            Some(tt) => format!("\"targetType\":\"{tt}\","),
+            None => String::new(),
+        };
+        let missing_phrase = match missing.as_slice() {
+            [one] => format!("\"{one}\""),
+            _ => "\"reverseName\" and \"reverseCardinality\"".to_string(),
+        };
+
+        return Err(MarkdownError::invalid_params(format!(
+            "Relationship '{name}' (entry {index}) is missing {missing_phrase}. Every relationship \
+             must name the edge from BOTH ends: it is stored once and read from either side, \
+             so the target's end needs its own name and cardinality. \"reverseName\" is what \
+             this edge is called read from {target_phrase} — a name you choose, plural where \
+             that end may hold many (\"invoices\", not \"Invoice (Customer)\") — and \
+             \"reverseCardinality\" is \"one\" or \"many\", saying how many '{name}' sources \
+             may point at one target. Corrected: \
+             {{\"name\":\"{name}\",{target_type_key}\"direction\":\"{direction}\",\
+             \"cardinality\":\"{cardinality}\",\"reverseName\":\"...\",\
+             \"reverseCardinality\":\"many\"}}."
+        )));
+    }
+
     Ok(())
 }
 
@@ -640,6 +754,13 @@ pub async fn handle_create_schema(
     // the field problems first: those are what the caller must rebuild, whereas
     // a missing `name` is a one-key addition to an otherwise-correct call.
     describe_missing_top_level_keys(&params)?;
+
+    // Before serde: a relationship missing its reverse half deserializes to a
+    // bare "missing field" naming the key but not what the reverse half is FOR
+    // or what value to choose.
+    if let Some(relationships) = params.get("relationships") {
+        describe_missing_reverse_fields(relationships)?;
+    }
 
     // Runs AFTER both checks, not before: an entry whose every value is null
     // carries no information to validate, but removing it first renumbers the
@@ -908,6 +1029,14 @@ pub async fn handle_update_schema(
     // See `describe_malformed_fields` — locate a bad entry before serde reports
     // only the absent key with no position.
     describe_malformed_fields(&params, "add_fields")?;
+
+    // Same reverse-half check `handle_create_schema` runs, on the key that
+    // carries new declarations here. A relationship added by an update is a new
+    // stored edge and must be named from both ends exactly as one declared at
+    // create time.
+    if let Some(relationships) = params.get("add_relationships") {
+        describe_missing_reverse_fields(relationships)?;
+    }
 
     // `add_fields` is `fields` under another name and takes the same treatment:
     // the model appends an informationless `{"description":null,"name":null}`
@@ -1552,8 +1681,8 @@ mod tests {
             direction: RelationshipDirection::Out,
             cardinality: RelationshipCardinality::Many,
             required: None,
-            reverse_name: None,
-            reverse_cardinality: None,
+            reverse_name: "orgs".to_string(),
+            reverse_cardinality: RelationshipCardinality::Many,
             edge_fields: Some(edge_fields),
             description: None,
         }

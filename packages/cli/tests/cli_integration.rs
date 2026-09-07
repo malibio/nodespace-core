@@ -844,7 +844,9 @@ async fn schema_delete_requires_relationship_declarations_removed_first() {
                         "name": "supersedes",
                         "targetType": "memo",
                         "direction": "out",
-                        "cardinality": "one"
+                        "cardinality": "one",
+                        "reverseName": "superseded_by",
+                        "reverseCardinality": "one"
                     }]
                 })
                 .to_string(),
@@ -1032,7 +1034,7 @@ async fn relationship_create_and_get() {
                     "name": "Ticket",
                     "fields": [{"name": "title", "type": "string"}],
                     "relationships": [
-                        {"name": "blocks", "target_type": "ticket", "direction": "out", "cardinality": "many"}
+                        {"name": "blocks", "targetType": "ticket", "direction": "out", "cardinality": "many", "reverseName": "blocked_by", "reverseCardinality": "many"}
                     ]
                 })
                 .to_string(),
@@ -1126,7 +1128,7 @@ async fn relationship_get_emits_flat_properties() {
                     "name": "Ticket",
                     "fields": [{"name": "severity", "type": "string"}],
                     "relationships": [
-                        {"name": "blocks", "target_type": "ticket", "direction": "out", "cardinality": "many"}
+                        {"name": "blocks", "targetType": "ticket", "direction": "out", "cardinality": "many", "reverseName": "blocked_by", "reverseCardinality": "many"}
                     ]
                 })
                 .to_string(),
