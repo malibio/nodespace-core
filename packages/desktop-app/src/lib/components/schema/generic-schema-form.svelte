@@ -33,6 +33,7 @@
   import type { SchemaNode, SchemaField } from '$lib/types/schema-node';
   import type { Node } from '$lib/types';
   import { labelForField } from '$lib/utils/schema-field-label';
+  import { isUserVisibleField } from '$lib/utils/schema-field-visibility';
   import TypedFormShell from './typed-form-shell.svelte';
   import SchemaFieldLeaf from './schema-field-leaf.svelte';
   import NestedFieldTrigger from './nested-field-trigger.svelte';
@@ -48,7 +49,7 @@
   // collection, both have dedicated viewers that bypass this component
   // entirely), but a real gap if anything ever renders a system-field type
   // through this generic per-field loop.
-  const visibleFields = $derived(schema.fields.filter((f) => f.protection !== 'system'));
+  const visibleFields = $derived(schema.fields.filter(isUserVisibleField));
 
   const node = $derived<Node | null>(nodeId ? (sharedNodeStore.getNode(nodeId) ?? null) : null);
 

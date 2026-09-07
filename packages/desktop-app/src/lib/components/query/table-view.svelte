@@ -3,7 +3,9 @@
 
   Derives columns from schema field definitions (not by enumerating result node keys).
   Always includes 'content' (title) as the first column — rendered as a clickable link.
-  Additional columns: one per schema field definition, in schema order, using field.friendlyName.
+  Additional columns: one per user-visible schema field definition, in schema order,
+  using field.friendlyName. `protection: 'system'` fields are excluded — see
+  isUserVisibleField.
   Clicking the content/title cell calls onRowClick(node.id).
   Results are paginated at 25 rows per page.
 -->
@@ -11,6 +13,7 @@
 <script lang="ts">
   import type { SchemaField, SchemaNode } from '$lib/types/schema-node';
   import { labelForField } from '$lib/utils/schema-field-label';
+  import { isUserVisibleField } from '$lib/utils/schema-field-visibility';
   import TableRow from '$lib/components/query/table-row.svelte';
   import { Table, TableHeader, TableBody, TableHead, TableRow as UiTableRow } from '$lib/components/ui/table';
   import { Button } from '$lib/components/ui/button';
@@ -33,14 +36,17 @@
   // out-of-range page on read — no $effect syncing state to the nodeIds prop (ADR-049).
   let currentPage = $state(0);
 
-  // Derive columns from schema fields.
+  // Derive columns from schema fields, skipping system-managed ones — a column
+  // for a field the user can never fill (and which may hold internals like
+  // ai-chat's raw `capture:transcript`) is not a user-facing column. Same
+  // predicate the detail form uses, so the two views agree.
   const columns = $derived.by(() => {
     const cols: Array<{ field: string; label: string }> = [
       { field: 'content', label: '' }
     ];
 
     if (schema?.fields) {
-      for (const field of schema.fields) {
+      for (const field of schema.fields.filter(isUserVisibleField)) {
         cols.push({ field: field.name, label: labelForField(field) });
       }
     }
