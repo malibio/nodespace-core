@@ -355,34 +355,103 @@ describe("compileInstaller", () => {
     expect(listFilesRecursive(root).filter((rel) => rel.includes(".tmp-"))).toEqual([]);
   }, 60_000);
 
-  test("leaves a previous good binary untouched when the compile fails", async () => {
-    // The latch this guards against: a failed compile must not leave a
-    // freshly-stamped broken outfile, or isOutputFresh reports it fresh
-    // forever and every later run ships the corrupt binary.
+  test("never names outfile as the compile target", async () => {
+    // The load-bearing property. A real `bun build --compile` resolves and
+    // bundles before opening its output, so no malformed entrypoint can
+    // reproduce a partial write from outside -- which is exactly why this
+    // asserts the seam instead: outfile must only ever be written by the
+    // rename, never handed to the compiler.
+    const outfile = join(root, "installer");
+    const targets: string[] = [];
+
+    await compileInstaller("entry.ts", outfile, async (_entry, target) => {
+      targets.push(target);
+      writeFileSync(target, "compiled bytes");
+    });
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).not.toBe(outfile);
+    expect(readFileSync(outfile, "utf8")).toBe("compiled bytes");
+  });
+
+  test("a compile that dies mid-write leaves the previous binary untouched", async () => {
+    // The latch this guards against: a compile killed partway through writing
+    // 58MB must not leave a freshly-stamped truncated outfile, or
+    // isOutputFresh reports it fresh forever and every later run silently
+    // ships the corrupt binary. Reverting compileInstaller to write outfile
+    // directly fails this test.
     const outfile = write("installer", "previous good binary");
     setMtime(outfile, 1_000);
-    const brokenEntry = write("broken.ts", "this is not ; valid typescript <<<<");
 
-    await expect(compileInstaller(brokenEntry, outfile)).rejects.toThrow();
+    await expect(
+      compileInstaller("entry.ts", outfile, async (_entry, target) => {
+        writeFileSync(target, "truncated par");
+        throw new Error("killed mid-write");
+      }),
+    ).rejects.toThrow("killed mid-write");
 
     expect(readFileSync(outfile, "utf8")).toBe("previous good binary");
     expect(statSync(outfile).mtimeMs).toBe(1_000_000);
     expect(listFilesRecursive(root).filter((rel) => rel.includes(".tmp-"))).toEqual([]);
-  }, 60_000);
+  });
 
-  test("a failed compile leaves the output still stale, so the next run retries", async () => {
-    // The end-to-end property that matters: after a failure, the guard must
-    // still say "not fresh" rather than latching.
+  test("a compile that dies mid-write leaves the output still stale, so the next run retries", async () => {
+    // The end-to-end consequence: after a failure the guard must still say
+    // "not fresh" rather than latching on the partial artifact.
     const source = write("src/entry.ts", "console.log('x');");
     const outfile = write("installer", "previous good binary");
     setMtime(outfile, 1_000);
     setMtime(source, 5_000);
-    const brokenEntry = write("broken.ts", "this is not ; valid typescript <<<<");
 
-    await expect(compileInstaller(brokenEntry, outfile)).rejects.toThrow();
+    await expect(
+      compileInstaller("entry.ts", outfile, async (_entry, target) => {
+        writeFileSync(target, "truncated par");
+        throw new Error("killed mid-write");
+      }),
+    ).rejects.toThrow();
 
     expect(isOutputFresh(outfile, [join(root, "src")])).toBe(false);
-  }, 60_000);
+  });
+
+  test("sweeps a temp file orphaned by an earlier hard kill", async () => {
+    // A SIGKILL skips the catch, so nothing would otherwise reclaim a ~58MB
+    // partial. Sweeping on the next call bounds it at one per interrupted run.
+    const outfile = join(root, "installer");
+    writeFileSync(`${outfile}.tmp-999999`, "orphaned 58MB partial");
+
+    await compileInstaller("entry.ts", outfile, async (_entry, target) => {
+      writeFileSync(target, "compiled bytes");
+    });
+
+    expect(listFilesRecursive(root).filter((rel) => rel.includes(".tmp-"))).toEqual([]);
+    expect(readFileSync(outfile, "utf8")).toBe("compiled bytes");
+  });
+
+  test("does not sweep unrelated files in the output directory", async () => {
+    const outfile = join(root, "installer");
+    writeFileSync(join(root, "nodespaced"), "a different sidecar");
+    writeFileSync(join(root, "installer-other.tmp-1"), "another binary's temp");
+
+    await compileInstaller("entry.ts", outfile, async (_entry, target) => {
+      writeFileSync(target, "compiled bytes");
+    });
+
+    expect(readFileSync(join(root, "nodespaced"), "utf8")).toBe("a different sidecar");
+    expect(readFileSync(join(root, "installer-other.tmp-1"), "utf8")).toBe(
+      "another binary's temp",
+    );
+  });
+
+  test("rejects with the compiler's own error, unwrapped", async () => {
+    const outfile = join(root, "installer");
+    const failure = new Error("bun build exited with code 1");
+
+    await expect(
+      compileInstaller("entry.ts", outfile, () => Promise.reject(failure)),
+    ).rejects.toBe(failure);
+
+    expect(existsSync(outfile)).toBe(false);
+  });
 });
 
 describe("STAGED_ENTRIES", () => {

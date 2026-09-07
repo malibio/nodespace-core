@@ -71,7 +71,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { arch, platform } from 'node:os';
 
 const WORKSPACE_ROOT = join(import.meta.dir, '..');
@@ -290,13 +290,34 @@ export function isNotACompileInput(relativePath: string): boolean {
  * Renaming within a directory is atomic, so the guard can only ever observe a
  * complete binary: either the rename happened and `outfile` is whole, or it
  * didn't and `outfile` is left exactly as it was (stale, but honestly stale —
- * still older than its inputs, so the next run retries the compile). The temp
- * file is cleaned up on failure so a dead partial doesn't accumulate.
+ * still older than its inputs, so the next run retries the compile). Temp
+ * files are removed on failure, and any orphaned by a hard kill are swept on
+ * the next call.
  */
-export async function compileInstaller(entrypoint: string, outfile: string): Promise<void> {
+export async function compileInstaller(
+  entrypoint: string,
+  outfile: string,
+  // Injectable so a test can drive the write-then-fail case directly. `bun
+  // build --compile` resolves and bundles everything before it opens its
+  // output, so no malformed entrypoint reproduces a partial write from the
+  // outside — the guarantee has to be pinned at this seam instead.
+  compile: (entry: string, target: string) => Promise<unknown> = (entry, target) =>
+    $`bun build --compile ${entry} --outfile ${target}`.quiet(),
+): Promise<void> {
+  // A hard kill (SIGKILL) skips the catch below, orphaning a ~58MB temp file
+  // that nothing would otherwise reclaim. Sweeping them here — before adding
+  // one — keeps that bounded at one per interrupted run rather than
+  // accumulating silently. They are never bundled regardless: tauri-build's
+  // copy_binaries iterates the exact `externalBin` names, not a glob.
+  for (const stale of readdirSync(dirname(outfile))) {
+    if (stale.startsWith(`${basename(outfile)}.tmp-`)) {
+      rmSync(join(dirname(outfile), stale), { recursive: true, force: true });
+    }
+  }
+
   const tempfile = `${outfile}.tmp-${process.pid}`;
   try {
-    await $`bun build --compile ${entrypoint} --outfile ${tempfile}`.quiet();
+    await compile(entrypoint, tempfile);
     if (platform() !== 'win32') {
       chmodSync(tempfile, 0o755);
     }
