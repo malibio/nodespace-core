@@ -9,12 +9,12 @@
 //! release build, a community build and a Pro build can all run on one machine
 //! without fighting over the same endpoint:
 //!
-//! | debug | pro   | socket                        |
-//! |-------|-------|-------------------------------|
-//! | no    | no    | `.nodespace/daemon.sock`         |
-//! | no    | yes   | `.nodespace/daemon-pro.sock`     |
-//! | yes   | no    | `.nodespace/daemon-dev.sock`     |
-//! | yes   | yes   | `.nodespace/daemon-dev-pro.sock` |
+//! | debug | pro | socket                           |
+//! |-------|-----|----------------------------------|
+//! | no    | no  | `.nodespace/daemon.sock`         |
+//! | no    | yes | `.nodespace/daemon-pro.sock`     |
+//! | yes   | no  | `.nodespace/daemon-dev.sock`     |
+//! | yes   | yes | `.nodespace/daemon-dev-pro.sock` |
 //!
 //! Both discriminators are properties of the *calling binary*, which is why
 //! [`daemon_socket_relative`] takes them as parameters instead of reading
