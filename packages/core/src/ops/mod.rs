@@ -81,6 +81,12 @@ impl From<NodeServiceError> for OpsError {
             NodeServiceError::HierarchyViolation(msg) => {
                 OpsError::ValidationFailed(format!("Hierarchy violation: {}", msg))
             }
+            // Internal, not ValidationFailed: the caller's request was well-formed
+            // and the stored graph is not, so there is nothing for the caller to
+            // correct and the fault belongs in server-error reporting.
+            NodeServiceError::CorruptHierarchy(msg) => {
+                OpsError::Internal(format!("Corrupt stored hierarchy: {}", msg))
+            }
             NodeServiceError::NotAContainer {
                 parent_id,
                 node_type,
