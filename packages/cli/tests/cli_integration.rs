@@ -875,6 +875,13 @@ async fn schema_delete_requires_relationship_declarations_removed_first() {
         msg.contains("update_schema"),
         "rejection should name the fix: {msg}"
     );
+    // The guidance tells agents to act on the count, so the count has to be
+    // in the message. A self-reference is one stored edge, not two, even
+    // though it touches this schema at both ends.
+    assert!(
+        msg.contains("1 relationship declaration(s)"),
+        "rejection should name how many declarations remain: {msg}"
+    );
 
     // Clearing the declaration unblocks it.
     commands::schema::run(

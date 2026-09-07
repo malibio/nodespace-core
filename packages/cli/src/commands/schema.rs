@@ -141,9 +141,9 @@ async fn get(client: &mut NodeClient, args: SchemaGetArgs, json: bool) -> Result
 }
 
 /// A schema *is* a node — its ID is the node type identifier — so deletion
-/// goes through `DeleteNode` rather than a schema-specific RPC. The daemon
-/// guards it: a schema still carrying relationship declarations is rejected
-/// with `schema_has_declarations`, which names the count and the fix.
+/// goes through `DeleteNode` rather than a schema-specific RPC, and the
+/// daemon's own guard supplies the declaration prerequisite (see the variant
+/// doc above) without this needing to pre-check it.
 async fn delete(client: &mut NodeClient, args: SchemaDeleteArgs, json: bool) -> Result<()> {
     let response = client
         .delete_node(DeleteNodeRequest {

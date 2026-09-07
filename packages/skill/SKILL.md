@@ -65,7 +65,7 @@ A NodeSpace collection can be **synced and shared** with a teammate through Node
 
 A wrong guess should degrade gracefully, not dead-end: if Branch 1's commands come back as though there's no shell at all, or the `nodespace` tool you expected never appears in your tool list, fall through to the next branch rather than repeating the same failed approach.
 
-**Consent discipline is identical on every branch.** Never run the installer, start the daemon, or delete a node without the user's explicit confirmation — the MCP passthrough is not an exception just because it's a tool call instead of a shell line; see "Delete a node" below, which applies unchanged regardless of which branch dispatched it.
+**Consent discipline is identical on every branch.** Never run the installer, start the daemon, or delete a node or type without the user's explicit confirmation — the MCP passthrough is not an exception just because it's a tool call instead of a shell line; see "Delete a node" below, which applies unchanged regardless of which branch dispatched it.
 
 ### Branch 1: Shell available
 
