@@ -453,12 +453,30 @@ impl GrpcClient {
 /// custom setups) makes them check the wrong path and falsely report "not running".
 #[cfg(unix)]
 pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+    if let Ok(p) = std::env::var(nodespace_proto::socket::SOCKET_ENV_VAR) {
         return std::path::PathBuf::from(p);
     }
+    default_socket_path_for(cfg!(debug_assertions), crate::daemon_setup::is_pro_build())
+}
+
+/// The socket [`resolve_socket_path`] falls back to when `NODESPACED_SOCKET` is
+/// absent, for an arbitrary build variant rather than this binary's own.
+///
+/// Two things are deliberate here. It takes the variant as parameters because a
+/// compiled app is only ever one variant, so this is the only way an ordinary
+/// `#[test]` can check that the app dials, for every variant, the socket the
+/// daemon binds. And it reads no environment at all: `cargo test` runs the whole
+/// binary in one process on a thread pool, so a test of an env-reading resolver
+/// races every other test that touches the same variable. Keeping the override
+/// in the caller leaves this half deterministic and testable, and leaves the
+/// override itself covered by a single test that owns the variable.
+#[cfg(unix)]
+pub(crate) fn default_socket_path_for(is_debug: bool, is_pro: bool) -> std::path::PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(crate::daemon_setup::daemon_socket_relative())
+        .join(nodespace_proto::socket::daemon_socket_relative(
+            is_debug, is_pro,
+        ))
 }
 
 /// Resolve the Named Pipe name used on Windows.
@@ -467,10 +485,10 @@ pub(crate) fn resolve_socket_path() -> std::path::PathBuf {
 /// then falls back to `\\.\pipe\nodespace-daemon`.
 #[cfg(windows)]
 pub(crate) fn resolve_pipe_name() -> String {
-    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+    if let Ok(p) = std::env::var(nodespace_proto::socket::SOCKET_ENV_VAR) {
         return p;
     }
-    r"\\.\pipe\nodespace-daemon".to_string()
+    nodespace_proto::socket::DAEMON_PIPE_NAME.to_string()
 }
 
 /// On Windows, return the pipe name as a `PathBuf` so callers that take a `Path`
@@ -590,6 +608,39 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
             None => std::env::remove_var("NODESPACED_SOCKET"),
+        }
+    }
+
+    /// The app half of the app/daemon agreement check.
+    ///
+    /// These four strings are pinned literally here AND, identically, in the
+    /// daemon's `socket_fallback_variant_tests`. That duplication is the point:
+    /// both sides now derive their default from one shared table, so a test that
+    /// re-derived the expectation from that same table would still pass if the
+    /// table itself were wrong. Pinning the values on each side independently
+    /// means the two can only agree by actually being right.
+    ///
+    /// The failure this guards against is asymmetric and near-invisible: only a
+    /// Pro or dev build is affected, since release-community is the one variant
+    /// whose scoped and unscoped names coincide.
+    ///
+    /// Reads no environment, so it cannot race the sibling test above (which
+    /// owns `NODESPACED_SOCKET` for the whole binary) — see
+    /// `default_socket_path_for`'s doc comment.
+    #[test]
+    fn each_variant_dials_the_socket_its_daemon_binds() {
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        for (is_debug, is_pro, expected) in [
+            (false, false, ".nodespace/daemon.sock"),
+            (false, true, ".nodespace/daemon-pro.sock"),
+            (true, false, ".nodespace/daemon-dev.sock"),
+            (true, true, ".nodespace/daemon-dev-pro.sock"),
+        ] {
+            assert_eq!(
+                super::default_socket_path_for(is_debug, is_pro),
+                home.join(expected),
+                "variant (debug={is_debug}, pro={is_pro}) must dial {expected}"
+            );
         }
     }
 }

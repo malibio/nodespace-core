@@ -76,21 +76,18 @@ fn daemon_binary_name() -> &'static str {
 /// Relative path from HOME to the daemon socket, scoped by build variant.
 ///
 /// Scoping prevents dev builds from colliding with the production app and prevents
-/// community builds from colliding with Pro builds on the same machine:
-///   - Release community: `.nodespace/daemon.sock`
-///   - Release Pro:       `.nodespace/daemon-pro.sock`
-///   - Debug community:   `.nodespace/daemon-dev.sock`
-///   - Debug Pro:         `.nodespace/daemon-dev-pro.sock`
+/// community builds from colliding with Pro builds on the same machine. The
+/// variant table itself lives in `nodespace_proto::socket` so that the daemon
+/// derives the identical path from its own `debug_assertions` and `pro` feature —
+/// the app and the daemon agree by construction rather than by two copies of the
+/// table staying in sync. This matters because `NODESPACED_SOCKET`, which the
+/// plist sets from this value, is not guaranteed to survive a daemon restart (see
+/// `bootstrap_launchd_agent`'s kickstart fallback).
 ///
 /// grpc_client::resolve_socket_path() calls this function for its fallback, so
 /// the GUI app always dials the same socket the plist points the daemon to.
 pub(crate) fn daemon_socket_relative() -> &'static str {
-    match (cfg!(debug_assertions), is_pro_build()) {
-        (false, false) => ".nodespace/daemon.sock",
-        (false, true) => ".nodespace/daemon-pro.sock",
-        (true, false) => ".nodespace/daemon-dev.sock",
-        (true, true) => ".nodespace/daemon-dev-pro.sock",
-    }
+    nodespace_proto::socket::daemon_socket_relative(cfg!(debug_assertions), is_pro_build())
 }
 
 /// macOS launchd label, scoped by build variant (mirrors daemon_socket_relative).
@@ -967,19 +964,18 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     // one that has been observed missing this way; the tray now falls back to
     // the standard install locations rather than depending on it, so a
     // stale-env daemon is recoverable instead of leaving a dead menu item.
-    // The plist's other variable, `NODESPACED_SOCKET`, is NOT safe to lose in
-    // general, and this is a real hazard rather than a theoretical one.
-    // `daemon_socket_relative()` is scoped by build variant (`daemon.sock` /
-    // `daemon-pro.sock` / `daemon-dev.sock` / `daemon-dev-pro.sock`), while the
-    // daemon's own default is unconditionally `~/.nodespace/daemon.sock` with
-    // no such scoping. The two therefore agree only for the release community
-    // build. A Pro or dev daemon that loses the variable to a kickstart binds
-    // `daemon.sock` while the matching app dials the scoped name via
-    // `grpc_client::resolve_socket_path()`, and they never meet.
+    // The plist's other variable, `NODESPACED_SOCKET`, is likewise survivable
+    // now, but only because the daemon no longer depends on it to know which
+    // socket to bind. Both sides derive the variant-scoped name from the shared
+    // table in `nodespace_proto::socket` -- `daemon_socket_relative()` here, the
+    // daemon's `socket_path()` there -- so losing the variable leaves them
+    // agreeing anyway. It was NOT survivable while the daemon's own default was
+    // an unscoped `~/.nodespace/daemon.sock`: a Pro or dev daemon that lost the
+    // variable to a kickstart bound `daemon.sock` while the matching app dialed
+    // the scoped name, and they never met.
     //
-    // Tracked in core#2406 -- it is a pre-existing hazard on this path, not
-    // something introduced here, and it is fixed by making the daemon's default
-    // variant-scoped rather than by anything at this call site.
+    // The pattern to preserve: a variable on this path may carry a preference or
+    // an override, never the sole copy of a fact both processes must agree on.
     //
     // (`NODESPACED_DB_PATH` does not appear in this plist at all -- only
     // `NODESPACED_SOCKET`, `NODESPACE_UI_BINARY` and the Pro pair -- so there

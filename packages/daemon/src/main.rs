@@ -102,15 +102,43 @@ async fn open_default_database(
     Ok((manager, bundle))
 }
 
+/// True when this daemon was built as the Pro edition. The sibling
+/// `nodespace-sync` repo compiles `nodespaced-pro` with `--features pro`; a
+/// community build leaves it off. Same discriminator `edition()` reports.
+fn is_pro_build() -> bool {
+    cfg!(feature = "pro")
+}
+
+/// The socket this daemon binds.
+///
+/// `NODESPACED_SOCKET` overrides it, but the fallback must resolve to the same
+/// build-variant-scoped path the desktop app dials — see
+/// `nodespace_proto::socket`. A daemon that fell back to the unscoped
+/// `daemon.sock` would serve an endpoint no Pro or dev app ever looks at, while
+/// that app reports the daemon as not running.
 #[cfg(unix)]
 fn socket_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+    if let Ok(p) = std::env::var(nodespace_proto::socket::SOCKET_ENV_VAR) {
         return std::path::PathBuf::from(p);
     }
+    default_socket_path_for(cfg!(debug_assertions), is_pro_build())
+}
+
+/// The socket [`socket_path`] falls back to when `NODESPACED_SOCKET` is absent,
+/// for an arbitrary build variant rather than this binary's own.
+///
+/// Takes the variant as parameters because a compiled daemon is only ever one
+/// variant, so this is the only way an ordinary `#[test]` can check all four —
+/// which is exactly what the app/daemon agreement test needs. It reads no
+/// `NODESPACED_SOCKET` for the same reason its app-side counterpart doesn't:
+/// `cargo test` shares one process, so an env-reading resolver cannot be
+/// asserted on without racing every other test that touches that variable.
+#[cfg(unix)]
+fn default_socket_path_for(is_debug: bool, is_pro: bool) -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home)
-        .join(".nodespace")
-        .join("daemon.sock")
+    std::path::PathBuf::from(home).join(nodespace_proto::socket::daemon_socket_relative(
+        is_debug, is_pro,
+    ))
 }
 
 /// Binds a Unix domain socket so no other local user can ever reach it,
@@ -165,10 +193,10 @@ fn bind_uds_owner_only(sock: &std::path::Path) -> Result<tokio::net::UnixListene
 
 #[cfg(windows)]
 fn pipe_name() -> String {
-    if let Ok(p) = std::env::var("NODESPACED_SOCKET") {
+    if let Ok(p) = std::env::var(nodespace_proto::socket::SOCKET_ENV_VAR) {
         return p;
     }
-    r"\\.\pipe\nodespace-daemon".to_string()
+    nodespace_proto::socket::DAEMON_PIPE_NAME.to_string()
 }
 
 /// `tao`'s event loop must own the main thread on macOS (NSApplication is
@@ -462,7 +490,7 @@ fn headless() -> bool {
 
 /// Returns the build edition: "pro" when compiled with `--features pro`, otherwise "community".
 fn edition() -> &'static str {
-    if cfg!(feature = "pro") {
+    if is_pro_build() {
         "pro"
     } else {
         "community"
@@ -1021,5 +1049,97 @@ mod uds_permission_tests {
             .expect("victim dir must remain traversable/writable after a concurrent bind");
 
         drop(listener);
+    }
+}
+
+/// The daemon must derive the same socket the desktop app dials *without*
+/// `NODESPACED_SOCKET` in its environment.
+///
+/// The plist sets that variable, but `launchctl kickstart -k` restarts the job
+/// definition launchd already has loaded rather than re-reading the plist, so a
+/// daemon can outlive the variable that told it which socket to bind. When the
+/// daemon's fallback was the unscoped `daemon.sock`, a Pro or dev daemon that
+/// lost the variable bound a socket its own app never dialed: a healthy daemon
+/// serving nobody, and an app reporting "daemon not running". Only the release
+/// community build was unaffected, because that is the one variant where the
+/// scoped and unscoped names coincide — which is precisely why a test that
+/// checks a single variant would not have caught it.
+#[cfg(all(test, unix))]
+mod socket_fallback_variant_tests {
+    use super::default_socket_path_for;
+
+    /// Every variant, spelled out literally rather than re-derived from
+    /// `nodespace_proto::socket`. The app side pins the identical four strings
+    /// against its own resolver, so the two agree on values a change to the
+    /// shared table cannot quietly move in lockstep.
+    const EXPECTED: [(bool, bool, &str); 4] = [
+        (false, false, ".nodespace/daemon.sock"),
+        (false, true, ".nodespace/daemon-pro.sock"),
+        (true, false, ".nodespace/daemon-dev.sock"),
+        (true, true, ".nodespace/daemon-dev-pro.sock"),
+    ];
+
+    /// `default_socket_path_for` still reads `HOME`, which `cargo test` shares
+    /// across threads, so this asserts on the suffix under whatever `HOME` the
+    /// runner has rather than pinning an absolute path.
+    #[test]
+    fn every_variant_falls_back_to_its_own_scoped_socket() {
+        for (is_debug, is_pro, expected) in EXPECTED {
+            let resolved = default_socket_path_for(is_debug, is_pro);
+            assert!(
+                resolved.ends_with(expected),
+                "variant (debug={is_debug}, pro={is_pro}) fell back to {} — \
+                 expected it to end with {expected}. A daemon that binds a socket \
+                 its own app does not dial is unreachable.",
+                resolved.display()
+            );
+        }
+    }
+
+    /// The regression itself: before the fix, all four variants resolved to the
+    /// community `daemon.sock`. Distinctness is what makes the fallback correct.
+    #[test]
+    fn variants_do_not_collapse_onto_one_socket() {
+        let mut resolved: Vec<_> = EXPECTED
+            .iter()
+            .map(|&(d, p, _)| default_socket_path_for(d, p))
+            .collect();
+        resolved.sort();
+        resolved.dedup();
+        assert_eq!(
+            resolved.len(),
+            4,
+            "each build variant must fall back to a distinct socket"
+        );
+    }
+
+    /// `NODESPACED_SOCKET` stays an override, not a suggestion — the plist sets
+    /// it, and the two-window dev setup depends on it winning over the default.
+    /// Making the fallback variant-scoped must not have demoted it.
+    ///
+    /// This is the one test in the binary that mutates `NODESPACED_SOCKET`, so
+    /// it owns that variable outright: everything else here reads only `HOME`.
+    #[test]
+    fn the_env_override_still_wins_over_the_scoped_default() {
+        let prev = std::env::var_os("NODESPACED_SOCKET");
+
+        std::env::set_var("NODESPACED_SOCKET", "/tmp/ns-override.sock");
+        assert_eq!(
+            super::socket_path(),
+            std::path::PathBuf::from("/tmp/ns-override.sock"),
+            "NODESPACED_SOCKET must still override the scoped default"
+        );
+
+        std::env::remove_var("NODESPACED_SOCKET");
+        assert_eq!(
+            super::socket_path(),
+            super::default_socket_path_for(cfg!(debug_assertions), super::is_pro_build()),
+            "with no override, socket_path must be exactly this build's scoped default"
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("NODESPACED_SOCKET", v),
+            None => std::env::remove_var("NODESPACED_SOCKET"),
+        }
     }
 }
