@@ -879,10 +879,18 @@ fn write_plist(home: &Path, plist_path: &Path, daemon_bin: &Path) -> Result<()> 
 ///
 /// Uses the modern `launchctl bootstrap gui/<uid>` API (macOS 10.10+).
 /// Any non-success exit code is treated as "might already be registered" — we
-/// attempt `bootout` to clear stale launchd state and then retry `bootstrap`.
-/// This makes recovery from arbitrary launchctl failures (e.g. exit code 5 I/O
-/// error from a diverged plist) self-healing rather than requiring manual
-/// `launchctl bootout` or a reboot.
+/// attempt `enable` + `bootout` to clear stale launchd state and then retry
+/// `bootstrap`. This makes recovery from arbitrary launchctl failures (e.g.
+/// exit code 5 I/O error from a diverged plist) self-healing rather than
+/// requiring manual `launchctl bootout`/`enable` or a reboot.
+///
+/// `enable` matters on its own: a disabled label is a *persistent per-user*
+/// launchd override that survives deleting the plist and reinstalling --
+/// `bootout` does not clear it, so without this a disabled label makes every
+/// bootstrap attempt fail identically forever, with launchd's own error
+/// ("Input/output error") giving no hint that the label is disabled at all.
+/// Harmless when the label isn't disabled -- `launchctl enable` on an
+/// already-enabled label is a no-op.
 #[cfg(target_os = "macos")]
 fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     let uid = get_uid();
@@ -903,10 +911,17 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     tracing::warn!(
-        "launchctl bootstrap exited with status {} ({}); attempting bootout + retry",
+        "launchctl bootstrap exited with status {} ({}); attempting enable + bootout + retry",
         output.status,
         stderr.trim()
     );
+
+    // Clear a disabled-label override before bootout -- bootout alone
+    // cannot, and a still-disabled label would make the retry below fail
+    // with the exact same error.
+    let _ = std::process::Command::new("launchctl")
+        .args(["enable", &service_target])
+        .output();
 
     // Attempt to remove any stale launchd registration (ignoring errors — the
     // service may not actually be registered, which is fine).
@@ -945,14 +960,97 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
 
     if !kickstart.status.success() {
         let ks_err = String::from_utf8_lossy(&kickstart.stderr);
-        tracing::warn!(
-            "launchctl kickstart failed (daemon may start on next login): {}",
-            ks_err.trim()
-        );
-    } else {
-        tracing::info!("launchd agent kickstarted successfully");
+        // Every fallback exhausted -- bootstrap, enable + bootout + retry,
+        // and kickstart all failed. Returning here (rather than swallowing
+        // this into Ok, as before) is what lets `ensure_daemon_running`'s
+        // `?` actually surface a reason instead of silently falling through
+        // to a later, unrelated "daemon not running" check with no context
+        // on why -- the exact "Retry button that cannot succeed" symptom
+        // this is meant to fix.
+        return Err(anyhow::anyhow!(
+            "launchd agent {label} failed to start: bootstrap, bootout+retry, and kickstart all \
+             failed (last error: {err})",
+            label = label,
+            err = ks_err.trim()
+        ));
     }
+    tracing::info!("launchd agent kickstarted successfully");
     Ok(())
+}
+
+/// `bootstrap_launchd_agent` shells out to the real `launchctl` and would,
+/// under test, operate on this machine's actual dev-build agent label
+/// (tests compile with `cfg(debug_assertions)`) -- risking disruption of a
+/// developer's own running dev daemon rather than a safe, isolated
+/// fixture. Pinned at the source level instead, the same technique
+/// `lib.rs`'s `persist_window_geometry_captures_inner_size_not_outer_size...`
+/// test uses for the same reason (no safe way to exercise real OS-level
+/// window/process state under test).
+#[cfg(all(test, target_os = "macos"))]
+mod bootstrap_launchd_agent_recovery_order_tests {
+    /// Slices out exactly `bootstrap_launchd_agent`'s own body by counting
+    /// balanced braces from its opening one, rather than searching for the
+    /// next item's name -- a name-based end marker is fragile to whatever
+    /// happens to be declared next in the file (this test module itself
+    /// used to sit between the function and `fn get_uid`, which made an
+    /// earlier version of this helper's slice silently include the test
+    /// module's own source, including its own assertion strings).
+    fn function_source() -> &'static str {
+        let source = include_str!("daemon_setup.rs");
+        let start = source
+            .find("fn bootstrap_launchd_agent")
+            .expect("bootstrap_launchd_agent not found in daemon_setup.rs");
+        let body_start = source[start..]
+            .find('{')
+            .map(|offset| start + offset)
+            .expect("bootstrap_launchd_agent has no opening brace");
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, ch) in source[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(body_start + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.expect("bootstrap_launchd_agent's braces never balance to zero");
+        &source[start..end]
+    }
+
+    #[test]
+    fn enable_runs_before_bootout_on_a_bootstrap_failure() {
+        let src = function_source();
+        let enable_pos = src
+            .find(r#"["enable", &service_target]"#)
+            .expect("must call `launchctl enable` on the failed label before bootout+retry");
+        let first_bootout_pos = src
+            .find(r#"["bootout""#)
+            .expect("must still attempt bootout after enable");
+        assert!(
+            enable_pos < first_bootout_pos,
+            "`launchctl enable` must run BEFORE the first `bootout` -- a disabled label \
+             survives bootout, so enabling it after bootout (or not at all) leaves the \
+             identical failure on retry"
+        );
+    }
+
+    #[test]
+    fn a_kickstart_failure_returns_an_error_instead_of_being_swallowed() {
+        let src = function_source();
+        assert!(
+            src.contains("return Err(anyhow::anyhow!"),
+            "a kickstart failure -- the last fallback -- must return Err so \
+             `ensure_daemon_running`'s `?` can surface a real reason, instead of always \
+             returning Ok(()) and leaving the caller to discover the daemon never started \
+             from an unrelated, contextless check further downstream"
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]
