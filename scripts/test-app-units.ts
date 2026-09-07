@@ -79,6 +79,28 @@ const hostTriple = (): string | null => {
   return null;
 };
 
+interface RequiredPath {
+  path: string;
+  kind: 'file' | 'glob';
+}
+
+/**
+ * `resources` accepts either a list of paths or a source -> target map (see
+ * tauri-utils' `BundleResources`). This repo uses the list form; handle both
+ * so a later switch to the map form doesn't turn this check into a confusing
+ * `.map is not a function` in the middle of `rust:test`. Either way it is the
+ * source patterns that have to exist.
+ */
+const resourcePatterns = (resources: unknown): string[] => {
+  if (Array.isArray(resources)) {
+    return resources.filter((r): r is string => typeof r === 'string');
+  }
+  if (resources && typeof resources === 'object') {
+    return Object.keys(resources);
+  }
+  return [];
+};
+
 /**
  * The staged paths `tauri_build::build()` will insist on, read from the
  * config it reads. `externalBin` entries gain the host triple and exe suffix
@@ -86,19 +108,25 @@ const hostTriple = (): string | null => {
  * least one file (an empty match is `GlobPathNotFound`, a hard error just
  * like a missing file).
  */
-const requiredPaths = (triple: string): { path: string; kind: 'file' | 'glob' }[] => {
-  const config = JSON.parse(
+const requiredPaths = (triple: string): RequiredPath[] => {
+  const config: unknown = JSON.parse(
     readFileSync(join(TAURI_DIR, 'tauri.conf.json'), 'utf8'),
   );
-  const bundle = config.bundle ?? {};
+  const bundle =
+    (config as { bundle?: { externalBin?: unknown; resources?: unknown } })
+      .bundle ?? {};
   const ext = platform() === 'win32' ? '.exe' : '';
 
+  const externalBin = Array.isArray(bundle.externalBin)
+    ? bundle.externalBin.filter((b): b is string => typeof b === 'string')
+    : [];
+
   return [
-    ...(bundle.externalBin ?? []).map((bin: string) => ({
+    ...externalBin.map((bin): RequiredPath => ({
       path: `${bin}-${triple}${ext}`,
       kind: 'file' as const,
     })),
-    ...(bundle.resources ?? []).map((pattern: string) => ({
+    ...resourcePatterns(bundle.resources).map((pattern): RequiredPath => ({
       path: pattern,
       kind: 'glob' as const,
     })),
