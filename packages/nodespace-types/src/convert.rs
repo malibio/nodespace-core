@@ -79,6 +79,9 @@ pub fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<serde_json::Value>,
 /// object is a real schema-defined field value and is preserved, whereas in the
 /// already-flat fallback a nested object can only be another type's namespace
 /// and is dropped.
+///
+/// This governs human-readable CLI output as well as JSON: `write_human_node`
+/// and `node_to_json` share one call into it, so the two cannot disagree.
 pub fn flatten_namespaced_properties(
     properties: &serde_json::Value,
     node_type: &str,

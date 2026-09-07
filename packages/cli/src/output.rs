@@ -113,6 +113,69 @@ fn properties_to_json(node: &NodeData) -> serde_json::Value {
     }
 }
 
+/// Re-key one node of a `GetRelatedNodes` payload into the CLI's node shape.
+///
+/// `relationship get` is the one read path whose nodes the daemon serializes
+/// itself, so they arrive in the frontend's typed shape: camelCase keys, an
+/// injected `uri`, and for `task`/`ai-chat` type-specific fields promoted to
+/// the top level. Every other command emits [`node_to_json`]'s snake_case
+/// shape. Two shapes on one CLI surface is the same defect as two property
+/// layouts — a consumer would have to know which command it called before it
+/// could read `node_type` — so this maps the typed shape onto the CLI's.
+///
+/// Only the keys the CLI's own shape defines are re-keyed; promoted typed
+/// fields and `uri` are dropped, since `properties` already carries the
+/// promoted values and no other command emits a `uri`. Unrecognized keys pass
+/// through untouched rather than being silently discarded.
+pub fn related_node_to_json(node: &serde_json::Value) -> serde_json::Value {
+    let Some(obj) = node.as_object() else {
+        return node.clone();
+    };
+
+    // `schema` nodes reach us reshaped by `SchemaNode::from_node`, which drops
+    // `nodeType`/`title`/`properties` wholesale. Nothing can be recovered from
+    // this end, so pass them through rather than emitting a half-mapped node
+    // that looks like the CLI shape but is missing its fields.
+    if obj.contains_key("fields") || obj.contains_key("schemaVersion") {
+        return node.clone();
+    }
+
+    const RENAMES: &[(&str, &str)] = &[
+        ("nodeType", "node_type"),
+        ("createdAt", "created_at"),
+        ("modifiedAt", "modified_at"),
+        ("lifecycleStatus", "lifecycle_status"),
+        ("parentId", "parent_id"),
+        ("rootId", "root_id"),
+        ("beforeSiblingId", "before_sibling_id"),
+    ];
+    // Promoted duplicates of what `properties` already carries, plus a `uri`
+    // no other command emits.
+    const DROPPED: &[&str] = &[
+        "uri",
+        "status",
+        "priority",
+        "dueDate",
+        "assignee",
+        "startedAt",
+        "completedAt",
+    ];
+
+    let mut out = serde_json::Map::with_capacity(obj.len());
+    for (key, value) in obj {
+        if DROPPED.contains(&key.as_str()) {
+            continue;
+        }
+        let mapped = RENAMES
+            .iter()
+            .find(|(from, _)| from == key)
+            .map(|(_, to)| (*to).to_string())
+            .unwrap_or_else(|| key.clone());
+        out.insert(mapped, value.clone());
+    }
+    serde_json::Value::Object(out)
+}
+
 pub fn node_to_json(node: &NodeData) -> serde_json::Value {
     // properties is a JSON-encoded string on the wire — inline it as nested
     // JSON so scripts can `jq '.properties.foo'` without a second parse.
@@ -268,6 +331,73 @@ mod tests {
 
         assert_eq!(json["properties"]["billing"]["city"], "Berlin");
         assert_eq!(json["properties"]["amount"], 42);
+    }
+
+    /// `relationship get`'s nodes arrive in the frontend's typed shape. They
+    /// must come out matching every other command's, or a consumer would have
+    /// to know which command it called before it could read `node_type`.
+    #[test]
+    fn related_node_is_rekeyed_to_the_cli_node_shape() {
+        let typed = serde_json::json!({
+            "id": "n1",
+            "nodeType": "ticket",
+            "content": "target",
+            "title": "A ticket",
+            "properties": {"severity": "high"},
+            "version": 2,
+            "createdAt": "2026-05-17T12:00:00Z",
+            "modifiedAt": "2026-05-17T12:00:01Z",
+            "uri": "nodespace://n1",
+        });
+
+        let out = related_node_to_json(&typed);
+
+        assert_eq!(out["node_type"], "ticket");
+        assert_eq!(out["created_at"], "2026-05-17T12:00:00Z");
+        assert_eq!(out["modified_at"], "2026-05-17T12:00:01Z");
+        assert_eq!(out["properties"]["severity"], "high");
+        // camelCase spellings and the injected `uri` are not part of the CLI shape.
+        assert!(out.get("nodeType").is_none());
+        assert!(out.get("createdAt").is_none());
+        assert!(out.get("uri").is_none());
+    }
+
+    /// Promoted typed fields duplicate what `properties` already carries, so
+    /// they are dropped rather than emitted alongside it.
+    #[test]
+    fn related_node_drops_promoted_typed_fields() {
+        let typed = serde_json::json!({
+            "id": "t1",
+            "nodeType": "task",
+            "content": "Buy groceries",
+            "properties": {"status": "open"},
+            "status": "open",
+            "priority": "high",
+            "uri": "nodespace://t1",
+        });
+
+        let out = related_node_to_json(&typed);
+
+        assert_eq!(out["properties"]["status"], "open");
+        assert!(out.get("status").is_none());
+        assert!(out.get("priority").is_none());
+    }
+
+    /// A `schema` node reaches us reshaped by `SchemaNode::from_node`, which
+    /// has already dropped `nodeType`/`title`/`properties`. Nothing can be
+    /// recovered here, so pass it through rather than emit a half-mapped node.
+    #[test]
+    fn related_node_passes_schema_nodes_through_untouched() {
+        let schema = serde_json::json!({
+            "id": "s1",
+            "name": "Ticket",
+            "fields": [{"name": "severity"}],
+            "schemaVersion": 1,
+        });
+
+        let out = related_node_to_json(&schema);
+
+        assert_eq!(out, schema);
     }
 
     /// A node whose only properties are internal renders as empty, not as a

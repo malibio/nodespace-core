@@ -113,6 +113,17 @@ async fn get(client: &mut NodeClient, args: GetArgs, json_out: bool) -> Result<(
 
     let related: serde_json::Value = serde_json::from_str(&response.related_nodes_json)
         .context("daemon returned malformed related_nodes_json")?;
+    // The daemon serializes these nodes itself, in the frontend's typed shape.
+    // Re-key them so this command's nodes match every other command's.
+    let related = match &related {
+        serde_json::Value::Array(nodes) => serde_json::Value::Array(
+            nodes
+                .iter()
+                .map(crate::output::related_node_to_json)
+                .collect(),
+        ),
+        other => other.clone(),
+    };
 
     if json_out {
         println!(
