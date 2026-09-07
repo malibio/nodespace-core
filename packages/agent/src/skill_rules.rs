@@ -122,8 +122,8 @@ pub const RELATIONSHIP_VS_FIELD: SchemaRule = SchemaRule {
 
 pub const TARGET_TYPE_MUST_EXIST: SchemaRule = SchemaRule {
     id: "target-type-must-exist",
-    imperative: "The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:\n- ADR supersedes adr (one): `{\"name\": \"supersedes\", \"targetType\": \"adr\", \"direction\": \"out\", \"cardinality\": \"one\"}`\n- Ticket has_task task (many): `{\"name\": \"has_task\", \"targetType\": \"task\", \"direction\": \"out\", \"cardinality\": \"many\"}`",
-    prose: "`targetType` must be an existing schema ID. Examples: `{\"name\":\"supersedes\",\"targetType\":\"adr\",\"direction\":\"out\",\"cardinality\":\"one\"}`, `{\"name\":\"has_task\",\"targetType\":\"task\",\"direction\":\"out\",\"cardinality\":\"many\"}`.",
+    imperative: "The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Set reverseName when the edge has a natural name read from the target's end — it makes the reverse query directly callable. Examples:\n- ADR supersedes adr (one): `{\"name\": \"supersedes\", \"targetType\": \"adr\", \"direction\": \"out\", \"cardinality\": \"one\"}`\n- Ticket has_task task (many): `{\"name\": \"has_task\", \"targetType\": \"task\", \"direction\": \"out\", \"cardinality\": \"many\"}`\n- ADR decided_by person, readable back as the person's decisions: `{\"name\": \"decided_by\", \"targetType\": \"person\", \"direction\": \"out\", \"cardinality\": \"one\", \"reverseName\": \"decisions\", \"reverseCardinality\": \"many\"}`",
+    prose: "`targetType` must be an existing schema ID. Set `reverseName` when the edge has a natural name read from the target's end — that name becomes directly queryable from that side. Examples: `{\"name\":\"supersedes\",\"targetType\":\"adr\",\"direction\":\"out\",\"cardinality\":\"one\"}`, `{\"name\":\"has_task\",\"targetType\":\"task\",\"direction\":\"out\",\"cardinality\":\"many\"}`, `{\"name\":\"decided_by\",\"targetType\":\"person\",\"direction\":\"out\",\"cardinality\":\"one\",\"reverseName\":\"decisions\",\"reverseCardinality\":\"many\"}`.",
 };
 
 pub const TITLE_TEMPLATE_PLACEHOLDERS: SchemaRule = SchemaRule {
@@ -204,6 +204,19 @@ pub const ORG_NEEDS_EXISTING_COLLECTION: InteractionRule = InteractionRule {
     skill_md_key_phrase: "If the collection doesn't exist as a node yet, ask the user to create it first",
 };
 
+/// A relationship is declared once, on the source type, but is legitimately
+/// read from both ends. Whichever end you start from, the traversal exists —
+/// the only question is which name spells it. Getting that wrong used to return
+/// an empty result, which reads as "there is nothing there" and talks callers
+/// out of the reverse query entirely; it now errors and names the working
+/// spellings, but the mapping is cheap to state up front.
+pub const RELATIONSHIP_REVERSE_TRAVERSAL: InteractionRule = InteractionRule {
+    id: "relationship-reverse-traversal",
+    imperative: "REVERSE TRAVERSAL: A relationship declared as {\"name\": \"decided_by\", \"targetType\": \"person\", \"reverseName\": \"decisions\"} on the adr schema is readable from BOTH ends. From an adr, call get_related_nodes with relationship_type 'decided_by' and direction 'out'. From the person, use the declared reverseName — relationship_type 'decisions' — or equivalently 'decided_by' with direction 'in'; both return the same ADRs. An empty result means no edges exist, NOT that the reverse direction is unsupported. A relationship name that is declared in neither direction is now an error naming the spellings that do work — read it and retry rather than reporting the capability as missing.",
+    prose: "**Traversing the reverse direction.** A relationship is declared once, on the source type, but reads from both ends. Given `{\"name\":\"decided_by\",\"targetType\":\"person\",\"reverseName\":\"decisions\"}` on `adr`: from the ADR, `nodespace relationship get <adr-id> --type decided_by --direction out`; from the person, use the declared `reverseName` — `nodespace relationship get <person-id> --type decisions` — or the equivalent `--type decided_by --direction in`. Both spellings return the same ADRs, and the output line's arrow shows the direction actually traversed. An empty result means no edges exist, not that reverse traversal is unsupported. A name declared in neither direction is rejected with an error naming the spellings that do work — read it and retry rather than concluding the capability is missing.",
+    skill_md_key_phrase: "use the declared `reverseName`",
+};
+
 pub const BULK_IMPORT_NO_FOLLOWUP_SEARCH: InteractionRule = InteractionRule {
     id: "bulk-import-no-followup-search",
     imperative: "SUCCESS: After create_nodes_from_markdown returns, report the number of nodes created. Do NOT follow up with search calls.",
@@ -220,6 +233,7 @@ pub const INTERACTION_RULES: &[InteractionRule] = &[
     TASK_STATUS_DEDICATED_VERB,
     SINGLE_ITEM_PER_CALL,
     ORG_NEEDS_EXISTING_COLLECTION,
+    RELATIONSHIP_REVERSE_TRAVERSAL,
     BULK_IMPORT_NO_FOLLOWUP_SEARCH,
 ];
 

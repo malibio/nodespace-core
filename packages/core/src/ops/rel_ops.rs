@@ -120,15 +120,264 @@ pub async fn update_relationship_properties(
     Ok(())
 }
 
+// ============================================================================
+// Relationship name resolution
+// ============================================================================
+
+/// How a caller-supplied relationship name matched the schema neighbourhood of
+/// the node being traversed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedRelName {
+    /// A built-in structural name (`has_child`, `mentions`, …), legal between
+    /// any two nodes without being declared. Traversed exactly as given.
+    Builtin,
+    /// The forward `name` of a relationship declared on the node's own schema.
+    /// Traversed exactly as given.
+    Forward,
+    /// The `reverse_name` of a relationship declared by a schema that targets
+    /// this node's type. Edges are stored under the FORWARD name, so traversing
+    /// by this name rewrites the name and flips the direction.
+    Reverse {
+        /// The forward name the edges are actually stored under.
+        forward_name: String,
+        /// The type declaring the forward relationship (the far end here).
+        source_type: String,
+    },
+    /// The forward `name` of a relationship declared by another schema that
+    /// targets this node's type — the node sits at the edge's far end. Already
+    /// traversable as given (with `direction: "in"`), so it passes through
+    /// unchanged; recognised here only so it is not mistaken for undeclared.
+    InboundForward,
+}
+
+/// Resolve a caller-supplied relationship name against the schemas reachable
+/// from `node_type`, so a declared `reverse_name` traverses the inverse edge
+/// rather than silently matching nothing.
+///
+/// A `reverse_name` names a real, traversable direction — it is the name the
+/// schema author chose for "the other way round", and answering it is the whole
+/// point of modelling with relationships ("which decisions did this person sign
+/// off on?"). It is not, however, what edges are *stored* under: the store keys
+/// every edge on the forward `relationship_type`. Resolution bridges the two.
+///
+/// A name matching neither direction is an error, not an empty result. An empty
+/// result is indistinguishable from "declared, but no edges yet", so a caller
+/// who misspells a name — or reaches for one that was never declared — is told
+/// the capability is absent rather than that the answer is zero. A *declared*
+/// name with no edges still returns an empty list; only an undeclared one errors.
+async fn resolve_relationship_name(
+    node_service: &Arc<NodeService>,
+    node_id: &str,
+    node_type: &str,
+    relationship_name: &str,
+) -> Result<ResolvedRelName, OpsError> {
+    if BUILTIN_RELATIONSHIP_NAMES.contains(&relationship_name) {
+        return Ok(ResolvedRelName::Builtin);
+    }
+
+    // Forward first: a forward name always wins over a same-spelled reverse
+    // name on another schema, so resolution can never redirect a traversal that
+    // already worked before this resolver existed.
+    let own_schema = node_service
+        .get_schema_node(node_type)
+        .await
+        .map_err(|e| OpsError::Internal(format!("Failed to load schema node: {}", e)))?;
+    if let Some(schema) = &own_schema {
+        if schema.get_relationship(relationship_name).is_some() {
+            return Ok(ResolvedRelName::Forward);
+        }
+    }
+
+    // Reverse: a schema targeting this node's type declares `relationship_name`
+    // as its `reverse_name`.
+    //
+    // `get_inbound_relationships` reports an UNTYPED relationship (`target_type:
+    // None` — the documented escape hatch for "the target type doesn't exist
+    // yet") as inbound for every type in the workspace, since it may legitimately
+    // point at anything. Resolution cannot take that at face value: accepting an
+    // untyped reverse name from a type its edges never touch resolves to a
+    // guaranteed empty result — the silent zero this resolver exists to
+    // eliminate, returning through a side door. So an untyped declaration counts
+    // only when an edge of that name actually reaches THIS node. A typed
+    // declaration still applies unconditionally: its target_type names this type,
+    // so "declared but not yet linked" is a real, informative empty answer.
+    let all_inbound = node_service
+        .get_inbound_relationships(node_type)
+        .await
+        .map_err(|e| {
+            OpsError::Internal(format!("Failed to resolve inbound relationships: {}", e))
+        })?;
+
+    // Costs one query per untyped declaration. Untyped relationships are the
+    // exception rather than the rule, and every one of them is a candidate both
+    // for the match below and for the error's suggestion list, so there is no
+    // subset worth skipping.
+    let mut inbound = Vec::with_capacity(all_inbound.len());
+    for (source_type, rel) in all_inbound {
+        if rel.target_type.is_some() {
+            inbound.push((source_type, rel));
+            continue;
+        }
+        let reaches_this_node = !node_service
+            .get_related_nodes(node_id, &rel.name, "in")
+            .await
+            .map_err(|e| {
+                OpsError::Internal(format!("Failed to probe untyped relationship: {}", e))
+            })?
+            .is_empty();
+        if reaches_this_node {
+            inbound.push((source_type, rel));
+        }
+    }
+
+    for (source_type, rel) in &inbound {
+        if rel.reverse_name.as_deref() == Some(relationship_name) {
+            return Ok(ResolvedRelName::Reverse {
+                forward_name: rel.name.clone(),
+                source_type: source_type.clone(),
+            });
+        }
+    }
+
+    // The forward name of an inbound relationship: this node is the edge's
+    // target, so `--type <forward> --direction in` already traverses it. That
+    // spelling worked before this resolver existed — and is the very workaround
+    // the reverse-name bug forced callers onto — so it must keep working.
+    if inbound.iter().any(|(_, rel)| rel.name == relationship_name) {
+        return Ok(ResolvedRelName::InboundForward);
+    }
+
+    // Neither. Name what this type CAN be traversed by, so the caller repairs
+    // the call from the error alone instead of guessing at a zero. The two
+    // spellings are kept as separate groups rather than one mixed list: a bare
+    // name and a name carrying a "(with --direction in)" instruction read as
+    // different kinds of thing, and interleaving them alphabetically gets harder
+    // to scan the more relationships a workspace accumulates.
+    let mut direct: Vec<String> = Vec::new();
+    let mut needs_direction_in: Vec<String> = Vec::new();
+    if let Some(schema) = &own_schema {
+        for rel in &schema.relationships {
+            if !BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
+                direct.push(rel.name.clone());
+            }
+        }
+    }
+    for (_, rel) in &inbound {
+        if BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
+            continue;
+        }
+        // The inbound side is ALWAYS reachable by the forward name read inbound,
+        // whether or not a reverse_name exists — so that spelling is listed
+        // either way. A declared reverse_name is an ADDITIONAL, more natural
+        // spelling for the same traversal that needs no --direction flag; it
+        // does not replace the forward one. Listing only the reverse name would
+        // omit a spelling that demonstrably works, which is the same
+        // under-reporting this error exists to prevent.
+        if let Some(reverse) = rel.reverse_name.as_deref() {
+            direct.push(reverse.to_string());
+        }
+        needs_direction_in.push(rel.name.clone());
+    }
+    for list in [&mut direct, &mut needs_direction_in] {
+        list.sort();
+        list.dedup();
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if !direct.is_empty() {
+        parts.push(format!("available: {}", direct.join(", ")));
+    }
+    if !needs_direction_in.is_empty() {
+        parts.push(format!(
+            "available with --direction in: {}",
+            needs_direction_in.join(", ")
+        ));
+    }
+    let available = if parts.is_empty() {
+        "no typed relationships are declared for this type".to_string()
+    } else {
+        parts.join("; ")
+    };
+
+    Err(OpsError::InvalidParams(format!(
+        "Relationship '{}' is not declared for node type '{}' in either direction ({}). \
+         Built-in relationships (member_of, has_child, mentions, has_role) are universal.",
+        relationship_name, node_type, available
+    )))
+}
+
 /// Get nodes related via a specific relationship.
+///
+/// The supplied name is resolved against the node's schema neighbourhood first
+/// (see [`resolve_relationship_name`]): a declared `reverse_name` traverses the
+/// inverse edge, and an undeclared name errors rather than returning an empty
+/// result. The returned `relationship_name`/`direction` describe the traversal
+/// that actually ran — a reverse name comes back as the forward name with the
+/// flipped direction — so callers rendering the edge (the CLI's `--name-->`
+/// line) show the real direction rather than the one that was asked for.
 pub async fn get_related_nodes(
     node_service: &Arc<NodeService>,
     input: GetRelatedInput,
 ) -> Result<GetRelatedOutput, OpsError> {
+    let node = node_service
+        .get_node(&input.node_id)
+        .await
+        .map_err(|e| OpsError::Internal(format!("Failed to load node: {}", e)))?
+        .ok_or_else(|| OpsError::NotFound {
+            id: input.node_id.clone(),
+        })?;
+
+    let resolved = resolve_relationship_name(
+        node_service,
+        &input.node_id,
+        &node.node_type,
+        &input.relationship_name,
+    )
+    .await?;
+
+    // A reverse name addresses the same edges from the other end: rewrite to
+    // the stored forward name and flip the direction the caller asked for.
+    let (relationship_name, direction, source_type) = match &resolved {
+        ResolvedRelName::Builtin | ResolvedRelName::Forward | ResolvedRelName::InboundForward => (
+            input.relationship_name.clone(),
+            input.direction.clone(),
+            None,
+        ),
+        ResolvedRelName::Reverse {
+            forward_name,
+            source_type,
+        } => {
+            let flipped = if input.direction == "in" { "out" } else { "in" };
+            (
+                forward_name.clone(),
+                flipped.to_string(),
+                Some(source_type.clone()),
+            )
+        }
+    };
+
     let nodes = node_service
-        .get_related_nodes(&input.node_id, &input.relationship_name, &input.direction)
+        .get_related_nodes(&input.node_id, &relationship_name, &direction)
         .await
         .map_err(|e| OpsError::Internal(format!("Failed to get related nodes: {}", e)))?;
+
+    // The store keys the "in" query on relationship_type alone, so two schemas
+    // declaring the same forward name toward this type would both answer here.
+    // A reverse name was declared by exactly one of them — restrict to it, the
+    // same narrowing `get_node_relationships` applies to its inbound groups.
+    //
+    // `InboundForward` is deliberately NOT narrowed, though it could over-report
+    // the same way. A caller naming the forward name asked for it generically,
+    // not through one declarer's private reverse spelling, so every schema
+    // declaring it is a legitimate answer — and narrowing would change what that
+    // spelling returned before this resolver existed.
+    let nodes: Vec<_> = match &source_type {
+        Some(source_type) => nodes
+            .into_iter()
+            .filter(|n| n.node_type == *source_type)
+            .collect(),
+        None => nodes,
+    };
 
     let count = nodes.len();
     let related_nodes: Vec<Value> = nodes
@@ -138,8 +387,8 @@ pub async fn get_related_nodes(
 
     Ok(GetRelatedOutput {
         node_id: input.node_id,
-        relationship_name: input.relationship_name,
-        direction: input.direction,
+        relationship_name,
+        direction,
         related_nodes,
         count,
     })
