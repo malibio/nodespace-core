@@ -90,6 +90,67 @@ export const DEV_PROXY_CHANNEL_OPTIONS: grpc.ClientOptions = {
   'grpc.max_send_message_length': MAX_MESSAGE_SIZE_BYTES
 };
 
+/**
+ * Channel options for the long-lived `WatchNodes` stream.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the watch stream needs a connection of its own
+ * ---------------------------------------------------------------------------
+ * Parking a long-lived server-streaming call on the HTTP/2 connection the
+ * unary RPCs share wedges that connection under Bun: after roughly 64 KiB of
+ * response data has arrived, every later RPC on it hangs forever. The channel
+ * still reports READY and the daemon sits idle — the requests never reach it.
+ *
+ * This is a Bun defect, not HTTP/2 semantics. The same grpc-js, daemon, socket
+ * and channel options, varying ONLY the runtime, with a `WatchNodes` stream
+ * open on the shared channel:
+ *
+ *   Bun 1.2.16     3/40 calls, 62,856 bytes, then wedged
+ *   Node v26.8.1   40/40 calls, 838,080 bytes, clean
+ *
+ * Node never wedges, so grpc-js's own flow-control handling is not at fault.
+ * The 62,856-byte stopping point sits just under HTTP/2's default 65,535-byte
+ * connection window, which is why byte volume rather than call count decides
+ * when it hits: `GetAllSchemas` (~21 KB) wedged on the 4th call, while
+ * `GetDaemonVersion` (~19 bytes) ran 400/400. Whether Bun fails to emit its own
+ * WINDOW_UPDATEs or mishandles hyper's, we did not determine — an in-process
+ * grpc-js stub server does NOT reproduce the wedge, only the real tonic/hyper
+ * daemon does, so something the two servers do differently is also involved.
+ *
+ * Widening the window from the client does not help. gRPC-js exposes
+ * `grpc-node.flow_control_window` and calls `session.setLocalWindowSize()` on
+ * `remoteSettings` (`@grpc/grpc-js/build/src/transport.js`); Bun provides that
+ * method and it does not throw, but raising the window to 16 MiB left the wedge
+ * at the same 3 calls and the same byte count. So the stream has to stop
+ * sharing the connection.
+ *
+ * `grpc.use_local_subchannel_pool` is gRPC-js's supported way to ask for that.
+ * `internal-channel.js` passes it to `getSubchannelPool`, which returns a fresh
+ * `SubchannelPool` instead of the process-global one, so this client can never
+ * be pooled onto the connection the unary clients share — separation by
+ * construction rather than by incidentally-unequal options. Verified: 200/200
+ * unary calls and 4.19 MB through the proxy, versus 3 before.
+ *
+ * Two independent barriers actually keep the connections apart, which is worth
+ * knowing before editing this object. Beyond the pool selection above, reuse
+ * inside a shared pool also requires `channelOptionsEqual` (`subchannel-pool.js`
+ * -> `channel-options.js`), an exact key-and-value comparison that this extra
+ * key already defeats. Deleting the key collapses both at once and silently
+ * restores a bug whose symptom is a 30s hang with no error — so keep it here
+ * rather than folding it into DEV_PROXY_CHANNEL_OPTIONS, and let
+ * `watch-stream-isolation.e2e.ts` be the thing that catches the mistake.
+ *
+ * Switching the proxy to Node would also avoid the defect, but that trades a
+ * one-line channel option for a runtime split against this repo's Bun-only
+ * standard, and would change how the dev-proxy runs for developers rather than
+ * only in tests. The production Tauri path (Rust/tonic on both ends, no Bun) is
+ * unaffected either way, so this split stays dev-proxy-specific.
+ */
+export const WATCH_CHANNEL_OPTIONS: grpc.ClientOptions = {
+  ...DEV_PROXY_CHANNEL_OPTIONS,
+  'grpc.use_local_subchannel_pool': 1
+};
+
 export function resolveSocketAddress(): string {
   const sock =
     process.env.NODESPACED_SOCKET ?? `${process.env.HOME}/.nodespace/daemon.sock`;
@@ -121,6 +182,13 @@ export interface NodeSpaceGrpcClients {
   nodeClient: grpc.Client;
   agentClient: grpc.Client;
   /**
+   * `NodeService` client reserved for the long-lived `WatchNodes` stream. It
+   * dials its own connection (see [`WATCH_CHANNEL_OPTIONS`]) so the parked
+   * stream cannot exhaust the HTTP/2 connection window that `nodeClient`'s
+   * unary RPCs depend on. Use it for `watchNodes` and nothing else.
+   */
+  watchClient: grpc.Client;
+  /**
    * Wait for `client`'s channel to reach READY, actively driving a connection
    * attempt (and, thanks to DEV_PROXY_CHANNEL_OPTIONS, re-probing every
    * ~100ms). Resolves as soon as the transport is usable; rejects only if the
@@ -133,6 +201,13 @@ export interface NodeSpaceGrpcClients {
   agentCall: <TReq, TRes>(method: Function, request: TReq) => Promise<TRes>;
   /** Server-streaming call on agentClient, gated on the channel being READY. */
   agentStream: <TReq, TEvent>(method: Function, request: TReq) => Promise<TEvent[]>;
+  /**
+   * Close every client this factory built. Callers that tear down should use
+   * this rather than closing clients individually: enumerating them by hand
+   * silently leaks whichever one a later change adds, and `watchClient`'s pool
+   * is per-channel, so nothing else reclaims it.
+   */
+  closeAll: () => void;
 }
 
 /**
@@ -151,6 +226,11 @@ export function createNodeSpaceClients(
     address,
     grpc.credentials.createInsecure(),
     DEV_PROXY_CHANNEL_OPTIONS
+  );
+  const watchClient = new proto.nodespace.NodeService(
+    address,
+    grpc.credentials.createInsecure(),
+    WATCH_CHANNEL_OPTIONS
   );
 
   const ready = (client: grpc.Client, timeoutMs = 30_000): Promise<void> =>
@@ -196,5 +276,21 @@ export function createNodeSpaceClients(
         })
     );
 
-  return { address, nodeClient, agentClient, ready, call, agentCall, agentStream };
+  const closeAll = (): void => {
+    nodeClient.close();
+    agentClient.close();
+    watchClient.close();
+  };
+
+  return {
+    address,
+    nodeClient,
+    agentClient,
+    watchClient,
+    ready,
+    call,
+    agentCall,
+    agentStream,
+    closeAll
+  };
 }

@@ -126,8 +126,7 @@ describe('dev-proxy gRPC channel: recovers promptly when the daemon appears late
       expect(boundAt).toBeGreaterThan(0);
       expect(bindToResolveMs).toBeLessThan(800);
 
-      clients.nodeClient.close();
-      clients.agentClient.close();
+      clients.closeAll();
       await new Promise<void>((resolve) => stub.server.tryShutdown(() => resolve()));
       fs.rmSync(tmpDir, { recursive: true, force: true });
     },

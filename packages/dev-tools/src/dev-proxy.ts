@@ -33,7 +33,7 @@ const PORT = parseInt(process.env.DEV_PROXY_PORT ?? '3001', 10);
 // gated wrappers — each waits for the channel to reach READY before issuing
 // its RPC, so a call made moments after the daemon binds no longer fails
 // silently with UNAVAILABLE.
-const { address, nodeClient, agentClient, ready, call, agentCall, agentStream } =
+const { address, nodeClient, agentClient, watchClient, ready, call, agentCall, agentStream } =
   createNodeSpaceClients();
 
 // ============================================================================
@@ -89,14 +89,20 @@ function startWatchBridge(): void {
     // proxy started before the daemon opens the stream promptly once the
     // socket appears (per the bounded reconnect backoff) instead of churning
     // through immediate stream errors while the channel is mid-backoff.
+    //
+    // This runs on `watchClient`, which dials a connection of its own: parking
+    // a stream on the connection the unary RPCs share exhausts its HTTP/2
+    // window and wedges them permanently. See `WATCH_CHANNEL_OPTIONS` in
+    // ./grpc-client.ts for the measurements and why the window cannot simply
+    // be widened from the client.
     try {
-      await ready(nodeClient);
+      await ready(watchClient);
     } catch (err) {
       console.error('[dev-proxy] WatchNodes channel not ready, retrying in 2s:', (err as Error).message);
       setTimeout(connect, 2000);
       return;
     }
-    const stream = (nodeClient as unknown as Record<string, Function>).watchNodes({
+    const stream = (watchClient as unknown as Record<string, Function>).watchNodes({
       nodeType: '',
       rootId: ''
     }) as grpc.ClientReadableStream<ProtoNodeEvent>;
