@@ -12,7 +12,10 @@ judgment calls that a generator cannot produce.
 All commands accept `--json` for machine-readable output.
 
 **Node JSON shape.** Every command that emits a node returns objects of this
-shape; list-returning commands wrap them as `{"count": N, "nodes": [...]}`.
+shape; list-returning commands wrap them as `{"count": N, "nodes": [...]}`. The
+one exception is a **schema** node reached through `relationship get`, which
+comes back in the schema's own shape (`name`, `fields`, `relationships`) rather
+than the node shape — read schemas with `schema get` instead.
 
 ```json
 {

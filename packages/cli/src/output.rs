@@ -136,34 +136,45 @@ pub fn related_node_to_json(node: &serde_json::Value) -> serde_json::Value {
     // `nodeType`/`title`/`properties` wholesale. Nothing can be recovered from
     // this end, so pass them through rather than emitting a half-mapped node
     // that looks like the CLI shape but is missing its fields.
-    if obj.contains_key("fields") || obj.contains_key("schemaVersion") {
+    //
+    // Identify them by the ABSENCE of `nodeType`, which every node shape
+    // carries and `SchemaNode` does not. Keying off a field it happens to have
+    // (`fields`, `schemaVersion`) would misfire on a user-defined type that
+    // legitimately declares a field by that name — `fields` is not reserved.
+    if !obj.contains_key("nodeType") {
         return node.clone();
     }
 
+    // Every `Node` field that `rename_all = "camelCase"` spells differently
+    // from the CLI's snake_case shape (see `nodespace_types::Node`).
     const RENAMES: &[(&str, &str)] = &[
         ("nodeType", "node_type"),
         ("createdAt", "created_at"),
         ("modifiedAt", "modified_at"),
         ("lifecycleStatus", "lifecycle_status"),
-        ("parentId", "parent_id"),
-        ("rootId", "root_id"),
-        ("beforeSiblingId", "before_sibling_id"),
+        ("mentionedIn", "mentioned_in"),
     ];
-    // Promoted duplicates of what `properties` already carries, plus a `uri`
-    // no other command emits.
-    const DROPPED: &[&str] = &[
-        "uri",
-        "status",
-        "priority",
-        "dueDate",
-        "assignee",
-        "startedAt",
-        "completedAt",
+    // Keys the CLI's node shape defines. Anything else at the top level is a
+    // field the typed conversion promoted out of `properties`.
+    const CLI_KEYS: &[&str] = &[
+        "id",
+        "node_type",
+        "content",
+        "properties",
+        "version",
+        "lifecycle_status",
+        "created_at",
+        "modified_at",
+        "title",
+        "mentions",
+        "mentioned_in",
     ];
 
     let mut out = serde_json::Map::with_capacity(obj.len());
+    let mut promoted = serde_json::Map::new();
     for (key, value) in obj {
-        if DROPPED.contains(&key.as_str()) {
+        // No other command emits a `uri`.
+        if key == "uri" {
             continue;
         }
         let mapped = RENAMES
@@ -171,7 +182,27 @@ pub fn related_node_to_json(node: &serde_json::Value) -> serde_json::Value {
             .find(|(from, _)| from == key)
             .map(|(_, to)| (*to).to_string())
             .unwrap_or_else(|| key.clone());
-        out.insert(mapped, value.clone());
+        if CLI_KEYS.contains(&mapped.as_str()) {
+            out.insert(mapped, value.clone());
+        } else {
+            promoted.insert(mapped, value.clone());
+        }
+    }
+
+    // Fold promoted fields back under `properties`. `node_to_typed_value` can
+    // synthesize a value that was never stored — `task_node_to_value` defaults
+    // an absent `status` to "open" — so dropping these outright would lose a
+    // field that `properties` does not carry. Stored values win: a key already
+    // in `properties` is the real one.
+    if !promoted.is_empty() {
+        let props = out
+            .entry("properties".to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let Some(props_obj) = props.as_object_mut() {
+            for (key, value) in promoted {
+                props_obj.entry(key).or_insert(value);
+            }
+        }
     }
     serde_json::Value::Object(out)
 }
@@ -362,10 +393,10 @@ mod tests {
         assert!(out.get("uri").is_none());
     }
 
-    /// Promoted typed fields duplicate what `properties` already carries, so
-    /// they are dropped rather than emitted alongside it.
+    /// Promoted typed fields belong under `properties`, not beside it — one
+    /// shape, and the stored value wins over the promoted copy.
     #[test]
-    fn related_node_drops_promoted_typed_fields() {
+    fn related_node_folds_promoted_typed_fields_into_properties() {
         let typed = serde_json::json!({
             "id": "t1",
             "nodeType": "task",
@@ -379,8 +410,56 @@ mod tests {
         let out = related_node_to_json(&typed);
 
         assert_eq!(out["properties"]["status"], "open");
+        assert_eq!(out["properties"]["priority"], "high");
         assert!(out.get("status").is_none());
         assert!(out.get("priority").is_none());
+    }
+
+    /// `task_node_to_value` defaults an absent `status` to "open" via
+    /// `unwrap_or_default()` — it is not an `Option`, so unlike the other
+    /// promoted fields it is serialized even when nothing was stored. Dropping
+    /// promoted keys outright therefore lost it, and `relationship get`
+    /// reported no status where `node get` reported "open".
+    #[test]
+    fn related_node_keeps_a_synthesized_status_absent_from_properties() {
+        let typed = serde_json::json!({
+            "id": "t1",
+            "nodeType": "task",
+            "content": "Buy groceries",
+            "properties": {"priority": "high"},
+            "status": "open",
+            "uri": "nodespace://t1",
+        });
+
+        let out = related_node_to_json(&typed);
+
+        assert_eq!(
+            out["properties"]["status"], "open",
+            "a promoted field `properties` does not carry must not be lost"
+        );
+        assert_eq!(out["properties"]["priority"], "high");
+    }
+
+    /// A node with inbound mentions carries `mentionedIn`; every key in the
+    /// CLI's shape is snake_case, so it must not survive as camelCase.
+    #[test]
+    fn related_node_rekeys_mentioned_in() {
+        let typed = serde_json::json!({
+            "id": "n1",
+            "nodeType": "text",
+            "content": "hello",
+            "properties": {},
+            "mentions": ["other"],
+            "mentionedIn": [{"id": "src", "nodeType": "text"}],
+        });
+
+        let out = related_node_to_json(&typed);
+
+        assert!(out.get("mentioned_in").is_some());
+        assert!(out.get("mentionedIn").is_none());
+        assert!(out.get("mentions").is_some());
+        // Neither is a promoted property.
+        assert!(out["properties"].get("mentioned_in").is_none());
     }
 
     /// A `schema` node reaches us reshaped by `SchemaNode::from_node`, which
@@ -398,6 +477,26 @@ mod tests {
         let out = related_node_to_json(&schema);
 
         assert_eq!(out, schema);
+    }
+
+    /// The passthrough keys off the ABSENCE of `nodeType`, not the presence of
+    /// `fields`: `fields` is not a reserved property name, so a user-defined
+    /// type may legitimately declare one and must still be re-keyed.
+    #[test]
+    fn related_node_rekeys_a_user_type_that_has_a_fields_property() {
+        let typed = serde_json::json!({
+            "id": "f1",
+            "nodeType": "form",
+            "content": "Signup form",
+            "properties": {"fields": ["name", "email"]},
+            "createdAt": "2026-05-17T12:00:00Z",
+        });
+
+        let out = related_node_to_json(&typed);
+
+        assert_eq!(out["node_type"], "form");
+        assert_eq!(out["created_at"], "2026-05-17T12:00:00Z");
+        assert_eq!(out["properties"]["fields"][0], "name");
     }
 
     /// A node whose only properties are internal renders as empty, not as a
