@@ -2998,8 +2998,13 @@ impl GraphToolExecutor {
                     ),
                     "type": node_val.get("node_type").or(node_val.get("type")).and_then(|v| v.as_str()).unwrap_or(""),
                 });
-                summary["direction"] = json!(dir);
-                summary["relationship_type"] = json!(&rel_type);
+                // Label each hit with the traversal that actually ran, not the
+                // one requested: a declared `reverseName` resolves to the
+                // forward name read the other way, and reporting the requested
+                // spelling back would tell the model an edge points the
+                // opposite way from how it is stored.
+                summary["direction"] = json!(&output.direction);
+                summary["relationship_type"] = json!(&output.relationship_name);
                 all_nodes.push(summary);
             }
         }

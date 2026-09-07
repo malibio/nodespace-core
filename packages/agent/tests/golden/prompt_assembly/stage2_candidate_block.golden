@@ -42,11 +42,13 @@ EDITING A SCHEMA — call update_schema: When the user wants to add a field, rem
 
 RENAME VS RELABEL: rename_fields can rename a field's storage key OR relabel its display name (see the tool schema for the 'from'/'to'/'friendlyName' shape of each). A user asking to call a field something else on screen almost always means the display label, not a storage rename — do not conflate the two.
 
-RELATIONSHIPS: Use relationships (not fields) when a field references another node type. The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Examples:
+RELATIONSHIPS: Use relationships (not fields) when a field references another node type. The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. Set reverseName when the edge has a natural name read from the target's end — it makes the reverse query directly callable. Examples:
 
 ADR supersedes adr (one): `{"name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one"}`
 
 Ticket has_task task (many): `{"name": "has_task", "targetType": "task", "direction": "out", "cardinality": "many"}`
+
+ADR decided_by person, readable back as the person's decisions: `{"name": "decided_by", "targetType": "person", "direction": "out", "cardinality": "one", "reverseName": "decisions", "reverseCardinality": "many"}`
 
 TITLE TEMPLATE: Set title_template when a node's identity comes from its fields rather than free-form content. Use {field_name} placeholders. CRITICAL: every placeholder in title_template MUST be defined as a field in the fields array. Omit title_template if the content/title field alone identifies the node.
 

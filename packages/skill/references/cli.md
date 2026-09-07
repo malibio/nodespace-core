@@ -211,6 +211,11 @@ nodespace relationship create --from <source-id> --type billed_to --to <target-i
 # Traverse relationships from a node
 nodespace relationship get <node-id> --type has_task --direction out
 nodespace relationship get <node-id> --type billed_to --direction in
+
+# Traverse the reverse direction by the schema's declared reverseName
+# (adr declares: name decided_by, targetType person, reverseName decisions)
+nodespace relationship get <person-id> --type decisions
+nodespace relationship get <person-id> --type decided_by --direction in   # equivalent
 ```
 
 **Options (`create`):**
@@ -221,8 +226,12 @@ nodespace relationship get <node-id> --type billed_to --direction in
 
 **Options (`get`):**
 - `<id>` — node ID to query relationships for
-- `--type <name>` — relationship name to filter by
-- `--direction <out|in>` — traversal direction (default: `out`)
+- `--type <name>` — relationship name to traverse: the forward `name` from the source's end, or the declared `reverseName` from the target's end
+- `--direction <out|in>` — traversal direction (default: `out`), relative to the name given
+
+**Traversing the reverse direction.** A relationship is declared once, on the source type, but reads from both ends. Given `{"name":"decided_by","targetType":"person","reverseName":"decisions"}` on `adr`: from the ADR, `nodespace relationship get <adr-id> --type decided_by --direction out`; from the person, use the declared `reverseName` — `nodespace relationship get <person-id> --type decisions` — or the equivalent `--type decided_by --direction in`. Both spellings return the same ADRs, and the output line's arrow shows the direction actually traversed (`<--decided_by--` for an inbound resolution). An empty result means no edges exist, not that reverse traversal is unsupported. A name declared in neither direction is rejected with an error naming the spellings that do work — read it and retry rather than concluding the capability is missing.
+
+Reverse names are for *traversal*, not for `relationship create`: an edge is always created under its forward name, from the source node. They are also not usable in `node query --filters`, whose `relationship` filters cover only the structural graph (`parent`, `children`, `mentions`, `mentioned_by`) — use `relationship get` to traverse a schema-declared name.
 
 Both node IDs must already exist — search for missing IDs first (`nodespace search` / `nodespace node query`). Apart from the built-in names below, the relationship name must be defined on the source node's schema; define it there (`nodespace schema create`/`update`) if it isn't yet. `relationship create` on a node whose schema doesn't define that relationship name fails with an error naming the undefined relationship.
 
@@ -275,7 +284,7 @@ If `create` rejects the schema with a validation error (not "already exists") �
 
 **Enums:** lowercase values with readable labels — `{"value":"in_progress","label":"In Progress"}`.
 
-**Relationships vs. fields:** use a relationship (not a field) when a value references another node type. `targetType` must be an existing schema ID. Examples: `{"name":"supersedes","targetType":"adr","direction":"out","cardinality":"one"}`, `{"name":"has_task","targetType":"task","direction":"out","cardinality":"many"}`.
+**Relationships vs. fields:** use a relationship (not a field) when a value references another node type. `targetType` must be an existing schema ID. Set `reverseName` when the edge has a natural name read from the target's end — that name becomes directly queryable from that side. Examples: `{"name":"supersedes","targetType":"adr","direction":"out","cardinality":"one"}`, `{"name":"has_task","targetType":"task","direction":"out","cardinality":"many"}`, `{"name":"decided_by","targetType":"person","direction":"out","cardinality":"one","reverseName":"decisions","reverseCardinality":"many"}`.
 
 **Title template:** set `title_template` when a node's identity comes from its fields rather than free-form content, using `{field_name}` placeholders — every placeholder must be a defined field. Omit it if the content/title field alone identifies the node.
 

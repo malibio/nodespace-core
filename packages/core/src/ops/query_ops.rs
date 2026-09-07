@@ -139,9 +139,16 @@ fn parse_relationship_type(
         "children" => Ok(RelationshipType::Children),
         "mentions" => Ok(RelationshipType::Mentions),
         "mentioned_by" => Ok(RelationshipType::MentionedBy),
+        // A relationship *filter* spans only the structural graph. A
+        // schema-declared name — forward or reverse — is a traversal, not a
+        // filter, and belongs to `get_related_nodes`; say so, because the name
+        // itself is usually correct and only the verb is wrong.
         other => Err(OpsError::InvalidParams(format!(
-            "Unknown relationship type '{}'. Supported: parent, children, mentions, mentioned_by",
-            other
+            "Unknown relationship type '{}'. Supported: parent, children, mentions, \
+             mentioned_by. Schema-declared relationship names (and their reverseName) \
+             are not filterable here — traverse them with get_related_nodes / \
+             `nodespace relationship get <id> --type {}` instead.",
+            other, other
         ))),
     }
 }

@@ -126,9 +126,18 @@ async fn get(client: &mut NodeClient, args: GetArgs, json_out: bool) -> Result<(
             }))?
         );
     } else {
+        // The daemon echoes back the traversal it actually ran, which is not
+        // always the one asked for: a declared `reverseName` resolves to the
+        // forward name read the other way. Draw the arrow from that, so an
+        // inbound traversal never renders as an outbound edge.
+        let arrow = if response.direction == "in" {
+            format!("<--{}--", response.relationship_name)
+        } else {
+            format!("--{}-->", response.relationship_name)
+        };
         println!(
-            "{} related node(s) [{} --{}--> ]:",
-            response.count, response.node_id, response.relationship_name
+            "{} related node(s) [{} {} ]:",
+            response.count, response.node_id, arrow
         );
         println!("{}", serde_json::to_string_pretty(&related)?);
     }
