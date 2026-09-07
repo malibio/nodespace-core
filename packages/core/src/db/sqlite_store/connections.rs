@@ -34,6 +34,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -96,22 +97,29 @@ pub(crate) struct Connections {
     /// This exists to make the "do not issue a read under a live cursor" rule
     /// *checkable* rather than merely documented. A nested read inflates the
     /// peak beyond what the call actually needs — two connections pinned where
-    /// one would do — and [`SqliteStore::peak_readers_in_flight`] lets a test
-    /// assert the bound directly instead of trusting review to catch it.
+    /// one would do — and [`ReaderGauge::peak`] lets a test assert the bound
+    /// directly instead of trusting review to catch it.
     ///
     /// Not an assertion: the store is legitimately read concurrently by many
     /// tasks, so no fixed bound holds globally. The bound is a property of a
     /// *single sequential* call path, which is what the tests exercise.
+    ///
+    /// Test-only, in full: nothing outside `cfg(test)` reads this, so the
+    /// counters are compiled out of release builds entirely rather than
+    /// maintained for an audience that isn't there.
+    #[cfg(test)]
     readers_in_flight: Arc<ReaderGauge>,
 }
 
 /// Counts live reader checkouts and remembers their high-water mark.
+#[cfg(test)]
 #[derive(Default)]
 pub(crate) struct ReaderGauge {
     live: AtomicUsize,
     peak: AtomicUsize,
 }
 
+#[cfg(test)]
 impl ReaderGauge {
     fn checkout(&self) {
         let live = self.live.fetch_add(1, Ordering::Relaxed) + 1;
@@ -124,14 +132,12 @@ impl ReaderGauge {
 
     /// The most reader connections ever checked out at once since the last
     /// [`ReaderGauge::reset_peak`].
-    #[cfg(test)]
     pub(crate) fn peak(&self) -> usize {
         self.peak.load(Ordering::Relaxed)
     }
 
     /// Re-baseline the high-water mark to the number currently live, so a test
     /// can measure one call path without the setup before it.
-    #[cfg(test)]
     pub(crate) fn reset_peak(&self) {
         self.peak
             .store(self.live.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -158,6 +164,7 @@ impl Connections {
             database,
             readers: Arc::new(Mutex::new(Vec::new())),
             writer: tokio::sync::Mutex::new(writer),
+            #[cfg(test)]
             readers_in_flight: Arc::new(ReaderGauge::default()),
         })
     }
@@ -192,10 +199,12 @@ impl Connections {
             Some(conn) => conn,
             None => open_reader(&self.database).await?,
         };
+        #[cfg(test)]
         self.readers_in_flight.checkout();
         Ok(ReadConn {
             conn: Some(conn),
             pool: self.readers.clone(),
+            #[cfg(test)]
             gauge: self.readers_in_flight.clone(),
             healthy: true,
         })
@@ -276,7 +285,8 @@ pub(crate) struct ReadConn {
     conn: Option<libsql::Connection>,
     pool: Arc<Mutex<Vec<libsql::Connection>>>,
     /// Decremented on drop, so the gauge tracks checkouts that are actually
-    /// live rather than merely created.
+    /// live rather than merely created. Test-only, like the gauge itself.
+    #[cfg(test)]
     gauge: Arc<ReaderGauge>,
     /// Cleared when a statement on this connection fails. An errored connection
     /// is closed rather than pooled: most read errors are benign (bad SQL), but
@@ -321,6 +331,7 @@ impl ReadConn {
 impl Drop for ReadConn {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
+            #[cfg(test)]
             self.gauge.release();
             if !self.healthy {
                 return;

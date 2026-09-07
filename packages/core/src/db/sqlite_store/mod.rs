@@ -1964,6 +1964,11 @@ mod tests {
     /// with what it found, so each is a place the mistake is easy to make.
     /// Driven sequentially with nothing else in flight, one connection at a
     /// time is all any of them needs.
+    ///
+    /// Covers all ten sites. Every `peak()` assertion is paired with a check
+    /// that the fixture actually reaches the nested call — without one, a
+    /// fixture that matches no row leaves the assertion passing vacuously
+    /// against the very bug it exists to catch.
     #[tokio::test]
     async fn a_read_path_does_not_pin_a_second_connection_for_a_nested_read() -> Result<()> {
         let (store, _t) = create_test_store().await?;
@@ -2002,6 +2007,36 @@ mod tests {
                 .await?,
             1,
             "fixture must create the mention the assertion below depends on"
+        );
+
+        // An embedding on a root node, so both KNN searches return a hit and go
+        // on to resolve it via the nested `get_node`.
+        let embedded = store
+            .create_node(
+                Node::new("text".to_string(), "embedded".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .upsert_embeddings(&embedded.id, vec![unit_embedding(&embedded.id, 0)])
+            .await?;
+
+        // A root node filed into a collection, so `assert_may_gain_parent` finds
+        // an offender and goes on to call `get_node_memberships` for the message.
+        let member = store
+            .create_node(
+                Node::new("text".to_string(), "root member".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        assert!(
+            store
+                .add_to_collection(&member.id, &collection.id)
+                .await?
+                .is_some(),
+            "fixture must file the member, or the offender path below is never reached"
         );
 
         // Each case: the method, and the nested store call it must not hold a
@@ -2082,6 +2117,61 @@ mod tests {
             gauge.peak(),
             1,
             "bm25_search_roots held a cursor across get_nodes_by_ids"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            store.get_schema_node("task").await?.is_some(),
+            "fixture must find a seeded core schema, or get_schema_declarations is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_schema_node held a cursor across get_schema_declarations"
+        );
+
+        // The offender path: a node holding `member_of` may not gain a parent, and
+        // building that rejection consults `get_node_memberships`.
+        gauge.reset_peak();
+        assert!(
+            store
+                .assert_may_gain_parent(&[member.id.as_str()])
+                .await
+                .is_err(),
+            "fixture must trip the root-only membership guard, or the nested read is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "assert_may_gain_parent held a cursor across get_node_memberships"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            !store
+                .search_embeddings(&unit_query(0), 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "fixture must return a KNN hit, or the nested get_node is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "search_embeddings held a cursor across get_node"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            !store
+                .search_embeddings_by_node_type(&unit_query(0), "text", 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "fixture must return a typed KNN hit, or the nested get_node is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "search_embeddings_by_node_type held a cursor across get_node"
         );
 
         // A single-root subtree takes the early-return branch, which reaches
