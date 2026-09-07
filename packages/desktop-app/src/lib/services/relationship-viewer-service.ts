@@ -11,6 +11,7 @@
 
 import { createLogger } from '$lib/utils/logger';
 import { backendAdapter } from '$lib/services/backend-adapter';
+import { isUserVisibleField } from '$lib/utils/schema-field-visibility';
 import type { Node } from '$lib/types';
 import {
   buildRelationshipsView,
@@ -102,10 +103,15 @@ export async function searchTargets(targetType: string | null, query: string): P
  * offering target-node columns in the modal's per-group view settings. Values
  * for those columns come from the related node's own properties (see
  * `fetchNodesProperties`). Returns `[]` when the schema has no fields.
+ *
+ * System-protected fields are excluded: these names become user-facing column
+ * offerings, and a backend-owned field (a convergence marker, an ai-chat
+ * `capture:transcript`) is not something to offer as a column any more than as
+ * an editable control. Same predicate the table and detail views use.
  */
 export async function fetchTargetSchemaFields(targetType: string): Promise<string[]> {
   const schema = await backendAdapter.getSchema(targetType);
-  return (schema.fields ?? []).map((field) => field.name);
+  return (schema.fields ?? []).filter(isUserVisibleField).map((field) => field.name);
 }
 
 /**
