@@ -280,7 +280,7 @@
             {:else if skillResult && skillResult.agentsSkipped.length > 0}
               Nothing new to install — see below.
             {:else}
-              Skill file written. Claude Code will pick it up automatically on the next session.
+              Claude Code integration is set up.
             {/if}
           </div>
           {#if skillResult && skillResult.agentsSkipped.length > 0}
