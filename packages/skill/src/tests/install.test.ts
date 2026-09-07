@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractResourceRoot } from '../install.js';
+import { extractResourceRoot, skipReasonText } from '../install.js';
 
 describe('extractResourceRoot', () => {
   it('returns no resourceRoot and all args unchanged when the flag is absent', () => {
@@ -42,5 +42,17 @@ describe('extractResourceRoot', () => {
     // matches every other CLI flag's "you must actually pass a value" shape.
     expect(resourceRoot).toBeUndefined();
     expect(rest).toEqual(['install']);
+  });
+});
+
+describe('skipReasonText', () => {
+  it('names the plugin marketplace when skipReason is plugin-managed', () => {
+    const text = skipReasonText({ agent: 'claude-code', installed: [], skipReason: 'plugin-managed' });
+    expect(text).toBe('already installed via the Claude Code plugin marketplace, not overwriting');
+  });
+
+  it('falls back to the generic incomplete-package message otherwise', () => {
+    const text = skipReasonText({ agent: 'codex', installed: [] });
+    expect(text).toBe('detected but no files to install (package may be incomplete)');
   });
 });

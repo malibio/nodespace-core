@@ -121,4 +121,53 @@ describe('OnboardingWizard skill-install reporting', () => {
     expect(container.textContent).toContain('Codex');
     expect(container.textContent).toContain('detected but no files to install');
   });
+
+  // The bug this covers: when Claude Code is the only detected agent and it
+  // is skipped because a plugin-managed copy already exists,
+  // `agentsInstalled` is empty -- the same shape as "nothing happened at
+  // all". Without checking `agentsSkipped` too, the success banner fell back
+  // to "Skill file written", which is false: this run wrote nothing.
+  it('does not claim a skill file was written when the only agent was skipped as plugin-managed', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') {
+        return Promise.resolve({
+          completed: false,
+          pathConfigured: false,
+          skillConfigured: false,
+          claudeCodeDetected: true,
+          pathAlreadyConfigured: true
+        });
+      }
+      if (cmd === 'configure_skill') {
+        return Promise.resolve({
+          success: true,
+          agentsInstalled: [],
+          agentsSkipped: [
+            {
+              agent: 'claude-code',
+              reason: 'already installed via the Claude Code plugin marketplace, not overwriting'
+            }
+          ],
+          cliOnPath: true,
+          cliWarning: null,
+          error: null,
+          failureIsNew: false
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Next'));
+    await tick();
+    await fireEvent.click(buttonByText(container, 'Add Skill'));
+    await tick();
+    await tick();
+
+    const banner = container.querySelector('.success-banner');
+    expect(banner?.textContent).not.toContain('Skill file written');
+    expect(container.textContent).toContain('plugin marketplace');
+  });
 });

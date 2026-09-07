@@ -30,6 +30,36 @@ export function isNodespaceBinaryOnPath(): boolean {
   }
 }
 
+/**
+ * Whether the NodeSpace skill is already installed for Claude Code via its
+ * plugin marketplace (`/plugin install nodespace@<marketplace>`), rather
+ * than by this installer writing plain files to
+ * `<claudeConfigDir>/skills/nodespace/`.
+ *
+ * `claudeConfigDir` is the SAME resolved directory `agents.ts`'s
+ * `claude-code` entry uses (honors `$CLAUDE_CONFIG_DIR`), not a hardcoded
+ * `~/.claude` -- the plugin registry lives alongside it either way.
+ *
+ * Matches on the plugin-name half of the `<plugin-name>@<marketplace-name>`
+ * key only, not a specific marketplace name -- the marketplace side is
+ * whatever label the user's Claude Code registered it under locally, which
+ * this installer has no way to predict.
+ */
+export function claudeCodePluginManagedSkillExists(claudeConfigDir: string): boolean {
+  const registryPath = join(claudeConfigDir, 'plugins', 'installed_plugins.json');
+  if (!existsSync(registryPath)) return false;
+  try {
+    const registry = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+      plugins?: Record<string, unknown>;
+    };
+    return Object.keys(registry.plugins ?? {}).some(key => key.split('@')[0] === 'nodespace');
+  } catch {
+    // A malformed or unreadable registry must not block installation --
+    // fail open (treat as "no plugin-managed copy found"), not closed.
+    return false;
+  }
+}
+
 export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT): InstallResult[] {
   if (!isNodespaceBinaryOnPath()) {
     process.stderr.write(
@@ -46,6 +76,23 @@ export function install(targetAgents?: AgentName[], packageRoot = PACKAGE_ROOT):
   for (const agentName of detected) {
     const config = AGENTS.find(a => a.name === agentName);
     if (!config) continue;
+
+    // Claude Code's own plugin marketplace (`/plugin install nodespace@...`)
+    // is a separate, self-updating install path for the same skill. When a
+    // plugin-managed copy is already registered, it stays authoritative —
+    // writing files here would create a second, divergent copy Claude Code
+    // sees twice. Applies to claude-code only: the other harnesses have no
+    // marketplace of their own.
+    if (agentName === 'claude-code' && claudeCodePluginManagedSkillExists(config.detectionDir)) {
+      // A copy from before this reconciliation existed may already sit at
+      // our own installDir (from an earlier app-install run) — clean it up
+      // so there is truly one copy, not just "no new copy going forward".
+      // Reuses uninstall()'s own directory-pruning logic rather than
+      // duplicating it; a no-op when nothing is there.
+      uninstall(['claude-code']);
+      results.push({ agent: agentName, installed: [], skipReason: 'plugin-managed' });
+      continue;
+    }
 
     const installed: string[] = [];
     for (const shim of config.shims) {

@@ -265,7 +265,10 @@
           <h2>Add NodeSpace to Claude Code?</h2>
           <p>
             Installs a skill file at <code>~/.claude/skills/nodespace/SKILL.md</code> so Claude
-            Code knows how to interact with your knowledge graph.
+            Code knows how to interact with your knowledge graph. This copy updates each time
+            NodeSpace itself updates. If you already have the skill via
+            <code>/plugin install nodespace@...</code>, that copy stays in charge — it tracks its
+            own marketplace updates, and this step won't overwrite it.
           </p>
         </div>
 
@@ -274,6 +277,8 @@
             {#if skillResult && skillResult.agentsInstalled.length > 0}
               Skill installed into: {skillResult.agentsInstalled.map(displayAgentName).join(', ')}.
               Picked up automatically on each agent's next session.
+            {:else if skillResult && skillResult.agentsSkipped.length > 0}
+              Nothing new to install — see below.
             {:else}
               Skill file written. Claude Code will pick it up automatically on the next session.
             {/if}

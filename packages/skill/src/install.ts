@@ -14,8 +14,23 @@
 // unit tests (of `extractResourceRoot`) without triggering the CLI's own
 // argv parsing and `process.exit` calls as a side effect of the import.
 import { install, uninstall } from './installer.js';
-import type { AgentName } from './types.js';
+import type { AgentName, InstallResult } from './types.js';
 import { AGENTS } from './agents.js';
+
+/**
+ * The reason text printed on a "⚠ agent: ..." line -- pulled out to a pure
+ * function (like `extractResourceRoot` below) so it's unit-testable without
+ * spawning the CLI. `result.skipReason` distinguishes a real precedence
+ * decision (Claude Code's plugin marketplace already owns the skill) from
+ * the generic case (the agent was detected but the package has nothing to
+ * install for it), which need different messages -- the first is expected
+ * and not actionable, the second is a packaging bug.
+ */
+export function skipReasonText(result: InstallResult): string {
+  return result.skipReason === 'plugin-managed'
+    ? 'already installed via the Claude Code plugin marketplace, not overwriting'
+    : 'detected but no files to install (package may be incomplete)';
+}
 
 /**
  * Pull `--resource-root <path>` out of argv, wherever it appears, and return
@@ -110,7 +125,7 @@ Examples:
         // stdout, not stderr: the desktop app's installer wrapper
         // (skill_setup.rs's parse_installer_output) parses this exact line
         // to report the skipped-with-reason state, and only reads stdout.
-        console.log(`⚠ ${result.agent}: detected but no files to install (package may be incomplete)`);
+        console.log(`⚠ ${result.agent}: ${skipReasonText(result)}`);
       }
     }
 
