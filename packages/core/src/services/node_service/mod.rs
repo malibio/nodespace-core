@@ -1838,14 +1838,77 @@ pub struct CompletenessResult {
     pub missing_relationships: Vec<String>,
 }
 
+/// Depth ceiling for the in-memory tree rebuild, measured in edges below the
+/// root — the root itself sits at depth 0.
+///
+/// Aligned with the `WITH RECURSIVE` walk in `get_subtree_with_relationships`,
+/// which seeds direct children at `depth = 1` and expands while
+/// `s.depth < 100`, so the deepest row it emits is 100 edges below the root.
+/// Rejecting at `depth > MAX_TREE_DEPTH` — not `>=` — is what keeps the two in
+/// step: every subtree the SQL collector returns is one this builder accepts,
+/// and only data beyond its reach (which therefore came from a cycle or a
+/// corrupt relationship set) is refused.
+const MAX_TREE_DEPTH: usize = 100;
+
 /// Recursively build a tree structure from flat node data
 ///
 /// Converts flat node map and adjacency list into nested JSON tree.
+///
+/// The adjacency list is built from relationship rows fetched separately from
+/// the depth-bounded SQL ID walk, so a `has_child` back-edge in that set is not
+/// filtered upstream. Since a Rust stack overflow aborts the process rather
+/// than unwinding, an unguarded walk of cyclic data would kill the daemon with
+/// no error to surface. The depth ceiling and path-visited set below make a
+/// malformed hierarchy a handled [`NodeServiceError::CorruptHierarchy`] instead
+/// — an internal error, since the caller's request was valid and only a repair
+/// of the stored graph can resolve it.
 fn build_node_tree_recursive(
     node: &Node,
     node_map: &HashMap<String, Node>,
     adjacency_list: &HashMap<String, Vec<String>>,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, NodeServiceError> {
+    build_node_tree_guarded(node, node_map, adjacency_list, 0, &mut HashSet::new())
+}
+
+/// Depth- and cycle-guarded body of [`build_node_tree_recursive`].
+///
+/// `visited` tracks the current root-to-node path — inserted on the way down,
+/// removed on the way back up — so it rejects a genuine cycle without rejecting
+/// a node legitimately reachable through two sibling branches.
+fn build_node_tree_guarded(
+    node: &Node,
+    node_map: &HashMap<String, Node>,
+    adjacency_list: &HashMap<String, Vec<String>>,
+    depth: usize,
+    visited: &mut HashSet<String>,
+) -> Result<serde_json::Value, NodeServiceError> {
+    // Both guards log before returning: the error reaches the user as a failed
+    // page open, which says nothing about *where* the bad edge is. These lines
+    // are the only server-side record that the stored graph is corrupt.
+    if depth > MAX_TREE_DEPTH {
+        tracing::warn!(
+            node_id = %node.id,
+            depth,
+            max_depth = MAX_TREE_DEPTH,
+            "Hierarchy exceeds the maximum tree depth; refusing to build the subtree"
+        );
+        return Err(NodeServiceError::corrupt_hierarchy(format!(
+            "maximum tree depth ({}) exceeded at node '{}'",
+            MAX_TREE_DEPTH, node.id
+        )));
+    }
+    if !visited.insert(node.id.clone()) {
+        tracing::warn!(
+            node_id = %node.id,
+            depth,
+            "Cyclic has_child edge in stored hierarchy; refusing to build the subtree"
+        );
+        return Err(NodeServiceError::corrupt_hierarchy(format!(
+            "node '{}' appears more than once on the same branch",
+            node.id
+        )));
+    }
+
     // Raw node serialization (namespaced properties preserved), plus the
     // nodespace:// URI clients use for rich rendering — mirroring the
     // single-node read path's contract.
@@ -1859,25 +1922,28 @@ fn build_node_tree_recursive(
     }
 
     // Build children array (always present, even if empty for consistency)
-    let children: Vec<serde_json::Value> = if let Some(children_ids) = adjacency_list.get(&node.id)
-    {
-        children_ids
-            .iter()
-            .filter_map(|child_id| {
-                node_map.get(child_id).map(|child_node| {
-                    build_node_tree_recursive(child_node, node_map, adjacency_list)
-                })
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let mut children: Vec<serde_json::Value> = Vec::new();
+    if let Some(children_ids) = adjacency_list.get(&node.id) {
+        for child_id in children_ids {
+            if let Some(child_node) = node_map.get(child_id) {
+                children.push(build_node_tree_guarded(
+                    child_node,
+                    node_map,
+                    adjacency_list,
+                    depth + 1,
+                    visited,
+                )?);
+            }
+        }
+    }
+
+    visited.remove(&node.id);
 
     if let Some(obj) = json.as_object_mut() {
         obj.insert("children".to_string(), serde_json::Value::Array(children));
     }
 
-    json
+    Ok(json)
 }
 
 /// NodeAccessor implementation for NodeService
@@ -5840,5 +5906,458 @@ mod tests {
             Some("Owner: carol"),
             "combined update must compute title from the new (post-merge) assignee, not the stale one"
         );
+    }
+
+    // ========================================================================
+    // build_node_tree_recursive guards.
+    //
+    // The adjacency list comes from relationship rows fetched separately from
+    // the depth-bounded SQL ID walk, so a `has_child` back-edge reaches this
+    // builder unfiltered. A Rust stack overflow aborts the process instead of
+    // unwinding, so these cases must return an error rather than recurse.
+    // ========================================================================
+
+    /// Build (node_map, adjacency_list) from `(parent, children)` pairs. Every
+    /// id named in the pairs gets a node, so the walk is never cut short by a
+    /// missing `node_map` entry.
+    fn tree_fixture(
+        edges: &[(&str, &[&str])],
+    ) -> (HashMap<String, Node>, HashMap<String, Vec<String>>) {
+        let mut node_map = HashMap::new();
+        let mut adjacency_list = HashMap::new();
+
+        let add_node = |id: &str, map: &mut HashMap<String, Node>| {
+            map.entry(id.to_string()).or_insert_with(|| {
+                Node::new_with_id(
+                    id.to_string(),
+                    "text".to_string(),
+                    format!("content of {id}"),
+                    json!({}),
+                )
+            });
+        };
+
+        for (parent, children) in edges {
+            add_node(parent, &mut node_map);
+            for child in children.iter() {
+                add_node(child, &mut node_map);
+            }
+            adjacency_list.insert(
+                parent.to_string(),
+                children.iter().map(|c| c.to_string()).collect(),
+            );
+        }
+
+        (node_map, adjacency_list)
+    }
+
+    #[test]
+    fn build_node_tree_recursive_returns_error_on_back_edge() {
+        // a -> b -> c -> a : the back-edge would recurse forever unguarded.
+        let (node_map, adjacency_list) =
+            tree_fixture(&[("a", &["b"]), ("b", &["c"]), ("c", &["a"])]);
+        let root = node_map.get("a").unwrap();
+
+        let err = build_node_tree_recursive(root, &node_map, &adjacency_list)
+            .expect_err("a cyclic adjacency list must return an error, not recurse");
+
+        assert!(
+            matches!(err, NodeServiceError::CorruptHierarchy(_)),
+            "a cycle in stored data is a server-side fault, not caller error: {err}"
+        );
+        assert!(
+            err.to_string().contains('a'),
+            "error should name the repeated node: {err}"
+        );
+    }
+
+    #[test]
+    fn build_node_tree_recursive_returns_error_on_self_edge() {
+        // The tightest cycle: a node listed as its own child.
+        let (node_map, adjacency_list) = tree_fixture(&[("a", &["a"])]);
+        let root = node_map.get("a").unwrap();
+
+        let err = build_node_tree_recursive(root, &node_map, &adjacency_list)
+            .expect_err("a self-referential edge must return an error, not recurse");
+
+        assert!(
+            matches!(err, NodeServiceError::CorruptHierarchy(_)),
+            "self-edge should surface as CorruptHierarchy, got: {err}"
+        );
+    }
+
+    /// Build a straight acyclic chain `n0 -> n1 -> ... -> n{edges}` and run the
+    /// builder over it from `n0`. Acyclic by construction, so only the depth
+    /// guard can stop it.
+    fn build_chain_of_depth(edges: usize) -> Result<serde_json::Value, NodeServiceError> {
+        let ids: Vec<String> = (0..=edges).map(|i| format!("n{i}")).collect();
+        let child_ids: Vec<Vec<&str>> = ids.windows(2).map(|pair| vec![pair[1].as_str()]).collect();
+        let spec: Vec<(&str, &[&str])> = ids
+            .iter()
+            .zip(child_ids.iter())
+            .map(|(parent, children)| (parent.as_str(), children.as_slice()))
+            .collect();
+
+        let (node_map, adjacency_list) = tree_fixture(&spec);
+        let root = node_map.get("n0").unwrap().clone();
+        build_node_tree_recursive(&root, &node_map, &adjacency_list)
+    }
+
+    /// The ceiling must line up exactly with the SQL walk that feeds this
+    /// builder. `get_subtree_with_relationships` seeds direct children at
+    /// `depth = 1` and expands while `s.depth < 100`, so it emits rows up to
+    /// MAX_TREE_DEPTH edges below the root. Accepting one edge fewer would
+    /// reject a hierarchy the store returns happily — a page that fails to
+    /// open on data that is not actually corrupt.
+    ///
+    /// Both sides of the boundary are asserted: a test that only checks a
+    /// comfortably-too-deep chain passes under an off-by-one bound too.
+    #[test]
+    fn build_node_tree_recursive_accepts_a_chain_at_exactly_max_depth() {
+        let tree = build_chain_of_depth(MAX_TREE_DEPTH).unwrap_or_else(|e| {
+            panic!(
+                "a chain {MAX_TREE_DEPTH} edges deep is within the SQL walk's reach \
+                 and must build, but the depth guard rejected it: {e}"
+            )
+        });
+
+        // Walk to the bottom to prove the whole chain materialized, not just
+        // the root.
+        let mut node = &tree;
+        for edge in 0..MAX_TREE_DEPTH {
+            let children = node["children"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing children array at edge {edge}"));
+            assert_eq!(children.len(), 1, "chain node at edge {edge} has one child");
+            node = &children[0];
+        }
+        assert_eq!(node["id"], format!("n{MAX_TREE_DEPTH}"));
+    }
+
+    #[test]
+    fn build_node_tree_recursive_returns_error_one_edge_past_max_depth() {
+        let err = build_chain_of_depth(MAX_TREE_DEPTH + 1)
+            .expect_err("a chain deeper than MAX_TREE_DEPTH must return an error");
+
+        assert!(
+            matches!(err, NodeServiceError::CorruptHierarchy(_)),
+            "excessive depth should surface as CorruptHierarchy, got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_node_tree_recursive_builds_well_formed_tree_unchanged() {
+        //     a
+        //    / \
+        //   b   c
+        //   |
+        //   d
+        let (node_map, adjacency_list) =
+            tree_fixture(&[("a", &["b", "c"]), ("b", &["d"]), ("c", &[])]);
+        let root = node_map.get("a").unwrap();
+
+        let tree = build_node_tree_recursive(root, &node_map, &adjacency_list)
+            .expect("a well-formed tree must build successfully");
+
+        assert_eq!(tree["id"], "a");
+        assert_eq!(tree["uri"], "nodespace://a");
+        assert_eq!(tree["content"], "content of a");
+
+        let children = tree["children"].as_array().expect("children array");
+        assert_eq!(children.len(), 2, "child order must be preserved");
+        assert_eq!(children[0]["id"], "b");
+        assert_eq!(children[1]["id"], "c");
+
+        let grandchildren = children[0]["children"].as_array().expect("children array");
+        assert_eq!(grandchildren.len(), 1);
+        assert_eq!(grandchildren[0]["id"], "d");
+        assert_eq!(grandchildren[0]["uri"], "nodespace://d");
+
+        // Leaves still carry an empty array, not a missing key.
+        assert_eq!(
+            grandchildren[0]["children"].as_array().map(Vec::len),
+            Some(0),
+            "leaf nodes must keep an empty children array"
+        );
+        assert_eq!(children[1]["children"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn build_node_tree_recursive_allows_repeat_across_sibling_branches() {
+        // `shared` hangs off both b and c. That is malformed-but-acyclic data,
+        // not a cycle: the visited set is path-scoped, so it must build rather
+        // than falsely report a cycle.
+        let (node_map, adjacency_list) = tree_fixture(&[
+            ("a", &["b", "c"]),
+            ("b", &["shared"]),
+            ("c", &["shared"]),
+            ("shared", &[]),
+        ]);
+        let root = node_map.get("a").unwrap();
+
+        let tree = build_node_tree_recursive(root, &node_map, &adjacency_list)
+            .expect("a node reachable via two sibling branches is not a cycle");
+
+        let children = tree["children"].as_array().unwrap();
+        assert_eq!(children[0]["children"][0]["id"], "shared");
+        assert_eq!(children[1]["children"][0]["id"], "shared");
+    }
+
+    /// Build a `gadget --assigned_to--> widget` schema pair whose edge carries
+    /// an enum `role` field, plus one instance of each type. Returns the
+    /// service, ready for edge writes between `g1` and `w1`.
+    async fn service_with_enum_edge_field() -> (std::sync::Arc<NodeService>, TempDir) {
+        let (service, temp) = create_test_service().await;
+        let service = std::sync::Arc::new(service);
+        let store = service.store();
+
+        for (id, title) in [("widget", "Widget"), ("gadget", "Gadget")] {
+            store
+                .create_node(
+                    Node::new_with_id(
+                        id.to_string(),
+                        "schema".to_string(),
+                        title.to_string(),
+                        serde_json::json!({ "fields": [], "relationships": [] }),
+                    ),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let declarations: Vec<crate::models::schema::SchemaRelationship> =
+            serde_json::from_value(serde_json::json!([{
+                "name": "assigned_to",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "edgeFields": [
+                    {
+                        "name": "role",
+                        "type": "enum",
+                        "coreValues": [
+                            {"value": "owner", "label": "Owner"},
+                            {"value": "editor", "label": "Editor"},
+                            {"value": "viewer", "label": "Viewer"}
+                        ]
+                    },
+                    { "name": "note", "type": "string" }
+                ]
+            }]))
+            .unwrap();
+        service
+            .set_schema_relationships("gadget", &declarations)
+            .await
+            .unwrap();
+
+        for (id, node_type, title) in [
+            ("g1", "gadget", "Gadget One"),
+            ("w1", "widget", "Widget One"),
+        ] {
+            store
+                .create_node(
+                    Node::new_with_id(
+                        id.to_string(),
+                        node_type.to_string(),
+                        title.to_string(),
+                        serde_json::json!({}),
+                    ),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        (service, temp)
+    }
+
+    /// A declared enum value is accepted and stored on the edge.
+    #[tokio::test]
+    async fn create_relationship_accepts_a_declared_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "owner"}),
+            )
+            .await
+            .expect("a declared enum value must be accepted");
+
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let group = view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap();
+        assert_eq!(group.related[0].edge_properties["role"], "owner");
+    }
+
+    /// The case the issue is about: a typo'd RBAC role must not be stored as a
+    /// silently-powerless permission.
+    #[tokio::test]
+    async fn create_relationship_rejects_an_undeclared_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        let err = service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "onwer"}),
+            )
+            .await
+            .expect_err("a value outside the declared set must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("onwer") && msg.contains("role") && msg.contains("Owner (owner)"),
+            "error should name the bad value, the field and the legal values, got: {msg}"
+        );
+
+        // Nothing was written.
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let group = view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap();
+        assert_eq!(group.count, 0, "rejected edge must not be persisted");
+    }
+
+    /// Case matters: `"Owner"` is a different value from `"owner"`.
+    #[tokio::test]
+    async fn create_relationship_rejects_a_wrongly_cased_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+        assert!(service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "Owner"})
+            )
+            .await
+            .is_err());
+    }
+
+    /// A non-enum edge field and an undeclared key are both left alone —
+    /// validation is scoped to enum membership, not to edge data in general.
+    #[tokio::test]
+    async fn create_relationship_leaves_non_enum_and_undeclared_edge_keys_alone() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "viewer", "note": "anything", "adhoc": 7}),
+            )
+            .await
+            .expect("non-enum and undeclared edge keys must pass through");
+
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let props = &view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap()
+            .related[0]
+            .edge_properties;
+        assert_eq!(props["note"], "anything");
+        assert_eq!(props["adhoc"], 7);
+    }
+
+    /// An omitted enum key is not a validation failure — `required` on an edge
+    /// field is not enforced anywhere today, and this check does not change that.
+    #[tokio::test]
+    async fn create_relationship_allows_an_omitted_or_null_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship("g1", "assigned_to", "w1", serde_json::json!({}))
+            .await
+            .expect("an omitted enum edge value must be accepted");
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": serde_json::Value::Null}),
+            )
+            .await
+            .expect("an explicit null must be accepted");
+    }
+
+    /// A non-string value for an enum edge field is rejected with a shape error.
+    #[tokio::test]
+    async fn create_relationship_rejects_a_non_string_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        let err = service
+            .create_relationship("g1", "assigned_to", "w1", serde_json::json!({"role": 3}))
+            .await
+            .expect_err("a numeric enum value must be rejected");
+        assert!(err.to_string().contains("must be a string"), "got: {err}");
+    }
+
+    /// The in-place edit path is validated too — otherwise an edge created with
+    /// a legal role could be edited into an illegal one.
+    #[tokio::test]
+    async fn update_relationship_properties_validates_enum_edge_values() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "viewer"}),
+            )
+            .await
+            .unwrap();
+
+        let err = service
+            .update_relationship_properties(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "superuser"}),
+            )
+            .await
+            .expect_err("an illegal enum value must be rejected on edit");
+        assert!(err.to_string().contains("superuser"), "got: {err}");
+
+        // The original value survives the rejected edit.
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let group = view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap();
+        assert_eq!(group.related[0].edge_properties["role"], "viewer");
+
+        // A legal edit still goes through.
+        service
+            .update_relationship_properties(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "editor"}),
+            )
+            .await
+            .expect("a declared value must be accepted on edit");
     }
 }

@@ -32,6 +32,16 @@ async function run(label: string, cmd: () => Promise<unknown>) {
   }
 }
 
+// Stages two of the things nodespace-app's build.rs (tauri_build::build())
+// insists on: the `nodespace-skill-installer` externalBin and the
+// `resources/skill/**/*` glob, neither of which has a tracked file to fall
+// back on. Cheap enough (a tsc build + file copy) to run unconditionally
+// rather than rely on a prior `dev:tauri`/`tauri:build` having staged it. This
+// now runs BEFORE `test:all`, because `rust:test` compiles that crate to cover
+// its `src/` unit tests. The remaining sidecars aren't staged here — a cold
+// build of them takes minutes, too much for every push — so `rust:test` checks
+// every required path up front and names the command that produces each.
+await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
 await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
 await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);
 await run("bun run test:e2e (headless daemon round-trip)", () => {
@@ -39,15 +49,18 @@ await run("bun run test:e2e (headless daemon round-trip)", () => {
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
   return $`bun run test:e2e`.env({ ...process.env, NODESPACED_BINARY: binary });
 });
-// nodespace-app's build.rs (tauri_build::build()) hard-fails if any declared
-// `resources`/`externalBin` entry in tauri.conf.json doesn't physically exist
-// yet — same class of requirement as the sidecar binaries below, but cheap
-// enough (a tsc build + file copy) to just run unconditionally here rather
-// than rely on a prior `dev:tauri`/`tauri:build` having staged it.
-await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
-await run("cargo test -p nodespace-app (Tauri-seam integration tests, ADR-048)", () => {
+await run(`cargo test -p nodespace-app --test "*" (Tauri-seam integration tests, ADR-048)`, () => {
   const binaryName = process.platform === "win32" ? "nodespaced.exe" : "nodespaced";
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
+  // --test "*": the `tests/*.rs` integration targets, and only those. This
+  // crate's `src/` unit tests are in-process, need no daemon binary, and run
+  // headless in ~2s at full parallelism, so `rust:test` (above, via test:all)
+  // runs them alongside every other crate's. Narrowing this step is what
+  // leaves them free to do that — both a bare `cargo test -p nodespace-app`
+  // and `--tests` would additionally re-run the lib/bin unittest targets
+  // here, needlessly, under the =1 cap only this suite requires. (`--tests`
+  // means "every target with test = true", not "the tests/ directory".)
+  //
   // --test-threads=1: every test in this suite spawns a real nodespaced
   // process, which loads a real embedding model (Metal shader compilation
   // included) before its socket binds — far more load-sensitive than
@@ -61,13 +74,15 @@ await run("cargo test -p nodespace-app (Tauri-seam integration tests, ADR-048)",
   // without this flag several real daemon processes can be mid-spawn at
   // once fully uncoordinated — self-inflicted CPU/GPU contention this suite
   // creates on its own, made worse by whatever else is running on the
-  // machine (see #1610). Tried --test-threads=2 first; it still reproduced
-  // #1610's exact daemon-health timeout under real background load, so =1
-  // was needed, not just a higher timeout. Serializing daemon spawns costs
-  // almost nothing here — the suite's total wall-clock is dominated by the
-  // one real-inference test (~25-40s), and the rest are sub-second each —
-  // so =1 trades no meaningful time for real reliability.
-  return $`cargo test -p nodespace-app -- --test-threads=1`.env({
+  // machine. Tried --test-threads=2 first; it still reproduced the same
+  // daemon-health timeout under real background load, so =1 was needed, not
+  // just a higher timeout. Serializing daemon spawns costs almost nothing
+  // here — the suite's total wall-clock is dominated by the one
+  // real-inference test (~25-40s), and the rest are sub-second each — so =1
+  // trades no meaningful time for real reliability.
+  // "*" stays quoted: bun's $ glob-expands a bare * against the working
+  // directory, which would hand cargo a list of repo filenames instead.
+  return $`cargo test -p nodespace-app --test "*" -- --test-threads=1`.env({
     ...process.env,
     NODESPACED_TEST_BIN: binary,
   });

@@ -2890,6 +2890,42 @@ mod tests {
         assert_eq!(s.code(), tonic::Code::InvalidArgument);
     }
 
+    /// A cycle the *caller proposed* (moving a node under its own descendant)
+    /// stays InvalidArgument: the request is genuinely bad and a different
+    /// request fixes it. Pinned alongside the case below so the two cannot
+    /// silently collapse into one classification.
+    #[test]
+    fn error_mapping_caller_proposed_cycle_stays_invalid_argument() {
+        assert_eq!(
+            to_status(NodeServiceError::circular_reference("A→B→A")).code(),
+            tonic::Code::InvalidArgument,
+            "write-path cycle rejection is a caller error"
+        );
+        assert_eq!(
+            to_status(NodeServiceError::hierarchy_violation("root immutable")).code(),
+            tonic::Code::InvalidArgument,
+            "write-path hierarchy rejection is a caller error"
+        );
+    }
+
+    /// A cycle found while *reading* stored data is a server-side fault: the
+    /// request was well-formed, retrying it unchanged fails identically, and
+    /// only repairing the graph resolves it. Reporting it as InvalidArgument
+    /// would blame the client and keep the corruption out of server-error
+    /// reporting.
+    #[test]
+    fn error_mapping_corrupt_hierarchy_returns_internal() {
+        let s = to_status(NodeServiceError::corrupt_hierarchy(
+            "node 'n1' appears more than once on the same branch",
+        ));
+        assert_eq!(s.code(), tonic::Code::Internal);
+        assert!(
+            s.message().contains("n1"),
+            "message should name the offending node: {}",
+            s.message()
+        );
+    }
+
     #[test]
     fn error_mapping_invalid_update_returns_invalid_argument() {
         let s = to_status(NodeServiceError::invalid_update("cannot change type"));

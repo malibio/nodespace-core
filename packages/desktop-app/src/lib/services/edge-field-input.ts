@@ -13,7 +13,7 @@
 
 import type { RawEdgeField } from './relationship-grouping';
 
-export type EdgeInputKind = 'number' | 'boolean' | 'date' | 'datetime' | 'text';
+export type EdgeInputKind = 'number' | 'boolean' | 'date' | 'datetime' | 'enum' | 'text';
 
 /** Which kind of input a declared edge field should render as. */
 export function edgeInputKind(field: RawEdgeField): EdgeInputKind {
@@ -30,9 +30,13 @@ export function edgeInputKind(field: RawEdgeField): EdgeInputKind {
     case 'datetime':
       // A whole-day `date` input would silently drop the time component.
       return 'datetime';
+    case 'enum':
+      // A declared value set renders as a picker. Falling back to free text
+      // when it is somehow absent keeps an existing edge editable rather
+      // than presenting an empty dropdown with no way out; the backend
+      // requires coreValues on an enum declaration, so this is defensive.
+      return (field.coreValues?.length ?? 0) > 0 ? 'enum' : 'text';
     default:
-      // enum has no declared option set on the edge-field definition, so it
-      // falls back to a free-text input alongside string/text/unknown types.
       return 'text';
   }
 }

@@ -573,6 +573,13 @@ impl NodeService {
                 }
             }
 
+            // Validate edge attributes against the declared edge fields before
+            // any write, so an illegal enum value (e.g. an RBAC role) is
+            // rejected rather than stored.
+            if let Some(edge_fields) = relationship.edge_fields.as_deref() {
+                validate_edge_data_against_fields(&edge_data, edge_fields, relationship_name)?;
+            }
+
             // Check cardinality constraint
             if relationship.cardinality == crate::models::schema::RelationshipCardinality::One {
                 let existing_count = self
@@ -956,6 +963,25 @@ impl NodeService {
                         source_id, relationship_name
                     )));
                 }
+
+                // Validate the replacement attributes against the declared edge
+                // fields, so an in-place edit cannot introduce an enum value
+                // that `create_relationship` would have rejected. A missing
+                // schema or undeclared relationship is not this method's error
+                // to raise — the edge already exists, and the update below
+                // reports a genuinely absent edge on its own.
+                // Bound to a local rather than chained off the `await?`: the
+                // borrowed edge fields must outlive the schema node they come
+                // from, and an inline chain only keeps that alive by virtue of
+                // temporary-lifetime extension in the `if let` scrutinee.
+                let schema_node = self.get_schema_node(&source.node_type).await?;
+                if let Some(edge_fields) = schema_node
+                    .as_ref()
+                    .and_then(|schema| schema.get_relationship(relationship_name))
+                    .and_then(|rel| rel.edge_fields.as_deref())
+                {
+                    validate_edge_data_against_fields(&properties, edge_fields, relationship_name)?;
+                }
             }
         }
 
@@ -1182,4 +1208,79 @@ impl NodeService {
 
         Ok(edges)
     }
+}
+
+/// Validate edge attribute values against the relationship's declared
+/// `edgeFields`, rejecting anything an `enum` field does not admit.
+///
+/// This is the edge-side counterpart to `validate_node_with_fields` (node
+/// properties) and runs on every write path — `create_relationship` and
+/// `update_relationship_properties` — so the CLI's `--edge-data`, the daemon,
+/// the Tauri commands and the agent tools are all covered by one check rather
+/// than each boundary validating (or forgetting to validate) on its own.
+///
+/// Scope is deliberately limited to enum membership. Broader edge-value typing
+/// (numbers, dates, required-ness) is not enforced anywhere today; adding it
+/// here would change the acceptance of existing callers well beyond an enum
+/// value set. An enum is the case where an unconstrained value is actively
+/// harmful: a role of `"onwer"` is a permission that silently grants nothing.
+///
+/// Keys with no declared edge field are left alone — undeclared edge attributes
+/// are an existing, supported shape (the viewer renders them as free text).
+fn validate_edge_data_against_fields(
+    edge_data: &serde_json::Value,
+    edge_fields: &[crate::models::schema::EdgeField],
+    relationship_name: &str,
+) -> Result<(), NodeServiceError> {
+    let Some(obj) = edge_data.as_object() else {
+        return Ok(());
+    };
+
+    for field in edge_fields {
+        if field.field_type != "enum" {
+            continue;
+        }
+        let Some(value) = obj.get(&field.name) else {
+            continue;
+        };
+        // An explicit null clears the attribute rather than setting an illegal
+        // value, matching how a null enum is treated on node properties.
+        if value.is_null() {
+            continue;
+        }
+
+        let values = field.core_values.as_deref().unwrap_or(&[]);
+
+        let Some(value_str) = value.as_str() else {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Edge field '{}' on relationship '{}' is an enum, so its value must be a string \
+                 or null, got {}",
+                field.name,
+                relationship_name,
+                match value {
+                    serde_json::Value::Bool(_) => "a boolean",
+                    serde_json::Value::Number(_) => "a number",
+                    serde_json::Value::Array(_) => "an array",
+                    serde_json::Value::Object(_) => "an object",
+                    _ => "another type",
+                }
+            )));
+        };
+
+        if !values.iter().any(|ev| ev.value == value_str) {
+            return Err(NodeServiceError::invalid_update(format!(
+                "Invalid value '{}' for enum edge field '{}' on relationship '{}'. Valid values: {}",
+                value_str,
+                field.name,
+                relationship_name,
+                values
+                    .iter()
+                    .map(|ev| format!("{} ({})", ev.label, ev.value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+
+    Ok(())
 }

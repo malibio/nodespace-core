@@ -19,7 +19,9 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Checkbox } from '$lib/components/ui/checkbox';
+  import * as Select from '$lib/components/ui/select';
   import LoaderIcon from '@lucide/svelte/icons/loader-circle';
+  import { getEnumValues, enumValueLabel } from '$lib/utils/schema-enum-values';
   import type { RawEdgeField } from '$lib/services/relationship-grouping';
   import {
     coerceNumber,
@@ -106,6 +108,24 @@
               value={toInputString(value)}
               oninput={(e) => onChange(field.name, coerceNumber(e.currentTarget.value))}
             />
+          {:else if kind === 'enum'}
+            <!-- A closed value set picks from its declared values, matching how
+                 the add form renders the same field. -->
+            {@const current = toInputString(value)}
+            <Select.Root
+              type="single"
+              value={current}
+              onValueChange={(v) => onChange(field.name, v)}
+            >
+              <Select.Trigger class="h-8 w-full" aria-label={formatEdgeFieldLabel(field.name)}>
+                {enumValueLabel(field, current) || `Select ${formatEdgeFieldLabel(field.name)}...`}
+              </Select.Trigger>
+              <Select.Content>
+                {#each getEnumValues(field) as ev (ev.value)}
+                  <Select.Item value={ev.value} label={ev.label} />
+                {/each}
+              </Select.Content>
+            </Select.Root>
           {:else}
             <Input
               type={edgeInputType(kind)}

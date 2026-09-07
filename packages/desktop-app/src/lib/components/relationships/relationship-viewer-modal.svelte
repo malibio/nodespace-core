@@ -48,8 +48,10 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import SlidersIcon from '@lucide/svelte/icons/sliders-horizontal';
   import * as Popover from '$lib/components/ui/popover';
+  import * as Select from '$lib/components/ui/select';
   import { createLogger } from '$lib/utils/logger';
   import { getNavigationService } from '$lib/services/navigation-service';
+  import { getEnumValues, enumValueLabel } from '$lib/utils/schema-enum-values';
   import EdgePropertiesModal from './edge-properties-modal.svelte';
   import {
     loadNodeRelationshipsView,
@@ -66,6 +68,7 @@
     groupSupportsEdgeEditing,
     partitionGroups,
     type NodeRelationshipsView,
+    type RawEdgeField,
     type RelationshipGroupView,
     type RelationshipRowView
   } from '$lib/services/relationship-grouping';
@@ -654,6 +657,19 @@
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
     return JSON.stringify(value);
   }
+
+  /**
+   * Read-only rendering of an edge value. An enum shows its declared label
+   * rather than the stored key, so the viewer and the picker agree on how a
+   * value reads. Everything else — including an undeclared edge key, where
+   * `field` is undefined — formats as before.
+   */
+  function formatEdgeValue(field: RawEdgeField | undefined, value: unknown): string {
+    if (field && edgeInputKind(field) === 'enum' && typeof value === 'string' && value !== '') {
+      return enumValueLabel(field, value) ?? value;
+    }
+    return formatValue(value);
+  }
 </script>
 
 <Dialog.Root bind:open>
@@ -862,12 +878,18 @@
                                 {/if}
                               {:else}
                                 <!-- Every value column reads read-only; edge
-                                     properties are changed in the row's editor. -->
-                                {formatValue(
-                                  col.source === 'edge'
-                                    ? row.edgeValues[col.key]
-                                    : cellValue(row, col.token)
-                                )}
+                                     properties are changed in the row's editor.
+                                     Edge values route through formatEdgeValue so
+                                     an enum shows its declared label rather than
+                                     the stored key. -->
+                                {#if col.source === 'edge'}
+                                  {formatEdgeValue(
+                                    group.edgeFields.find((f) => f.name === col.key),
+                                    row.edgeValues[col.key]
+                                  )}
+                                {:else}
+                                  {formatValue(cellValue(row, col.token))}
+                                {/if}
                               {/if}
                             </td>
                           {/each}
@@ -1066,6 +1088,23 @@
                     [field.name]: coerceNumber(e.currentTarget.value)
                   })}
               />
+            {:else if kind === 'enum'}
+              {@const current = toInputString(addEdgeDraft[field.name])}
+              <Select.Root
+                type="single"
+                value={current}
+                onValueChange={(v) => (addEdgeDraft = { ...addEdgeDraft, [field.name]: v })}
+              >
+                <Select.Trigger class="h-8 w-full" aria-label={formatEdgeFieldLabel(field.name)}>
+                  {enumValueLabel(field, current) ||
+                    `Select ${formatEdgeFieldLabel(field.name)}...`}
+                </Select.Trigger>
+                <Select.Content>
+                  {#each getEnumValues(field) as ev (ev.value)}
+                    <Select.Item value={ev.value} label={ev.label} />
+                  {/each}
+                </Select.Content>
+              </Select.Root>
             {:else}
               <Input
                 type={edgeInputType(kind)}

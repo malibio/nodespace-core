@@ -7,7 +7,22 @@
  * a raw enum value (a field control, a collapsed-header summary badge, …)
  * reads it from here instead of re-deriving its own copy of the same lookup.
  */
-import type { SchemaField, EnumValue } from '$lib/types/schema-node';
+import type { EnumValue } from '$lib/types/schema-node';
+
+/**
+ * The minimum a field must carry to be treated as an enum here: a declared
+ * value set, optionally extended by user values.
+ *
+ * Widened from `SchemaField` so an edge field can use the same lookup. An edge
+ * enum is a closed vocabulary — it declares `coreValues` and has no
+ * `userValues`/`extensible` half — but "merge what's declared, resolve a value
+ * to its label" is identical work, and duplicating it is how two surfaces
+ * drift apart on how the same value renders.
+ */
+export interface EnumFieldLike {
+  coreValues?: EnumValue[] | null;
+  userValues?: EnumValue[] | null;
+}
 
 /**
  * Merge a field's protected core values with its user-extensible ones, in that
@@ -16,7 +31,7 @@ import type { SchemaField, EnumValue } from '$lib/types/schema-node';
  * duplicate option — an extension is meant to ADD choices, not shadow one
  * that already exists.
  */
-export function getEnumValues(field: SchemaField): EnumValue[] {
+export function getEnumValues(field: EnumFieldLike): EnumValue[] {
   const values: EnumValue[] = [];
   const seen = new Set<string>();
   for (const ev of field.coreValues ?? []) {
@@ -57,7 +72,10 @@ export function formatEnumFallbackLabel(value: string): string {
  * fallback — rather than surfacing a blank. Deliberately `||`, not `??`: an
  * empty string is exactly as unhelpful as a missing label.
  */
-export function enumValueLabel(field: SchemaField, value: string | null | undefined): string | undefined {
+export function enumValueLabel(
+  field: EnumFieldLike,
+  value: string | null | undefined
+): string | undefined {
   if (!value) return undefined;
   return getEnumValues(field).find((ev) => ev.value === value)?.label || formatEnumFallbackLabel(value);
 }
