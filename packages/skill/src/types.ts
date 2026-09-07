@@ -23,6 +23,14 @@ export interface AgentConfig {
 export interface InstallResult {
   agent: AgentName;
   installed: string[];
+  /**
+   * Set when `installed` is empty because Claude Code already has the
+   * skill via its own plugin marketplace
+   * (`/plugin install nodespace@...`, tracked in `installed_plugins.json`).
+   * The marketplace copy stays authoritative — this installer does not
+   * overwrite it, since the marketplace owns its own update cadence.
+   */
+  skipReason?: 'plugin-managed';
 }
 
 export interface UninstallResult {

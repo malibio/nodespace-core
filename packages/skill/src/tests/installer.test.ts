@@ -17,7 +17,8 @@ vi.mock('node:os', async (importOriginal) => {
 // CLAUDE_CONFIG_DIR describe sets it explicitly where it needs to.
 delete process.env.CLAUDE_CONFIG_DIR;
 
-const { install, uninstall, isNodespaceBinaryOnPath } = await import('../installer.js');
+const { install, uninstall, isNodespaceBinaryOnPath, claudeCodePluginManagedSkillExists } =
+  await import('../installer.js');
 const { AGENTS, SHARED_SKILL_FRONTMATTER } = await import('../agents.js');
 
 const SKILL_MD_CONTENT = '# NodeSpace Skill\nTest content';
@@ -403,6 +404,102 @@ describe('uninstall', () => {
     uninstall([config.name]);
 
     expect(existsSync(config.installDir)).toBe(false);
+  });
+});
+
+describe('claudeCodePluginManagedSkillExists', () => {
+  const claudeConfigDir = join(TMP, '.claude');
+  const registryPath = join(claudeConfigDir, 'plugins', 'installed_plugins.json');
+
+  function writeRegistry(plugins: Record<string, unknown>): void {
+    mkdirSync(join(claudeConfigDir, 'plugins'), { recursive: true });
+    writeFileSync(registryPath, JSON.stringify({ version: 2, plugins }), 'utf8');
+  }
+
+  it('returns false when the registry file does not exist at all', () => {
+    expect(claudeCodePluginManagedSkillExists(claudeConfigDir)).toBe(false);
+  });
+
+  it('returns true when a nodespace plugin key is registered', () => {
+    writeRegistry({ 'nodespace@nodespace-skill': [{ scope: 'user' }] });
+    expect(claudeCodePluginManagedSkillExists(claudeConfigDir)).toBe(true);
+  });
+
+  // The marketplace half of the key is whatever label the user's own Claude
+  // Code registered it under locally -- matching a fixed marketplace name
+  // would miss a real install under a different one.
+  it('matches regardless of which marketplace the plugin was registered under', () => {
+    writeRegistry({ 'nodespace@some-other-marketplace': [{ scope: 'user' }] });
+    expect(claudeCodePluginManagedSkillExists(claudeConfigDir)).toBe(true);
+  });
+
+  // Mirrors the shape of a real local installed_plugins.json containing only
+  // unrelated plugins (verified against an actual file during design).
+  it('returns false when only unrelated plugins are registered', () => {
+    writeRegistry({ 'rust-analyzer-lsp@claude-plugins-official': [{ scope: 'user' }] });
+    expect(claudeCodePluginManagedSkillExists(claudeConfigDir)).toBe(false);
+  });
+
+  it('fails open (returns false) on a malformed registry file rather than throwing', () => {
+    mkdirSync(join(claudeConfigDir, 'plugins'), { recursive: true });
+    writeFileSync(registryPath, '{ not valid json', 'utf8');
+    expect(claudeCodePluginManagedSkillExists(claudeConfigDir)).toBe(false);
+  });
+});
+
+describe('install — Claude Code plugin-managed reconciliation', () => {
+  const config = AGENTS.find(a => a.name === 'claude-code')!;
+  const registryPath = join(config.detectionDir, 'plugins', 'installed_plugins.json');
+
+  function markPluginManaged(): void {
+    mkdirSync(join(config.detectionDir, 'plugins'), { recursive: true });
+    writeFileSync(
+      registryPath,
+      JSON.stringify({ version: 2, plugins: { 'nodespace@nodespace-skill': [{ scope: 'user' }] } }),
+      'utf8'
+    );
+  }
+
+  it('skips writing files and reports skipReason plugin-managed', () => {
+    mkdirSync(config.detectionDir, { recursive: true });
+    markPluginManaged();
+
+    const results = install(['claude-code'], FAKE_PKG_ROOT);
+    expect(results).toHaveLength(1);
+    expect(results[0].installed).toEqual([]);
+    expect(results[0].skipReason).toBe('plugin-managed');
+    expect(existsSync(config.installDir)).toBe(false);
+  });
+
+  // An app-installed copy from before this reconciliation existed must not
+  // be left behind once the marketplace copy is authoritative -- otherwise
+  // "no NEW copy" would still leave the old one in place, and Claude Code
+  // would still see the skill twice.
+  it('cleans up a pre-existing app-installed copy once the marketplace copy is detected', () => {
+    mkdirSync(config.detectionDir, { recursive: true });
+    seedPkgRoot(FAKE_PKG_ROOT, config);
+    install(['claude-code'], FAKE_PKG_ROOT);
+    expect(existsSync(join(config.installDir, 'SKILL.md'))).toBe(true);
+
+    markPluginManaged();
+    const results = install(['claude-code'], FAKE_PKG_ROOT);
+
+    expect(results[0].installed).toEqual([]);
+    expect(results[0].skipReason).toBe('plugin-managed');
+    expect(existsSync(config.installDir)).toBe(false);
+  });
+
+  it('does not block other agents from installing normally', () => {
+    const gemini = AGENTS.find(a => a.name === 'gemini')!;
+    mkdirSync(config.detectionDir, { recursive: true });
+    markPluginManaged();
+    mkdirSync(gemini.detectionDir, { recursive: true });
+    seedPkgRoot(FAKE_PKG_ROOT, gemini);
+
+    const results = install(['claude-code', 'gemini'], FAKE_PKG_ROOT);
+    const geminiResult = results.find(r => r.agent === 'gemini')!;
+    expect(geminiResult.installed.length).toBe(gemini.shims.length);
+    expect(geminiResult.skipReason).toBeUndefined();
   });
 });
 
