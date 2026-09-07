@@ -69,11 +69,15 @@ describe("renderCask", () => {
     expect(cask).toContain("strategy :github_latest");
   });
 
-  test("matches the published tap's Casks/nodespace.rb byte-for-byte for v0.2.0", () => {
-    // Pinned to the actual published sha256 (NodeSpace_0.2.0_aarch64.dmg) so
-    // this test fails the moment renderCask's output drifts from what's
-    // live on NodeSpaceAI/homebrew-nodespace -- confirmed against a live
-    // fetch of that file's content during nodespace-core#2171.
+  test("renders the full expected cask byte-for-byte for a known digest", () => {
+    // Pinned to a real published sha256 (NodeSpace_0.2.0_aarch64.dmg) so
+    // this test fails the moment renderCask's output changes at all,
+    // intentionally or not -- update the expected string alongside any
+    // deliberate change to the generator (as this one did, for the zap
+    // trash list). The published tap only re-syncs to whatever the
+    // generator currently produces on the next real release, so this is
+    // the generator's own expected-output snapshot, not a live assertion
+    // about what's on NodeSpaceAI/homebrew-nodespace right now.
     const digests: ArchDigestResult = {
       arm: {
         arch: "arm",
@@ -117,14 +121,32 @@ describe("renderCask", () => {
   app "NodeSpace.app"
   binary "#{appdir}/NodeSpace.app/Contents/MacOS/nodespace"
 
+  # \`~/.nodespace/models\` is deliberately NOT listed here -- it can hold
+  # 100GB+ of downloaded model weights, and trashing that on every zap
+  # would be a hostile surprise for a directory the user may reasonably
+  # expect to survive an uninstall/reinstall cycle.
   zap trash: [
     "~/.nodespace/bin",
     "~/.nodespace/logs",
+    "~/.nodespace/database",
     "~/Library/LaunchAgents/app.nodespace.daemon.plist",
+    "~/Library/LaunchAgents/app.nodespace.daemon.dev.plist",
   ]
 end
 `,
     );
+  });
+
+  test("zap trash removes both the release and dev launchd agents, and the database, but not models", () => {
+    const digests: ArchDigestResult = { arm: armDigest };
+    const cask = renderCask("v0.2.0", digests);
+
+    expect(cask).toContain('"~/Library/LaunchAgents/app.nodespace.daemon.plist"');
+    expect(cask).toContain('"~/Library/LaunchAgents/app.nodespace.daemon.dev.plist"');
+    expect(cask).toContain('"~/.nodespace/database"');
+    // The comment explaining the exclusion mentions the path in prose;
+    // this checks it never appears as an actual trashed array entry.
+    expect(cask).not.toContain('"~/.nodespace/models"');
   });
 });
 
