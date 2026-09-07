@@ -222,7 +222,7 @@ fn open_item_label(ui_available: bool) -> &'static str {
     if ui_available {
         "Open NodeSpace"
     } else {
-        "Open NodeSpace (app not found)"
+        "Open NodeSpace (not installed)"
     }
 }
 
@@ -294,7 +294,10 @@ fn ui_binary_install_candidates(home: Option<&Path>) -> Vec<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         let _ = home;
-        vec![PathBuf::from("/usr/bin/nodespace-app")]
+        vec![
+            PathBuf::from("/usr/bin/nodespace-app"),
+            PathBuf::from("/usr/local/bin/nodespace-app"),
+        ]
     }
 
     #[cfg(target_os = "windows")]
@@ -307,6 +310,17 @@ fn ui_binary_install_candidates(home: Option<&Path>) -> Vec<PathBuf> {
         })
         .into_iter()
         .collect()
+    }
+
+    // A target with no known install location returns an empty list rather
+    // than failing to compile. Without this arm every block above is stripped
+    // on a fourth target, the body evaluates to `()` where `Vec<PathBuf>` is
+    // declared, and the reader gets a type error from inside a `#[cfg]` maze
+    // instead of the honest answer, which "nowhere to look" already is.
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = home;
+        Vec::new()
     }
 }
 
@@ -614,12 +628,19 @@ impl TrayState {
         // /Applications, and it survives the app being moved, reinstalled or
         // upgraded underneath it. A path cached at startup would be wrong in
         // exactly those cases, and re-checking costs one `stat` per click.
-        self.refresh_ui_binary();
+        //
+        // The returned availability flag is deliberately dropped: this needs
+        // the resolved *path*, which it takes from the field below, not the
+        // yes/no the menu-rebuild caller wants.
+        let _ = self.refresh_ui_binary();
 
-        // Unreachable through the menu — the items that call this are built
-        // disabled when `ui_binary` is `None`. Kept as a hard error rather than
-        // an `Ok(())` so that if a future caller does reach it, the failure
-        // surfaces instead of being swallowed into a successful-looking no-op.
+        // Reachable, despite the menu items being disabled whenever
+        // `ui_binary` is `None`: the refresh above can itself discover that
+        // the app has just disappeared, in the window between the menu being
+        // built and this click being handled. Rare, but a real race rather
+        // than dead code — hence a hard error, not the `Ok(())` this used to
+        // return, which swallowed the failure into a successful-looking no-op
+        // and left the caller with nothing to report.
         let path = self.ui_binary.as_ref().context(
             "no NodeSpace UI binary found: NODESPACE_UI_BINARY is unset or stale and the app \
              is not installed in a standard location",
@@ -861,9 +882,12 @@ mod tests {
         let home = PathBuf::from("/Users/example");
         let candidates = ui_binary_install_candidates(Some(&home));
 
+        // Scoped to the three platforms that actually ship: a target with no
+        // known install location legitimately returns an empty list.
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         assert!(
             !candidates.is_empty(),
-            "every supported platform needs at least one install location to fall back to"
+            "every shipping platform needs at least one install location to fall back to"
         );
         assert!(
             candidates.iter().all(|c| c.is_absolute()),
@@ -906,7 +930,7 @@ mod tests {
              only channel the tray has to explain why the action is unavailable"
         );
         assert!(
-            unavailable.contains("not found"),
+            unavailable.contains("not installed"),
             "the label should name the reason, got {unavailable:?}"
         );
     }

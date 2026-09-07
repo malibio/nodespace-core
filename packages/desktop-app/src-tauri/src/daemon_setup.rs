@@ -967,10 +967,23 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
     // one that has been observed missing this way; the tray now falls back to
     // the standard install locations rather than depending on it, so a
     // stale-env daemon is recoverable instead of leaving a dead menu item.
-    // `NODESPACED_SOCKET` and `NODESPACED_DB_PATH` are safe to lose here:
-    // the daemon's own defaults are byte-identical to the values written into
-    // the plist (`$HOME/.nodespace/daemon.sock` and the default database dir),
-    // so a daemon missing them serves exactly the same socket and database.
+    // The plist's other variable, `NODESPACED_SOCKET`, is NOT safe to lose in
+    // general, and this is a real hazard rather than a theoretical one.
+    // `daemon_socket_relative()` is scoped by build variant (`daemon.sock` /
+    // `daemon-pro.sock` / `daemon-dev.sock` / `daemon-dev-pro.sock`), while the
+    // daemon's own default is unconditionally `~/.nodespace/daemon.sock` with
+    // no such scoping. The two therefore agree only for the release community
+    // build. A Pro or dev daemon that loses the variable to a kickstart binds
+    // `daemon.sock` while the matching app dials the scoped name via
+    // `grpc_client::resolve_socket_path()`, and they never meet.
+    //
+    // Tracked in core#2406 -- it is a pre-existing hazard on this path, not
+    // something introduced here, and it is fixed by making the daemon's default
+    // variant-scoped rather than by anything at this call site.
+    //
+    // (`NODESPACED_DB_PATH` does not appear in this plist at all -- only
+    // `NODESPACED_SOCKET`, `NODESPACE_UI_BINARY` and the Pro pair -- so there
+    // is nothing for a restart to drop.)
     let retry_stderr = String::from_utf8_lossy(&retry.stderr);
     tracing::warn!(
         "launchctl bootstrap retry failed ({}); attempting kickstart",
