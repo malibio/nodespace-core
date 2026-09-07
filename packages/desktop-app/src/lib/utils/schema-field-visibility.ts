@@ -8,9 +8,10 @@
  * render as an editable control, and equally must not render as a table column
  * that can never be filled.
  *
- * Every UI surface that iterates `SchemaNode.fields` filters through this, so
- * the detail form and the table view cannot drift apart on what "visible"
- * means.
+ * Every UI surface that decides whether to *render* a field should filter
+ * through this, so the detail form and the table view cannot drift apart on
+ * what "visible" means. Surfaces that use `fields` for something other than
+ * rendering — offering query filter properties, say — make their own call.
  */
 import type { SchemaField } from '$lib/types/schema-node';
 

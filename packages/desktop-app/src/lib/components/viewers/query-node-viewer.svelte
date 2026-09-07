@@ -283,7 +283,11 @@
     return /Schema '.*' not found/.test(message) || message.includes('SCHEMA_NOT_FOUND');
   }
 
-  // Build a lookup map from schema fields for enum label resolution
+  // Build a lookup map from schema fields for enum label resolution.
+  // Deliberately unfiltered: TableView owns column visibility (it drops
+  // system-protected fields — see isUserVisibleField), and this map is only ever
+  // read by the column names TableView actually renders. Filtering here would be
+  // a no-op that gives the visibility rule a second home.
   const fieldSchemaMap = $derived.by(() => {
     const map = new Map<string, SchemaField>();
     if (schemaNode?.fields) {
