@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use nodespace_daemon::nodespace::{
-    GetAllSchemasRequest, GetSchemaDefinitionRequest, SchemaParamsRequest,
+    DeleteNodeRequest, GetAllSchemasRequest, GetSchemaDefinitionRequest, SchemaParamsRequest,
 };
 
 use crate::output;
@@ -27,6 +27,13 @@ pub enum SchemaAction {
     Create(SchemaParamsArgs),
     /// Update an existing schema from a JSON params blob.
     Update(SchemaParamsArgs),
+    /// Delete a schema definition by ID.
+    ///
+    /// Remove the type's relationship declarations first (`schema update`
+    /// with `remove_relationships`), including any declared on *other* types
+    /// that point at this one — the daemon refuses the delete while any
+    /// remain, naming the count.
+    Delete(SchemaDeleteArgs),
 }
 
 #[derive(Args, Debug)]
@@ -35,6 +42,12 @@ pub struct SchemaListArgs {}
 #[derive(Args, Debug)]
 pub struct SchemaGetArgs {
     /// Schema ID (node type identifier, e.g. `task`, `person`).
+    pub id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SchemaDeleteArgs {
+    /// Schema ID to delete (node type identifier, e.g. `adr`, `person`).
     pub id: String,
 }
 
@@ -70,6 +83,7 @@ pub async fn run(client: &mut NodeClient, action: SchemaAction, json: bool) -> R
         SchemaAction::Get(args) => get(client, args, json).await,
         SchemaAction::Create(args) => create(client, args, json).await,
         SchemaAction::Update(args) => update(client, args, json).await,
+        SchemaAction::Delete(args) => delete(client, args, json).await,
     }
 }
 
@@ -124,4 +138,21 @@ async fn get(client: &mut NodeClient, args: SchemaGetArgs, json: bool) -> Result
 
     let node = response.node_data.context("daemon returned no node_data")?;
     output::print_node(&node, json)
+}
+
+/// A schema *is* a node — its ID is the node type identifier — so deletion
+/// goes through `DeleteNode` rather than a schema-specific RPC. The daemon
+/// guards it: a schema still carrying relationship declarations is rejected
+/// with `schema_has_declarations`, which names the count and the fix.
+async fn delete(client: &mut NodeClient, args: SchemaDeleteArgs, json: bool) -> Result<()> {
+    let response = client
+        .delete_node(DeleteNodeRequest {
+            node_id: args.id,
+            version: None,
+        })
+        .await
+        .context("DeleteNode RPC failed")?
+        .into_inner();
+
+    output::print_delete(&response, json)
 }

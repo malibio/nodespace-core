@@ -226,8 +226,8 @@ nodespace node get "2026-05-30"
 ### Define a new entity type, then create an instance
 
 ```bash
-# 1. Create the schema (one schema per request — see Schema inspection and management above)
-nodespace schema create --params '{"name":"Ticket","description":"A tracked unit of engineering work","fields":[{"name":"status","type":"enum","required":true,"coreValues":[{"value":"ready_for_dev","label":"Ready for Dev"},{"value":"in_dev","label":"In Dev"},{"value":"done","label":"Done"}]},{"name":"assignee","type":"text"}]}'
+# 1. Create the schema (one schema per request; `references/cli.md` has the full field/enum shape)
+nodespace schema create --params '{"name":"Ticket","fields":[{"name":"status","type":"text"},{"name":"assignee","type":"text"}]}'
 
 # 2. Create an instance
 nodespace node create --type ticket --content "Fix flaky retry test" --parent <parent-id>
@@ -249,7 +249,7 @@ Use a relationship with `--type member_of` against the collection node. If the c
 nodespace relationship create --from <node-id> --type member_of --to <collection-id>
 ```
 
-### Delete a node
+### Delete a node, or a whole node type
 
 Deletion is permanent and takes the node's children with it. Resolve the node first and confirm with the user before deleting anything you did not just create — a wrong id here is not recoverable.
 
@@ -259,6 +259,8 @@ nodespace node delete <node-id>
 ```
 
 If the user wants something out of the way rather than gone, prefer moving it (re-parent it, or drop it from a collection) over deleting it.
+
+**A node type can be deleted too** — `nodespace schema delete <type>`, once `schema update` has cleared any relationship declarations pointing at or from it. Asked to remove, drop or clean up a type, including a throwaway one you just created, reach for this; never call it unsupported or strip a schema to an empty shell instead. Sequence in `references/cli.md`.
 
 ### Bulk import from markdown
 
@@ -277,18 +279,6 @@ nodespace node export <doc-id> --json | jq '.markdown'
 
 # Clean export for reading
 nodespace node export <doc-id> --node-ids false
-```
-
-### Build a knowledge graph session
-
-```bash
-# At session start: preflight check, then search for relevant context
-nodespace --version
-nodespace diagnostics
-nodespace search "previous work on this codebase"
-
-# During session: save discoveries
-nodespace node create --type text --content "Session summary: refactored auth middleware, tests passing"
 ```
 
 ## Output Format
