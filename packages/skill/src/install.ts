@@ -97,21 +97,42 @@ Examples:
       process.exit(0);
     }
 
-    let hadPartialFailure = false;
+    const seen = new Set<string>();
     for (const result of results) {
+      seen.add(result.agent);
       if (result.installed.length > 0) {
         console.log(`✓ ${result.agent}: installed ${result.installed.length} file(s)`);
         for (const file of result.installed) {
           console.log(`  → ${file}`);
         }
       } else {
-        console.error(`⚠ ${result.agent}: detected but no files to install (package may be incomplete)`);
-        hadPartialFailure = true;
+        // A warning, not a failure -- see the process-exit note below. On
+        // stdout, not stderr: the desktop app's installer wrapper
+        // (skill_setup.rs's parse_installer_output) parses this exact line
+        // to report the skipped-with-reason state, and only reads stdout.
+        console.log(`⚠ ${result.agent}: detected but no files to install (package may be incomplete)`);
       }
     }
-    if (hadPartialFailure) {
-      process.exit(1);
+
+    // Only when auto-detecting (no explicit agent): report every configured
+    // agent that simply isn't present, so a caller parsing this output can
+    // tell "not present" (unremarkable -- the normal case for a harness the
+    // user doesn't use) apart from "detected but skipped" (the ⚠ case
+    // above, a real warning) instead of both reading as the same silence.
+    if (!agentArg) {
+      for (const name of validAgents) {
+        if (!seen.has(name)) {
+          console.log(`  ${name}: not detected`);
+        }
+      }
     }
+
+    // Exits 0 even when some detected agents had nothing to install --
+    // that's a per-agent warning (already on stderr above), not a reason to
+    // fail the whole invocation when other agents installed successfully,
+    // or even when none did: the situation is fully reported either way,
+    // and a caller parsing this output needs the exit code to mean "the
+    // installer ran to completion," not "every single agent succeeded."
   } else if (command === 'uninstall') {
     const results = uninstall(targetAgents);
 

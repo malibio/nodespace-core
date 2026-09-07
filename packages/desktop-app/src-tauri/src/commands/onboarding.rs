@@ -174,11 +174,16 @@ pub async fn configure_path() -> Result<(), String> {
 
 /// Install the NodeSpace skill into detected agents (delegates to skill_setup).
 /// Idempotent when called via the onboarding wizard; marks skill_configured in config.
+///
+/// Returns the full result (not just success/failure) so the wizard can name
+/// which agents actually got the skill, and which were detected but had
+/// nothing to install -- a bare `Ok(())` gave the caller no way to report
+/// that, which is what made a correct multi-agent install read as silence.
 #[tauri::command]
-pub async fn configure_skill(app_handle: tauri::AppHandle) -> Result<(), String> {
+pub async fn configure_skill(app_handle: tauri::AppHandle) -> Result<SkillSetupResult, String> {
     let result = skill_setup::install_skill(false, &app_handle).await;
     if result.success {
-        Ok(())
+        Ok(result)
     } else {
         Err(result
             .error
@@ -205,7 +210,12 @@ pub async fn get_skill_setup_status() -> Result<SkillSetupResult, String> {
     let cli_on_path = skill_setup::check_cli_on_path();
     Ok(SkillSetupResult {
         success: state.skill_installed,
-        agents_installed: vec![],
+        // Persisted by the install that set skill_installed -- reading it
+        // back here is what lets the Settings page show which agents
+        // actually have the skill on a normal page load, not only right
+        // after a fresh install click.
+        agents_installed: state.agents_installed,
+        agents_skipped: vec![],
         cli_on_path,
         cli_warning: skill_setup::cli_warning(cli_on_path),
         error: None,

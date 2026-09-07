@@ -26,6 +26,21 @@
     pathAlreadyConfigured: boolean;
   }
 
+  interface SkippedAgent {
+    agent: string;
+    reason: string;
+  }
+
+  interface SkillSetupResult {
+    success: boolean;
+    agentsInstalled: string[];
+    agentsSkipped: SkippedAgent[];
+    cliOnPath: boolean;
+    cliWarning: string | null;
+    error: string | null;
+    failureIsNew: boolean;
+  }
+
   // ── state ──────────────────────────────────────────────────────────────────
 
   let currentStep = $state<WizardStep>('path');
@@ -43,6 +58,14 @@
   // What was actually configured (for summary)
   let pathDone = $state(false);
   let skillDone = $state(false);
+
+  // The real result of the skill install -- which agents actually got
+  // files, and which were detected but had nothing to install. Without
+  // this the wizard could only ever say "Claude Code skill" regardless of
+  // what actually happened, so a correct multi-agent install (e.g. Claude
+  // Code AND Gemini CLI both installed) read as if only Claude Code was
+  // handled at all.
+  let skillResult = $state<SkillSetupResult | null>(null);
 
   // Whether the PATH export was already present before we ran
   let pathWasAlreadyConfigured = $state(false);
@@ -107,16 +130,27 @@
     isLoading = true;
     stepError = null;
     try {
-      await invoke('configure_skill');
+      skillResult = await invoke<SkillSetupResult>('configure_skill');
       skillDone = true;
       stepSuccess = true;
-      log.info('Skill configured successfully');
+      log.info('Skill configured successfully', { agentsInstalled: skillResult.agentsInstalled });
     } catch (err) {
       stepError = err instanceof Error ? err.message : String(err);
       log.error('Failed to configure skill', err);
     } finally {
       isLoading = false;
     }
+  }
+
+  /** "Claude Code" from "claude-code", "OpenCode" from "opencode", etc. */
+  function displayAgentName(agent: string): string {
+    const names: Record<string, string> = {
+      'claude-code': 'Claude Code',
+      codex: 'Codex',
+      gemini: 'Gemini CLI',
+      opencode: 'OpenCode',
+    };
+    return names[agent] ?? agent;
   }
 
   function skipCurrentStep() {
@@ -237,8 +271,20 @@
 
         {#if stepSuccess}
           <div class="success-banner">
-            Skill file written. Claude Code will pick it up automatically on the next session.
+            {#if skillResult && skillResult.agentsInstalled.length > 0}
+              Skill installed into: {skillResult.agentsInstalled.map(displayAgentName).join(', ')}.
+              Picked up automatically on each agent's next session.
+            {:else}
+              Skill file written. Claude Code will pick it up automatically on the next session.
+            {/if}
           </div>
+          {#if skillResult && skillResult.agentsSkipped.length > 0}
+            <div class="info-banner">
+              {#each skillResult.agentsSkipped as skipped (skipped.agent)}
+                {displayAgentName(skipped.agent)}: {skipped.reason}<br />
+              {/each}
+            </div>
+          {/if}
           <div class="step-actions">
             <button class="primary-button" onclick={nextStep}>Next</button>
           </div>
@@ -301,7 +347,11 @@
                 {/if}
               </span>
               <span>
-                Claude Code skill
+                {#if skillDone && skillResult && skillResult.agentsInstalled.length > 0}
+                  NodeSpace skill — {skillResult.agentsInstalled.map(displayAgentName).join(', ')}
+                {:else}
+                  NodeSpace skill
+                {/if}
                 {#if !skillDone}<span class="summary-note">(skipped)</span>{/if}
               </span>
             </li>
