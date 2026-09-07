@@ -5,7 +5,7 @@
 #   usr/local/bin/nodespace
 #   usr/local/bin/nodespaced
 #   Applications/NodeSpace.app
-#   Library/LaunchAgents/com.nodespace.daemon.plist
+#   Library/LaunchAgents/app.nodespace.daemon.plist
 #
 # This script:
 #   1. Detects an existing Pro binary and aborts with a dialog if Community
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 INSTALL_PREFIX="/usr/local/bin"
-LAUNCHD_PLIST="/Library/LaunchAgents/com.nodespace.daemon.plist"
+LAUNCHD_PLIST="/Library/LaunchAgents/app.nodespace.daemon.plist"
 NODESPACED="${INSTALL_PREFIX}/nodespaced"
 
 # ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ if [[ -n "${INSTALLING_USER}" && "${INSTALLING_USER}" != "root" ]]; then
     USER_UID=$(id -u "${INSTALLING_USER}" 2>/dev/null || echo "")
     if [[ -n "${USER_UID}" ]]; then
         # Unload any existing registration first (ignore error if not loaded).
-        launchctl bootout "gui/${USER_UID}/com.nodespace.daemon" 2>/dev/null || true
+        launchctl bootout "gui/${USER_UID}/app.nodespace.daemon" 2>/dev/null || true
         launchctl bootstrap "gui/${USER_UID}" "${LAUNCHD_PLIST}"
     fi
 fi

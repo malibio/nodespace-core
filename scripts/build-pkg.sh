@@ -5,7 +5,7 @@
 #   /usr/local/bin/nodespace
 #   /usr/local/bin/nodespaced
 #   /Applications/NodeSpace.app
-#   /Library/LaunchAgents/com.nodespace.daemon.plist
+#   /Library/LaunchAgents/app.nodespace.daemon.plist
 #
 # Usage (from repo root):
 #   TRIPLE=aarch64-apple-darwin ./scripts/build-pkg.sh
@@ -126,8 +126,8 @@ mkdir -p \
 cp "${NODESPACE_BIN}"  "${PAYLOAD_ROOT}/usr/local/bin/nodespace"
 cp "${NODESPACED_BIN}" "${PAYLOAD_ROOT}/usr/local/bin/nodespaced"
 cp -R "${TAURI_APP_PATH}" "${PAYLOAD_ROOT}/Applications/NodeSpace.app"
-cp "${PKG_RESOURCES}/com.nodespace.daemon.plist" \
-    "${PAYLOAD_ROOT}/Library/LaunchAgents/com.nodespace.daemon.plist"
+cp "${PKG_RESOURCES}/app.nodespace.daemon.plist" \
+    "${PAYLOAD_ROOT}/Library/LaunchAgents/app.nodespace.daemon.plist"
 
 chmod 755 "${PAYLOAD_ROOT}/usr/local/bin/nodespace"
 chmod 755 "${PAYLOAD_ROOT}/usr/local/bin/nodespaced"

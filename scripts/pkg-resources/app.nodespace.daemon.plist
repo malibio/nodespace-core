@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Must match the label the bundled NodeSpace.app registers itself
+         under (daemon_setup.rs's launch_agent_label(), community build:
+         "app.nodespace.daemon") -- not an arbitrary pkg-specific name.
+         Under a different label, the .pkg's system-wide LaunchAgent and
+         the app's own first-launch registration are two independent
+         daemons instead of one, so a "Quit" from the tray only ever stops
+         the one the app itself started. -->
+    <key>Label</key>
+    <string>app.nodespace.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/nodespaced</string>
+    </array>
+
+    <!-- Conditional restart: only on a nonzero/crash exit, not on every
+         exit. Bare `true` restarted the daemon even after a clean,
+         deliberate shutdown (e.g. the tray's "Quit"), undoing it within
+         about a hundred milliseconds. Matches daemon_setup.rs's write_plist
+         and the Linux systemd unit's Restart=on-failure. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Start at login; do not require the user to manually launch. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Log to the standard macOS user log directory (world-readable /tmp is avoided). -->
+    <!-- launchd expands ~ for LaunchAgent plists. -->
+    <key>StandardOutPath</key>
+    <string>~/Library/Logs/com.nodespace/nodespaced.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>~/Library/Logs/com.nodespace/nodespaced.log</string>
+
+    <!-- Throttle rapid restart loops (e.g. crash on startup) to 10s. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

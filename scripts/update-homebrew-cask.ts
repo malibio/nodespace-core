@@ -182,10 +182,16 @@ const CASK_FOOTER = (binaryPath: string) => `
   app "NodeSpace.app"
   binary "#{appdir}/NodeSpace.app/${binaryPath}"
 
+  # \`~/.nodespace/models\` is deliberately NOT listed here -- it can hold
+  # 100GB+ of downloaded model weights, and trashing that on every zap
+  # would be a hostile surprise for a directory the user may reasonably
+  # expect to survive an uninstall/reinstall cycle.
   zap trash: [
     "~/.nodespace/bin",
     "~/.nodespace/logs",
+    "~/.nodespace/database",
     "~/Library/LaunchAgents/app.nodespace.daemon.plist",
+    "~/Library/LaunchAgents/app.nodespace.daemon.dev.plist",
   ]
 end
 `;
