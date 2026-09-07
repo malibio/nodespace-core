@@ -4,6 +4,8 @@ import {
   groupDisplayLabel,
   groupEdgeColumns,
   groupLayout,
+  groupSupportsEdgeEditing,
+  partitionGroups,
   humanizeName,
   type RawNodeRelationships,
   type RawRelationshipGroup
@@ -296,5 +298,135 @@ describe('relationship-grouping: buildRelationshipsView', () => {
     const view = buildRelationshipsView(raw);
     expect(view.groups[0].label).toBe('Tasks');
     expect(view.groups[0].rows[0].label).toBe('t-42');
+  });
+});
+
+describe('relationship-grouping: partitionGroups', () => {
+  const relatedNode = (id: string) => ({
+    id,
+    nodeType: 'adr',
+    title: id,
+    contentPreview: '',
+    edgeProperties: {}
+  });
+
+  function viewOf(groups: RawRelationshipGroup[]) {
+    return buildRelationshipsView({ nodeId: 'adr-1', nodeType: 'adr', groups }).groups;
+  }
+
+  it('gives a section only to groups that have edges, in either direction', () => {
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes', count: 1, related: [relatedNode('adr-2')] }),
+      makeGroup({
+        relationshipName: 'supersedes',
+        direction: 'in',
+        reverseName: 'superseded_by',
+        count: 1,
+        related: [relatedNode('adr-9')]
+      })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(2);
+    expect(addable).toHaveLength(0);
+  });
+
+  it('folds empty OUTBOUND groups into the add chooser rather than sections', () => {
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes' }),
+      makeGroup({ relationshipName: 'depends_on' })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(0);
+    expect(addable.map((g) => g.relationshipName)).toEqual(['supersedes', 'depends_on']);
+  });
+
+  it('drops empty INBOUND groups entirely — they have no Add to justify a section', () => {
+    const groups = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        direction: 'in',
+        reverseName: 'superseded_by'
+      })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(0);
+    expect(addable).toHaveLength(0);
+  });
+
+  it('renders the six-declared-relationships-no-edges case as zero sections and one chooser', () => {
+    // The issue's benchmark: an `adr` with four outbound and two inbound
+    // declared relationships and no edges must not produce six empty sections.
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes' }),
+      makeGroup({ relationshipName: 'depends_on' }),
+      makeGroup({ relationshipName: 'implements' }),
+      makeGroup({ relationshipName: 'authored_by' }),
+      makeGroup({ relationshipName: 'supersedes', direction: 'in', reverseName: 'superseded_by' }),
+      makeGroup({ relationshipName: 'relates_to', direction: 'in', reverseName: 'related_from' })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(0);
+    expect(addable).toHaveLength(4);
+  });
+
+  it('offers a populated outbound group its own section AND keeps other empty types addable', () => {
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes', count: 1, related: [relatedNode('adr-2')] }),
+      makeGroup({ relationshipName: 'depends_on' })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated.map((g) => g.relationshipName)).toEqual(['supersedes']);
+    expect(addable.map((g) => g.relationshipName)).toEqual(['depends_on']);
+  });
+});
+
+describe('relationship-grouping: groupSupportsEdgeEditing', () => {
+  function groupView(overrides: Partial<RawRelationshipGroup>) {
+    return buildRelationshipsView({
+      nodeId: 'n-1',
+      nodeType: 'collection',
+      groups: [makeGroup(overrides)]
+    }).groups[0];
+  }
+
+  it('is true for an outbound group whose schema declares edge fields', () => {
+    const group = groupView({
+      edgeFields: [{ name: 'access', type: 'string' }]
+    });
+    expect(groupSupportsEdgeEditing(group)).toBe(true);
+  });
+
+  it('is false when the schema declares no edge fields — nothing to edit', () => {
+    expect(groupSupportsEdgeEditing(groupView({ edgeFields: null }))).toBe(false);
+    expect(groupSupportsEdgeEditing(groupView({ edgeFields: [] }))).toBe(false);
+  });
+
+  it('is false for an inbound group even when it declares edge fields', () => {
+    // The edge belongs to the other node's schema; it is edited from there.
+    const group = groupView({
+      direction: 'in',
+      reverseName: 'members',
+      edgeFields: [{ name: 'access', type: 'string' }]
+    });
+    expect(groupSupportsEdgeEditing(group)).toBe(false);
+  });
+
+  it('is false for ad-hoc edge keys with no declared field to render an input from', () => {
+    const group = groupView({
+      edgeFields: null,
+      count: 1,
+      related: [
+        {
+          id: 'p-1',
+          nodeType: 'person',
+          title: 'Ada',
+          contentPreview: '',
+          edgeProperties: { note: 'ad-hoc' }
+        }
+      ]
+    });
+    // The group still renders as a table (it has edge data) but offers no editor.
+    expect(group.layout).toBe('table');
+    expect(groupSupportsEdgeEditing(group)).toBe(false);
   });
 });
