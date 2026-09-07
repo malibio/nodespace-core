@@ -988,15 +988,38 @@ fn bootstrap_launchd_agent(plist_path: &Path) -> Result<()> {
 /// window/process state under test).
 #[cfg(all(test, target_os = "macos"))]
 mod bootstrap_launchd_agent_recovery_order_tests {
+    /// Slices out exactly `bootstrap_launchd_agent`'s own body by counting
+    /// balanced braces from its opening one, rather than searching for the
+    /// next item's name -- a name-based end marker is fragile to whatever
+    /// happens to be declared next in the file (this test module itself
+    /// used to sit between the function and `fn get_uid`, which made an
+    /// earlier version of this helper's slice silently include the test
+    /// module's own source, including its own assertion strings).
     fn function_source() -> &'static str {
         let source = include_str!("daemon_setup.rs");
         let start = source
             .find("fn bootstrap_launchd_agent")
             .expect("bootstrap_launchd_agent not found in daemon_setup.rs");
-        let end = source[start..]
-            .find("fn get_uid")
+        let body_start = source[start..]
+            .find('{')
             .map(|offset| start + offset)
-            .expect("get_uid not found after bootstrap_launchd_agent in daemon_setup.rs");
+            .expect("bootstrap_launchd_agent has no opening brace");
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, ch) in source[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(body_start + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.expect("bootstrap_launchd_agent's braces never balance to zero");
         &source[start..end]
     }
 
