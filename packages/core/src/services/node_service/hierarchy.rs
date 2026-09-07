@@ -119,9 +119,10 @@ impl NodeService {
                         ))
                     })?;
 
-                // Recursively build tree structure
-                let tree_json = build_node_tree_recursive(&root, &node_map, &adjacency_list);
-                Ok(tree_json)
+                // Recursively build tree structure. Errors on cyclic or
+                // pathologically deep hierarchy data rather than recursing
+                // until the stack aborts the process.
+                build_node_tree_recursive(&root, &node_map, &adjacency_list)
             }
             None => {
                 // Root node not found, return empty object
