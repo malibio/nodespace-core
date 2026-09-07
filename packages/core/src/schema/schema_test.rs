@@ -3043,6 +3043,84 @@ async fn test_create_schema_self_reference_by_display_name_is_rejected() {
 }
 
 #[tokio::test]
+async fn test_punctuation_only_name_does_not_make_the_exemption_vacuous() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // "!!!" survives the trim().is_empty() check but normalizes to "", so an
+    // unguarded exemption would accept `targetType: ""` as self-reference.
+    // Nothing can ever resolve that id, so the call must still be rejected —
+    // and by the targetType error, not a later, vaguer one.
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "!!!",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "", "direction": "out", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect_err("an unresolvable empty targetType must be rejected");
+
+    assert!(
+        err.to_string().contains("not an existing schema"),
+        "the targetType guard should fire, not a later error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_self_referential_declaration_writes_a_self_loop_row() {
+    let (svc, _tmp) = create_test_service().await;
+
+    // Everything else here asserts through get_schema_node, which reads
+    // declarations back out of the properties JSON. This drops to the
+    // relationship table itself, because a self-referential declaration is the
+    // one shape whose stored row has in_node == out_node
+    // (`set_schema_declarations` writes out_node = target_type ?? schema_id).
+    // The forward/reverse pair shares both endpoints and differs only in
+    // relationship_type, which is exactly what idx_rel_unique keys on — so if
+    // that index ever narrowed, the second declaration would be silently lost
+    // and only a storage-level assertion would notice.
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "ADR",
+            "fields": [
+                { "name": "status", "type": "string", "protection": "user", "indexed": false }
+            ],
+            "relationships": [
+                { "name": "supersedes", "targetType": "adr", "direction": "out", "cardinality": "one" },
+                { "name": "superseded_by", "targetType": "adr", "direction": "in", "cardinality": "one" }
+            ]
+        }),
+    )
+    .await
+    .expect("self-referential create should succeed");
+
+    let declarations = svc
+        .store
+        .get_schema_declarations("adr")
+        .await
+        .expect("get_schema_declarations failed");
+
+    assert_eq!(
+        declarations.len(),
+        2,
+        "both edges of a self-referential pair must survive as distinct rows: {declarations:?}"
+    );
+    for rel in &declarations {
+        assert_eq!(
+            rel.target_type.as_deref(),
+            Some("adr"),
+            "a self-referential declaration must point back at its own schema: {rel:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_self_reference_does_not_bypass_the_already_exists_check() {
     let (svc, _tmp) = create_test_service().await;
 
@@ -3115,25 +3193,32 @@ async fn test_update_schema_accepts_self_referential_relationship() {
 
 #[tokio::test]
 async fn test_rejected_create_persists_no_schema_node() {
-    // (relationships, why) — every declaration-level rejection reason.
-    let cases: Vec<(serde_json::Value, &str)> = vec![
+    // (relationships, why, expected_in_error) — every declaration-level
+    // rejection reason. `expected_in_error` pins WHICH rejection fired: without
+    // it, a future change that made every case fail for one unrelated reason
+    // (a new required parameter, say) would leave this test green while
+    // covering none of the reasons it was written for.
+    let cases: Vec<(serde_json::Value, &str, &str)> = vec![
         (
             json!([
                 { "name": "has_child", "targetType": "adr", "direction": "out", "cardinality": "many" }
             ]),
             "reserved built-in relationship name",
+            "reserved for a built-in structural relationship",
         ),
         (
             json!([
                 { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one" }
             ]),
             "target type that does not exist",
+            "targets 'ticket', which is not an existing schema",
         ),
         (
             json!([
                 { "name": "supersedes", "targetType": "adrr", "direction": "out", "cardinality": "one" }
             ]),
             "typo'd targetType that is neither the pending schema nor an existing one",
+            "targets 'adrr', which is not an existing schema",
         ),
         (
             json!([
@@ -3141,10 +3226,11 @@ async fn test_rejected_create_persists_no_schema_node() {
                 { "name": "decides", "targetType": "ticket", "direction": "out", "cardinality": "one" }
             ]),
             "a valid self-reference batched with an invalid target",
+            "targets 'ticket', which is not an existing schema",
         ),
     ];
 
-    for (relationships, why) in cases {
+    for (relationships, why, expected_in_error) in cases {
         let (svc, _tmp) = create_test_service().await;
 
         let result = handle_create_schema(
@@ -3159,9 +3245,14 @@ async fn test_rejected_create_persists_no_schema_node() {
         )
         .await;
 
+        let err = result
+            .err()
+            .unwrap_or_else(|| panic!("create should be rejected for {why}"));
+        let msg = err.to_string();
         assert!(
-            result.is_err(),
-            "create should be rejected for {why}: {result:?}"
+            msg.contains(expected_in_error),
+            "rejection for {why} should name its own reason \
+             (expected {expected_in_error:?}), got: {msg}"
         );
         assert!(
             svc.get_schema_node("adr")

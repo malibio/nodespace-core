@@ -595,8 +595,16 @@ pub async fn handle_create_schema(
     // naming `schema_id` itself is the one case that cannot dangle, so it is
     // accepted here rather than deferred to a post-write check — validation
     // still runs in full before the first write.
+    //
+    // A name of only punctuation (`"!!!"`) passes the `trim().is_empty()` check
+    // above and normalizes to `""`. `create_node_with_parent` rejects that
+    // downstream, but an empty `pending_schema_id` would make the exemption
+    // vacuously true for `targetType: ""` first, trading the actionable
+    // targetType error for a lower-level one. Don't offer an id nothing can
+    // resolve.
+    let pending_schema_id = (!schema_id.is_empty()).then_some(schema_id.as_str());
     reject_reserved_relationship_names(&relationships)?;
-    validate_relationship_targets_exist(node_service, &relationships, Some(&schema_id)).await?;
+    validate_relationship_targets_exist(node_service, &relationships, pending_schema_id).await?;
 
     // Check if schema already exists — return a clear error so the agent knows
     // to use create_node instead of retrying create_schema. The rejection
