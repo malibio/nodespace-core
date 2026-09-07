@@ -113,15 +113,19 @@ impl SqliteStore {
     ) -> Result<Vec<crate::models::NodeReference>> {
         let start = std::time::Instant::now();
 
-        // Get all nodes that mention this node
-        let mut rows = self.read().await?.query(
-            "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'mentions'",
-            libsql::params![node_id.to_string()],
-        ).await.context("Failed to get mentioning sources")?;
-
+        // Get all nodes that mention this node. Scoped so the cursor drops before
+        // the per-source `get_node_type` / ancestor-walk reads below check out a
+        // second reader connection — see `ReadRows` in `connections.rs`.
         let mut source_ids: Vec<String> = Vec::new();
-        while let Some(row) = rows.next().await? {
-            source_ids.push(row.get(0)?);
+        {
+            let mut rows = self.read().await?.query(
+                "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'mentions'",
+                libsql::params![node_id.to_string()],
+            ).await.context("Failed to get mentioning sources")?;
+
+            while let Some(row) = rows.next().await? {
+                source_ids.push(row.get(0)?);
+            }
         }
 
         if source_ids.is_empty() {
@@ -529,22 +533,28 @@ impl SqliteStore {
     pub async fn get_collection_by_name(&self, name: &str) -> Result<Option<Node>> {
         let normalized = name.to_lowercase();
 
-        let mut rows = self
-            .read()
-            .await?
-            .query(
-                "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 \
+        // Drain and drop the cursor before `get_node` checks out a second reader
+        // connection — see `ReadRows` in `connections.rs`.
+        let id: Option<String> = {
+            let mut rows = self
+                .read()
+                .await?
+                .query(
+                    "SELECT id FROM node WHERE node_type = 'collection' AND LOWER(title) = ?1 \
                  AND lifecycle_status = 'active' LIMIT 1",
-                libsql::params![normalized],
-            )
-            .await
-            .context("Failed to search for collection by name")?;
+                    libsql::params![normalized],
+                )
+                .await
+                .context("Failed to search for collection by name")?;
+            match rows.next().await? {
+                Some(row) => Some(row.get(0)?),
+                None => None,
+            }
+        };
 
-        if let Some(row) = rows.next().await? {
-            let id: String = row.get(0)?;
-            self.get_node(&id).await
-        } else {
-            Ok(None)
+        match id {
+            Some(id) => self.get_node(&id).await,
+            None => Ok(None),
         }
     }
 
@@ -567,17 +577,25 @@ impl SqliteStore {
             .iter()
             .map(|n| libsql::Value::Text(n.clone()))
             .collect();
-        let mut rows = self
-            .read()
-            .await?
-            .query(&sql, params)
-            .await
-            .context("Failed to batch search collections by names")?;
+        // Collect the matched (id, title) pairs and drop the cursor before the
+        // per-row `get_node` calls check out a second reader connection — see
+        // `ReadRows` in `connections.rs`.
+        let mut matches: Vec<(String, Option<String>)> = Vec::new();
+        {
+            let mut rows = self
+                .read()
+                .await?
+                .query(&sql, params)
+                .await
+                .context("Failed to batch search collections by names")?;
+
+            while let Some(row) = rows.next().await? {
+                matches.push((row.get(0)?, row.get(1)?));
+            }
+        }
 
         let mut collections = HashMap::new();
-        while let Some(row) = rows.next().await? {
-            let id: String = row.get(0)?;
-            let title: Option<String> = row.get(1)?;
+        for (id, title) in matches {
             if let Ok(Some(node)) = self.get_node(&id).await {
                 let key = title.unwrap_or_default().to_lowercase();
                 collections.insert(key, node);

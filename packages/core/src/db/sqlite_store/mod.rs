@@ -178,8 +178,20 @@ impl SqliteStore {
     }
 
     /// Check out a reader connection. See [`Connections::read`].
+    ///
+    /// A cursor derived from this checkout owns the connection until it drops,
+    /// so a store method must not call another store method while one is still
+    /// live — that pins two connections where one would do. Drain the cursor
+    /// into an owned value and let it drop first. See [`ReadRows`].
     pub(crate) async fn read(&self) -> Result<ReadConn> {
         self.conns.read().await
+    }
+
+    /// The reader-checkout high-water mark, for tests that assert a call path
+    /// holds no more connections than it needs. See [`ReaderGauge`].
+    #[cfg(test)]
+    pub(crate) fn readers_in_flight(&self) -> &connections::ReaderGauge {
+        self.conns.readers_in_flight()
     }
 
     async fn initialize_schema(conn: &libsql::Connection) -> Result<()> {
@@ -1934,6 +1946,243 @@ mod tests {
                 "colliding sibling order keys after concurrent reorders: {orders:?}"
             );
         }
+
+        Ok(())
+    }
+
+    /// A read-path method must not hold its own result cursor open across a
+    /// nested call to another store method.
+    ///
+    /// `ReadRows` owns its reader connection until it drops, so a nested
+    /// `self.read()` issued while the outer cursor is still live checks out a
+    /// *second* connection and neither goes back to the pool until the whole
+    /// function returns. That doubles the connections a single sequential call
+    /// pins, halving effective concurrency against `MAX_IDLE_READERS` and
+    /// inflating the pool's peak.
+    ///
+    /// Each of these methods reads rows and then consults another store method
+    /// with what it found, so each is a place the mistake is easy to make.
+    /// Driven sequentially with nothing else in flight, one connection at a
+    /// time is all any of them needs.
+    ///
+    /// Covers all ten sites. Every `peak()` assertion is paired with a check
+    /// that the fixture actually reaches the nested call — without one, a
+    /// fixture that matches no row leaves the assertion passing vacuously
+    /// against the very bug it exists to catch.
+    #[tokio::test]
+    async fn a_read_path_does_not_pin_a_second_connection_for_a_nested_read() -> Result<()> {
+        let (store, _t) = create_test_store().await?;
+
+        // A collection with a member, so `get_collection_by_name` finds a row and
+        // then resolves it via the nested `get_node`.
+        let mut collection_node = Node::new("collection".to_string(), String::new(), json!({}));
+        collection_node.title = Some("Reading".to_string());
+        let collection = store.create_node(collection_node, None, None).await?;
+
+        let parent = store
+            .create_node(
+                Node::new("text".to_string(), "parent".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        // A real `has_child` edge, so the subtree walk takes its multi-node path
+        // rather than the single-root early return.
+        store
+            .create_child_node_atomic(&parent.id, "text", "child", json!({}), None)
+            .await?;
+
+        // A `mentions` edge INTO `parent`, so `get_incoming_mention_containers`
+        // finds a source and goes on to resolve its container.
+        let mentioner = store
+            .create_node(
+                Node::new("text".to_string(), "mentions parent".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        assert_eq!(
+            store
+                .bulk_create_mentions(&[(mentioner.id.clone(), parent.id.clone())])
+                .await?,
+            1,
+            "fixture must create the mention the assertion below depends on"
+        );
+
+        // An embedding on a root node, so both KNN searches return a hit and go
+        // on to resolve it via the nested `get_node`.
+        let embedded = store
+            .create_node(
+                Node::new("text".to_string(), "embedded".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        store
+            .upsert_embeddings(&embedded.id, vec![unit_embedding(&embedded.id, 0)])
+            .await?;
+
+        // A root node filed into a collection, so `assert_may_gain_parent` finds
+        // an offender and goes on to call `get_node_memberships` for the message.
+        let member = store
+            .create_node(
+                Node::new("text".to_string(), "root member".to_string(), json!({})),
+                None,
+                None,
+            )
+            .await?;
+        assert!(
+            store
+                .add_to_collection(&member.id, &collection.id)
+                .await?
+                .is_some(),
+            "fixture must file the member, or the offender path below is never reached"
+        );
+
+        // Each case: the method, and the nested store call it must not hold a
+        // cursor across.
+        let gauge = store.readers_in_flight();
+
+        gauge.reset_peak();
+        store.get_all_schemas().await?;
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_all_schemas held a cursor across get_all_schema_declarations"
+        );
+
+        gauge.reset_peak();
+        assert_eq!(
+            store
+                .get_subtree_with_relationships(&parent.id)
+                .await?
+                .0
+                .len(),
+            2,
+            "fixture must produce a real subtree, not the single-root early return"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_subtree_with_relationships held a cursor across a nested read"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            store.get_collection_by_name("Reading").await?.is_some(),
+            "fixture must match, or the nested get_node below is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_collection_by_name held a cursor across get_node"
+        );
+
+        gauge.reset_peak();
+        assert_eq!(
+            store
+                .get_collections_by_names(&["Reading".to_string()])
+                .await?
+                .len(),
+            1,
+            "fixture must match, or the nested get_node below is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_collections_by_names held a cursor across get_node"
+        );
+
+        gauge.reset_peak();
+        assert_eq!(
+            store
+                .get_incoming_mention_containers(&parent.id)
+                .await?
+                .len(),
+            1,
+            "fixture must produce a mention source, or the nested reads are never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_incoming_mention_containers held a cursor across a nested read"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            !store.bm25_search_roots("child", 50).await?.is_empty(),
+            "fixture must produce an FTS hit, or the nested get_nodes_by_ids is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "bm25_search_roots held a cursor across get_nodes_by_ids"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            store.get_schema_node("task").await?.is_some(),
+            "fixture must find a seeded core schema, or get_schema_declarations is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_schema_node held a cursor across get_schema_declarations"
+        );
+
+        // The offender path: a node holding `member_of` may not gain a parent, and
+        // building that rejection consults `get_node_memberships`.
+        gauge.reset_peak();
+        assert!(
+            store
+                .assert_may_gain_parent(&[member.id.as_str()])
+                .await
+                .is_err(),
+            "fixture must trip the root-only membership guard, or the nested read is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "assert_may_gain_parent held a cursor across get_node_memberships"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            !store
+                .search_embeddings(&unit_query(0), 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "fixture must return a KNN hit, or the nested get_node is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "search_embeddings held a cursor across get_node"
+        );
+
+        gauge.reset_peak();
+        assert!(
+            !store
+                .search_embeddings_by_node_type(&unit_query(0), "text", 10, Some(0.5))
+                .await?
+                .is_empty(),
+            "fixture must return a typed KNN hit, or the nested get_node is never reached"
+        );
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "search_embeddings_by_node_type held a cursor across get_node"
+        );
+
+        // A single-root subtree takes the early-return branch, which reaches
+        // `get_node` from a different point in the same function.
+        gauge.reset_peak();
+        store.get_subtree_with_relationships(&collection.id).await?;
+        assert_eq!(
+            gauge.peak(),
+            1,
+            "get_subtree_with_relationships held a cursor across get_node on the leaf path"
+        );
 
         Ok(())
     }

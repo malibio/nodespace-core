@@ -449,33 +449,37 @@ impl SqliteStore {
         let query_blob: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         let k = (limit * EMBEDDING_KNN_OVERFETCH).max(limit);
 
-        let mut rows = self
-            .read()
-            .await?
-            .query(
-                "SELECT e.node_id, e.total_chunks, v.distance \
-                 FROM vec_embeddings v JOIN embedding e ON e.id = v.embedding_id \
-                 WHERE v.vector MATCH ?1 AND k = ?2 AND e.stale = 0",
-                libsql::params![query_blob, k],
-            )
-            .await
-            .context("Failed to run vec0 KNN search")?;
-
         // Group by node_id: track max similarity, chunk counts
         let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new(); // node_id -> (max_sim, matching_chunks, total_chunks)
 
-        while let Some(row) = rows.next().await? {
-            let node_id: String = row.get(0)?;
-            let total_chunks: i64 = row.get(1)?;
-            let distance: f64 = row.get(2)?;
-            // vec0 cosine distance_metric returns distance = 1 - cosine similarity
-            let similarity = 1.0 - distance;
+        // Scoped so the cursor drops before the per-result `get_node` calls below
+        // check out a second reader connection — see `ReadRows` in `connections.rs`.
+        {
+            let mut rows = self
+                .read()
+                .await?
+                .query(
+                    "SELECT e.node_id, e.total_chunks, v.distance \
+                 FROM vec_embeddings v JOIN embedding e ON e.id = v.embedding_id \
+                 WHERE v.vector MATCH ?1 AND k = ?2 AND e.stale = 0",
+                    libsql::params![query_blob, k],
+                )
+                .await
+                .context("Failed to run vec0 KNN search")?;
 
-            let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
-            if similarity > entry.0 {
-                entry.0 = similarity;
+            while let Some(row) = rows.next().await? {
+                let node_id: String = row.get(0)?;
+                let total_chunks: i64 = row.get(1)?;
+                let distance: f64 = row.get(2)?;
+                // vec0 cosine distance_metric returns distance = 1 - cosine similarity
+                let similarity = 1.0 - distance;
+
+                let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
+                if similarity > entry.0 {
+                    entry.0 = similarity;
+                }
+                entry.1 += 1;
             }
-            entry.1 += 1;
         }
 
         // Compute composite scores and filter
@@ -524,33 +528,37 @@ impl SqliteStore {
         let query_blob: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         let k = (limit * EMBEDDING_KNN_OVERFETCH * 5).max(limit);
 
-        let mut rows = self
-            .read()
-            .await?
-            .query(
-                "SELECT e.node_id, e.total_chunks, v.distance \
+        let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new();
+
+        // Scoped so the cursor drops before the per-result `get_node` calls below
+        // check out a second reader connection — see `ReadRows` in `connections.rs`.
+        {
+            let mut rows = self
+                .read()
+                .await?
+                .query(
+                    "SELECT e.node_id, e.total_chunks, v.distance \
              FROM vec_embeddings v \
              JOIN embedding e ON e.id = v.embedding_id \
              JOIN node n ON n.id = e.node_id \
              WHERE v.vector MATCH ?1 AND k = ?2 AND e.stale = 0 AND n.node_type = ?3",
-                libsql::params![query_blob, k, node_type.to_string()],
-            )
-            .await
-            .context("Failed to run typed vec0 KNN search")?;
+                    libsql::params![query_blob, k, node_type.to_string()],
+                )
+                .await
+                .context("Failed to run typed vec0 KNN search")?;
 
-        let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new();
+            while let Some(row) = rows.next().await? {
+                let node_id: String = row.get(0)?;
+                let total_chunks: i64 = row.get(1)?;
+                let distance: f64 = row.get(2)?;
+                let similarity = 1.0 - distance;
 
-        while let Some(row) = rows.next().await? {
-            let node_id: String = row.get(0)?;
-            let total_chunks: i64 = row.get(1)?;
-            let distance: f64 = row.get(2)?;
-            let similarity = 1.0 - distance;
-
-            let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
-            if similarity > entry.0 {
-                entry.0 = similarity;
+                let entry = node_scores.entry(node_id).or_insert((0.0, 0, total_chunks));
+                if similarity > entry.0 {
+                    entry.0 = similarity;
+                }
+                entry.1 += 1;
             }
-            entry.1 += 1;
         }
 
         let mut results = Vec::new();
@@ -629,16 +637,21 @@ impl SqliteStore {
             candidate_limit
         );
 
-        let mut rows = self
-            .read()
-            .await?
-            .query(&sql, libsql::params![fts_query])
-            .await
-            .context("Failed to execute BM25 search")?;
-
+        // Scoped so the cursor drops before the root-resolution queries and the
+        // `get_nodes_by_ids` below check out a second reader connection — see
+        // `ReadRows` in `connections.rs`.
         let mut matching_ids: Vec<String> = Vec::new();
-        while let Some(row) = rows.next().await? {
-            matching_ids.push(row.get(0)?);
+        {
+            let mut rows = self
+                .read()
+                .await?
+                .query(&sql, libsql::params![fts_query])
+                .await
+                .context("Failed to execute BM25 search")?;
+
+            while let Some(row) = rows.next().await? {
+                matching_ids.push(row.get(0)?);
+            }
         }
 
         if matching_ids.is_empty() {
