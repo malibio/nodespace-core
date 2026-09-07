@@ -32,11 +32,16 @@ async function run(label: string, cmd: () => Promise<unknown>) {
   }
 }
 
-// `test:all` compiles nodespace-app (its `rust:test` step covers that crate's
-// `src/` unit tests), and that crate's build.rs (tauri_build::build())
-// hard-fails if a declared `resources`/`externalBin` entry in tauri.conf.json
-// doesn't physically exist. `rust:test:app-units` therefore stages the skill
-// installer itself, so `test:all` stands alone here and when run by hand.
+// nodespace-app's build.rs (tauri_build::build()) hard-fails if any declared
+// `resources`/`externalBin` entry in tauri.conf.json doesn't physically exist
+// yet — same class of requirement as the sidecar binaries, but cheap enough (a
+// tsc build + file copy) to just run unconditionally here rather than rely on a
+// prior `dev:tauri`/`tauri:build` having staged it. This now runs BEFORE
+// `test:all`, because `rust:test` compiles that crate to cover its `src/` unit
+// tests. The other two sidecars this crate needs aren't staged here — a cold
+// build of them takes minutes, too much for every push — so `rust:test` checks
+// for all three up front and names the command that produces each.
+await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
 await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
 await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);
 await run("bun run test:e2e (headless daemon round-trip)", () => {
@@ -44,10 +49,10 @@ await run("bun run test:e2e (headless daemon round-trip)", () => {
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
   return $`bun run test:e2e`.env({ ...process.env, NODESPACED_BINARY: binary });
 });
-await run("cargo test -p nodespace-app --test '*' (Tauri-seam integration tests, ADR-048)", () => {
+await run(`cargo test -p nodespace-app --test "*" (Tauri-seam integration tests, ADR-048)`, () => {
   const binaryName = process.platform === "win32" ? "nodespaced.exe" : "nodespaced";
   const binary = `${process.cwd()}/target/debug/${binaryName}`;
-  // --test '*': the `tests/*.rs` integration targets, and only those. This
+  // --test "*": the `tests/*.rs` integration targets, and only those. This
   // crate's `src/` unit tests are in-process, need no daemon binary, and run
   // headless in ~2s at full parallelism, so `rust:test` (above, via test:all)
   // runs them alongside every other crate's. Narrowing this step is what

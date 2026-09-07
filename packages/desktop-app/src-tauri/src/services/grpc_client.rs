@@ -577,13 +577,30 @@ pub enum GrpcClientError {
 #[cfg(all(test, unix))]
 mod tests {
     use super::resolve_socket_path;
+    use std::sync::Mutex;
+
+    /// `NODESPACED_SOCKET` is process-global state, and this binary's tests run
+    /// in parallel, so serialize anything that touches it. Only one test here
+    /// does today — its sibling deliberately reads no environment at all — but
+    /// an unguarded mutation is a trap for whichever env-reading test lands
+    /// next, and the guard costs nothing. Mirrors `tests.rs`'s `ENV_LOCK`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Recover from a poisoned lock rather than cascading: the guarded block is
+    /// plain env read/write assertions, so an earlier panic holding the lock
+    /// shouldn't fail every later test too.
+    fn env_lock_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     /// Regression for the false "background service not running" banner: the
     /// daemon-reachability checks must resolve the SAME socket the gRPC client
-    /// dials, i.e. honor `NODESPACED_SOCKET` over the default. Single-threaded so
-    /// the process-global env mutation doesn't race other tests.
+    /// dials, i.e. honor `NODESPACED_SOCKET` over the default.
     #[test]
     fn resolve_socket_path_honors_env_override_then_falls_back() {
+        let _guard = env_lock_guard();
         let prev = std::env::var_os("NODESPACED_SOCKET");
 
         std::env::set_var("NODESPACED_SOCKET", "/tmp/ns-demo-a.sock");
@@ -625,7 +642,7 @@ mod tests {
     /// whose scoped and unscoped names coincide.
     ///
     /// Reads no environment, so it cannot race the sibling test above (which
-    /// owns `NODESPACED_SOCKET` for the whole binary) — see
+    /// takes `ENV_LOCK` while it owns `NODESPACED_SOCKET`) — see
     /// `default_socket_path_for`'s doc comment.
     #[test]
     fn each_variant_dials_the_socket_its_daemon_binds() {
