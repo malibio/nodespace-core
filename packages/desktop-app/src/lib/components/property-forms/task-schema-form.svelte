@@ -36,6 +36,7 @@
   import { labelForField } from '$lib/utils/schema-field-label';
   import { enumValueLabel } from '$lib/utils/schema-enum-values';
   import { formatDateDisplay } from '$lib/utils/schema-date-values';
+  import { isUserVisibleField } from '$lib/utils/schema-field-visibility';
   import SchemaFieldLeaf from '$lib/components/schema/schema-field-leaf.svelte';
   import NestedFieldTrigger from '$lib/components/schema/nested-field-trigger.svelte';
   import TypedFormShell from '$lib/components/schema/typed-form-shell.svelte';
@@ -114,11 +115,14 @@
     return schema?.fields.find((f) => f.name === name);
   }
 
-  // Get user-defined fields (not core, not system-protected — a system-managed field must
-  // never render as a user-editable control, mirroring GenericSchemaForm's protection filter).
+  // Get user-defined fields: not core, and user-visible per the shared predicate.
+  // The two conjuncts answer different questions and deliberately stay separate — core
+  // fields are excluded because they already render through their own dedicated controls
+  // above, which is specific to this form, whereas isUserVisibleField answers "may a user
+  // ever see this?" for every surface that renders schema fields.
   const userDefinedFields = $derived.by(() => {
     if (!schema) return [];
-    return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name) && f.protection !== 'system');
+    return schema.fields.filter((f) => !CORE_FIELD_NAMES.includes(f.name) && isUserVisibleField(f));
   });
 
   // Calculate field completion stats

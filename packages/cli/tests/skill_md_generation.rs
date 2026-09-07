@@ -522,3 +522,41 @@ fn checked_in_skill_md_is_up_to_date() {
         "packages/skill/SKILL.md is stale — run `bun run skill:gen` and commit the result"
     );
 }
+
+/// Every rule registered in `SCHEMA_RULES` must actually reach the shipped
+/// skill content.
+///
+/// `render_schema_rules_block` interpolates each rule by name into a hand-written
+/// format string, so registering a rule in the `SCHEMA_RULES` array is NOT
+/// enough to publish it — a rule the template forgets to name is silently
+/// dropped, and `checked_in_skill_md_is_up_to_date` still passes because the
+/// generator and the checked-in copy agree on the same incomplete output. This
+/// test is the guard for that gap: it compares against the array, which is the
+/// list a new rule is naturally added to.
+///
+/// Matched on a distinctive prefix rather than the whole prose because the
+/// template joins some rules into a shared paragraph (e.g.
+/// `RELATIONSHIP_VS_FIELD` and `TARGET_TYPE_MUST_EXIST`), so an exact
+/// whole-string match against the rendered file is not a property that holds.
+#[test]
+fn every_schema_rule_reaches_the_skill() {
+    let skill = skill_md();
+    let mut missing = Vec::new();
+
+    for rule in nodespace_agent::skill_rules::SCHEMA_RULES {
+        // The lead sentence is what identifies a rule in the rendered output,
+        // and is stable against the paragraph-joining above.
+        let needle: String = rule.prose.chars().take(60).collect();
+        if !skill.contains(&needle) {
+            missing.push(rule.id);
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "schema rules registered in SCHEMA_RULES but absent from the shipped skill: {}. \
+         Add each to the format string in `render_schema_rules_block` \
+         (packages/cli/examples/gen_skill_md.rs), then regenerate.",
+        missing.join(", ")
+    );
+}

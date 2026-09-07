@@ -3542,3 +3542,196 @@ fn field_rename_rejects_unknown_field() {
         "expected error naming `toName`, got: {err}"
     );
 }
+
+// ============================================================================
+// enum edge fields — end-to-end through the handlers
+// ============================================================================
+//
+// `validate_edge_field_declarations` has its own unit tests; these cover the
+// two CALL SITES that wire it in (`handle_create_schema` /
+// `handle_update_schema`). Without them a refactor could drop either wiring and
+// every other test would still pass.
+
+/// A relationship declaring one enum edge field with the given coreValues.
+fn rel_with_enum_edge_field(core_values: serde_json::Value) -> serde_json::Value {
+    json!({
+        "name": "granted_on",
+        "targetType": "widget",
+        "direction": "out",
+        "cardinality": "many",
+        "edgeFields": [{ "name": "access", "type": "enum", "coreValues": core_values }]
+    })
+}
+
+#[tokio::test]
+async fn create_schema_accepts_a_well_formed_enum_edge_field() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Widget", &["label"]).await;
+
+    let result = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Grant",
+            "fields": [{ "name": "note", "type": "string", "protection": "user", "indexed": false }],
+            "relationships": [rel_with_enum_edge_field(json!([
+                {"value": "owner", "label": "Owner"},
+                {"value": "viewer", "label": "Viewer"}
+            ]))]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a well-formed enum edge field should be accepted: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_schema_rejects_an_enum_edge_field_without_core_values() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Widget", &["label"]).await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Grant",
+            "fields": [{ "name": "note", "type": "string", "protection": "user", "indexed": false }],
+            "relationships": [{
+                "name": "granted_on",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "edgeFields": [{ "name": "access", "type": "enum" }]
+            }]
+        }),
+    )
+    .await
+    .expect_err("an enum edge field with no coreValues must be rejected at create time");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("access") && msg.contains("coreValues"),
+        "error should name the field and coreValues, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn create_schema_rejects_an_enum_edge_field_default_outside_the_set() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Widget", &["label"]).await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Grant",
+            "fields": [{ "name": "note", "type": "string", "protection": "user", "indexed": false }],
+            "relationships": [{
+                "name": "granted_on",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "edgeFields": [{
+                    "name": "access",
+                    "type": "enum",
+                    "default": "admin",
+                    "coreValues": [{"value": "owner", "label": "Owner"}]
+                }]
+            }]
+        }),
+    )
+    .await
+    .expect_err("a default outside the declared set must be rejected at create time");
+
+    assert!(err.to_string().contains("admin"), "got: {err}");
+}
+
+#[tokio::test]
+async fn update_schema_rejects_an_enum_edge_field_without_core_values() {
+    // The `handle_update_schema` wiring — a relationship ADDED by an edit must
+    // be validated the same way one declared at create time is.
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Widget", &["label"]).await;
+    let schema_id = create_base_schema(&svc, "Grant", &["note"]).await;
+
+    let err = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "add_relationships": [{
+                "name": "granted_on",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "edgeFields": [{ "name": "access", "type": "enum" }]
+            }]
+        }),
+    )
+    .await
+    .expect_err("an enum edge field with no coreValues must be rejected at update time");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("access") && msg.contains("coreValues"),
+        "error should name the field and coreValues, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn update_schema_accepts_a_well_formed_enum_edge_field() {
+    let (svc, _tmp) = create_test_service().await;
+    create_base_schema(&svc, "Widget", &["label"]).await;
+    let schema_id = create_base_schema(&svc, "Grant", &["note"]).await;
+
+    let result = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": schema_id,
+            "add_relationships": [rel_with_enum_edge_field(json!([
+                {"value": "owner", "label": "Owner"},
+                {"value": "viewer", "label": "Viewer"}
+            ]))]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a well-formed enum edge field should be accepted on update: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn schema_declaring_an_edge_field_on_a_builtin_relationship_is_rejected() {
+    // Documents the limit the ENUM_EDGE_FIELDS guidance warns about: a builtin
+    // structural name cannot be declared at all, so it can never carry an edge
+    // field. Rejected by the reserved-name guard before edge-field validation
+    // is reached — asserted here so the guidance and the behavior stay in step.
+    let (svc, _tmp) = create_test_service().await;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Grant",
+            "fields": [{ "name": "note", "type": "string", "protection": "user", "indexed": false }],
+            "relationships": [{
+                "name": "member_of",
+                "targetType": "collection",
+                "direction": "out",
+                "cardinality": "many",
+                "edgeFields": [{
+                    "name": "access",
+                    "type": "enum",
+                    "coreValues": [{"value": "owner", "label": "Owner"}]
+                }]
+            }]
+        }),
+    )
+    .await
+    .expect_err("a builtin relationship name must be rejected as a declaration");
+
+    assert!(
+        err.to_string().contains("reserved"),
+        "error should say the name is reserved, got: {err}"
+    );
+}
