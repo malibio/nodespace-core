@@ -73,6 +73,11 @@ export interface FocusOrOpenOptions {
    * Off by default: a node id identifies one node, so any tab showing it is the
    * tab the user means. Daily Journal needs it because a date id is not a real
    * node id — nothing stops another tab from carrying the same string.
+   *
+   * This is a symptom rather than a feature: it exists because date ids are
+   * bare `YYYY-MM-DD` strings sharing a namespace with nothing. If date-node
+   * identity is ever fixed, this option loses its only caller and should go
+   * with it. New callers should not need it.
    */
   matchNodeType?: boolean;
 }
@@ -375,9 +380,15 @@ export class NavigationService {
 
   /**
    * The pane a new tab should open into: the active one, or the first pane if
-   * the active id is stale. Callers used to each carry their own copy of this.
+   * the active id is stale.
+   *
+   * Public because a caller that opens a non-node tab still needs it —
+   * `openSearchTab` creates a `type: 'search'` tab with no `content`, so
+   * {@link focusOrOpenNode}'s node lookup does not apply to it, but the pane
+   * choice is the same question. Callers opening node tabs should not need
+   * this; `focusOrOpenNode` resolves the pane itself.
    */
-  private targetPaneId(): string {
+  targetPaneId(): string {
     const state = navigationStore.state;
     const paneExists = state.panes.some((pane) => pane.id === state.activePaneId);
     if (paneExists) return state.activePaneId;
@@ -387,22 +398,19 @@ export class NavigationService {
   /**
    * Focus the tab already showing a node; report whether one was found.
    *
-   * The focus half of {@link focusOrOpenNode}, split out for the caller whose
+   * Also the focus half of {@link focusOrOpenNode}, so the two cannot drift on
+   * what counts as "already open". Called directly by the caller whose
    * "not open yet" branch is not a plain new tab — QueryNodeViewer opens a row
-   * in the *other* pane so the list stays visible beside it. That caller wants
-   * this reuse check but its own opening behaviour.
+   * in the *other* pane, so the list stays visible beside it, and wants this
+   * reuse check with its own opening behaviour.
    *
+   * @param nodeId - Node whose tab to focus
+   * @param nodeType - When given, the tab must also match this type. Omit for
+   *   the usual case: a node id identifies one node, so any tab showing it is
+   *   the tab the user means.
    * @returns true if a matching tab was found and focused
    */
-  focusExistingNodeTab(nodeId: string): boolean {
-    return this.focusNodeTab(nodeId);
-  }
-
-  /**
-   * Shared lookup behind {@link focusExistingNodeTab} and
-   * {@link focusOrOpenNode}, so both agree on what counts as "already open".
-   */
-  private focusNodeTab(nodeId: string, nodeType?: string): boolean {
+  focusNodeTab(nodeId: string, nodeType?: string): boolean {
     const existingTab = navigationStore.state.tabs.find(
       (tab) =>
         tab.content?.nodeId === nodeId &&

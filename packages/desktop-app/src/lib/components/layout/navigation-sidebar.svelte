@@ -182,21 +182,6 @@
   }
 
   /**
-   * Get the target pane ID for new tabs
-   * Uses active pane, or falls back to first available pane
-   */
-  function getTargetPaneId(): string {
-    const currentState = navigationStore.state;
-    // Use active pane if it exists, otherwise use the first pane
-    const paneExists = currentState.panes.some((p) => p.id === currentState.activePaneId);
-    if (paneExists) {
-      return currentState.activePaneId;
-    }
-    // Fallback to first pane (there should always be at least one)
-    return currentState.panes[0]?.id ?? 'pane-1';
-  }
-
-  /**
    * Handle Daily Journal navigation: focus today's date tab, or open one.
    *
    * `matchNodeType` because a date id is a date string rather than a real node
@@ -266,7 +251,7 @@
           title: 'Search',
           type: 'search',
           closeable: true,
-          paneId: getTargetPaneId()
+          paneId: getNavigationService().targetPaneId()
         },
         true
       );

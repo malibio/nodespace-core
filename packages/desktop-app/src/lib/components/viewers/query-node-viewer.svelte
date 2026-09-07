@@ -525,7 +525,7 @@
     // Focus the node if it's already open; otherwise open it in the other pane
     // so this result list stays visible alongside it.
     const nav = getNavigationService();
-    if (nav.focusExistingNodeTab(clickedNodeId)) return;
+    if (nav.focusNodeTab(clickedNodeId)) return;
     nav.navigateToNodeInOtherPane(clickedNodeId, paneId);
   }
 

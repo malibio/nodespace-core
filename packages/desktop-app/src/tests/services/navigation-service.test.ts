@@ -7,7 +7,7 @@
  * - Regular navigation (navigateToNode)
  * - New tab creation (navigateToNode with openInNewTab)
  * - Other pane navigation (navigateToNodeInOtherPane)
- * - Focus-or-open tab reuse (focusOrOpenNode, focusExistingNodeTab)
+ * - Focus-or-open tab reuse (focusOrOpenNode, focusNodeTab)
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -827,7 +827,6 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
   });
 });
 
-
 describe('NavigationService - focusOrOpenNode', () => {
   let navService: ReturnType<typeof getNavigationService>;
 
@@ -985,7 +984,7 @@ describe('NavigationService - focusOrOpenNode', () => {
   });
 });
 
-describe('NavigationService - focusExistingNodeTab', () => {
+describe('NavigationService - focusNodeTab', () => {
   let navService: ReturnType<typeof getNavigationService>;
 
   beforeEach(() => {
@@ -996,7 +995,7 @@ describe('NavigationService - focusExistingNodeTab', () => {
   it('returns false and opens nothing when the node is not open', () => {
     const before = navigationStore.state.tabs.length;
 
-    expect(navService.focusExistingNodeTab('node-a')).toBe(false);
+    expect(navService.focusNodeTab('node-a')).toBe(false);
     expect(navigationStore.state.tabs).toHaveLength(before);
   });
 
@@ -1005,13 +1004,13 @@ describe('NavigationService - focusExistingNodeTab', () => {
     const tab = navigationStore.state.tabs.find((t) => t.content?.nodeId === 'node-a');
     navService.focusOrOpenNode('node-b', { nodeType: 'text' });
 
-    expect(navService.focusExistingNodeTab('node-a')).toBe(true);
+    expect(navService.focusNodeTab('node-a')).toBe(true);
     expect(navigationStore.state.activeTabIds[tab!.paneId]).toBe(tab!.id);
   });
 
   it('matches on node id alone, regardless of the tab nodeType', () => {
     navService.focusOrOpenNode('schema-1', { nodeType: 'query' });
 
-    expect(navService.focusExistingNodeTab('schema-1')).toBe(true);
+    expect(navService.focusNodeTab('schema-1')).toBe(true);
   });
 });
