@@ -262,6 +262,72 @@ async fn builtin_relationship_names_still_traverse() -> Result<()> {
     Ok(())
 }
 
+/// An untyped relationship (`targetType` omitted — the documented escape hatch
+/// for "the target type doesn't exist yet") matches EVERY type inbound, so its
+/// reverse name would otherwise resolve from any node in the workspace and
+/// return a guaranteed zero: the silent zero this fix exists to eliminate,
+/// coming back through a side door. It must be reachable from a type edges
+/// actually connect, and rejected from one they never do.
+#[tokio::test]
+async fn untyped_reverse_name_resolves_only_where_edges_reach() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Tag",
+            "fields": [{ "name": "label", "type": "string", "protection": "user", "indexed": false }],
+            // No targetType: this relationship may point at anything.
+            "relationships": [{
+                "name": "tagged_with",
+                "direction": "out",
+                "cardinality": "many",
+                "reverseName": "tagged_items",
+                "reverseCardinality": "many"
+            }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("tag schema: {e}"))?;
+
+    make_node(&svc, "tag1", "tag").await?;
+    make_node(&svc, "t1", "text").await?;
+    svc.create_relationship("tag1", "tagged_with", "t1", json!({}))
+        .await?;
+
+    // A text node an untyped edge actually reaches: the reverse name answers.
+    let reached = rel_ops::get_related_nodes(&svc, get("t1", "tagged_items", "out")).await?;
+    assert_eq!(reached.relationship_name, "tagged_with");
+    assert_eq!(reached.direction, "in");
+    assert_eq!(reached.count, 1);
+    assert_eq!(reached.related_nodes[0]["id"], "tag1");
+
+    // A type no untyped edge reaches must NOT resolve to a guaranteed zero.
+    make_node(&svc, "2026-01-15", "date").await?;
+    let err = rel_ops::get_related_nodes(&svc, get("2026-01-15", "tagged_items", "out"))
+        .await
+        .expect_err("an untyped reverse name must not silently return 0 from an unrelated type");
+    match err {
+        OpsError::InvalidParams(msg) => assert!(
+            msg.contains("tagged_items"),
+            "error should name the attempted relationship: {msg}"
+        ),
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+
+    // And it must not pollute an unrelated type's "available" list.
+    let err = rel_ops::get_related_nodes(&svc, get("2026-01-15", "zzz_bogus", "out"))
+        .await
+        .expect_err("undeclared name still errors");
+    match err {
+        OpsError::InvalidParams(msg) => assert!(
+            !msg.contains("tagged_items"),
+            "an untyped relationship that reaches nothing here must not be offered: {msg}"
+        ),
+        other => panic!("expected InvalidParams, got {other:?}"),
+    }
+    Ok(())
+}
+
 /// Two schemas may declare the same forward name toward one type. The store's
 /// "in" query keys on the name alone, so a reverse name — declared by exactly
 /// one of them — must be narrowed to its own declaring type rather than

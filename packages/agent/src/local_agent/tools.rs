@@ -1081,7 +1081,7 @@ fn def_create_relationship() -> ToolDefinition {
 fn def_get_related_nodes() -> ToolDefinition {
     ToolDefinition {
         name: "get_related_nodes".into(),
-        description: "Get nodes related to a given node. Defaults to 'mentions' relationship type if not specified.".into(),
+        description: "Get nodes related to a given node. Defaults to 'mentions' relationship type if not specified. A schema relationship can be traversed from either end: use its forward name from the source, or its declared reverseName from the target.".into(),
         parameters_schema: json!({
             "type": "object",
             "properties": {
@@ -1091,7 +1091,7 @@ fn def_get_related_nodes() -> ToolDefinition {
                 },
                 "relationship_type": {
                     "type": "string",
-                    "description": "Relationship type to query (default: 'mentions')"
+                    "description": "Relationship name to traverse (default: 'mentions'). Accepts a schema relationship's forward name, or its declared reverseName to traverse the inverse edge (e.g. 'decisions' from a person, where adr declares decided_by -> person with reverseName 'decisions'). A name declared in neither direction is rejected with an error naming the ones that work."
                 },
                 "direction": {
                     "type": "string",
