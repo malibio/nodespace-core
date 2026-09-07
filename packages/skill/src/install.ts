@@ -128,11 +128,13 @@ Examples:
     }
 
     // Exits 0 even when some detected agents had nothing to install --
-    // that's a per-agent warning (already on stderr above), not a reason to
-    // fail the whole invocation when other agents installed successfully,
-    // or even when none did: the situation is fully reported either way,
-    // and a caller parsing this output needs the exit code to mean "the
-    // installer ran to completion," not "every single agent succeeded."
+    // that's a per-agent warning (on stdout above, alongside the ✓ lines,
+    // specifically so a caller parsing this output sees it), not a reason
+    // to fail the whole invocation when other agents installed
+    // successfully, or even when none did: the situation is fully reported
+    // either way, and a caller parsing this output needs the exit code to
+    // mean "the installer ran to completion," not "every single agent
+    // succeeded."
   } else if (command === 'uninstall') {
     const results = uninstall(targetAgents);
 
