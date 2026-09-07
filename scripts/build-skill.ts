@@ -67,6 +67,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
 } from 'node:fs';
@@ -89,7 +90,13 @@ const BIN_DIR = join(WORKSPACE_ROOT, 'packages', 'desktop-app', 'src-tauri', 'bi
  * Every file under `root`, as paths relative to it. A `root` that does not
  * exist yields no files; a `root` that is itself a file yields the single
  * empty relative path, so a plain file and a directory tree can be fed to
- * the same sync loop.
+ * the same sync loop. Directories themselves are never yielded, only the
+ * files inside them.
+ *
+ * Symlinks are reported as files (the link is classified, not its target),
+ * which is fine for the staged entries because none of them contain any —
+ * a dangling one would go on to throw ENOENT from the caller's `statSync` or
+ * `copyFileSync`. Supporting them is out of scope rather than overlooked.
  */
 export function listFilesRecursive(root: string): string[] {
   if (!existsSync(root)) return [];
@@ -134,6 +141,19 @@ export function newestMtimeMs(
  * `inputPaths` — it exists and is at least as new as the newest of them. A
  * missing output is never fresh; an output whose inputs have all vanished is
  * (nothing remains that could have superseded it).
+ *
+ * Deliberately mtime-based rather than content-hashed, matching
+ * `build_support.rs`'s `sync_stale_sidecar`. The known residual failure mode
+ * is that git stamps checked-out files with checkout time, so a branch switch
+ * that lands on the same coarse tick as an existing binary can read as fresh
+ * when it isn't. What keeps that tolerable here: the outputs (`binaries/`,
+ * `resources/skill/`) are gitignored, so a checkout only ever moves the
+ * tracked `src/` side, and almost always forward. Hashing the inputs would
+ * close the gap outright, but that is a real cost for a local dev script
+ * whose worst case is one stale `bun run build:skill` away from correct —
+ * this is a considered tradeoff, not an oversight. (A *partially written*
+ * output, the one failure this can't self-correct from, is prevented at the
+ * source instead — see `compileInstaller`.)
  */
 export function isOutputFresh(
   outputPath: string,
@@ -152,8 +172,24 @@ export function isOutputFresh(
  * source are deleted, and byte-identical files are left completely alone,
  * mtime included (see the module doc on why that matters). Returns the count
  * of files written or removed, so the caller can report a real no-op.
+ *
+ * Mirrors *files*, not the directory structure as such: an empty source
+ * directory has nothing to copy and so never appears in the destination,
+ * which is the right shape for a Tauri bundle (it globs files). Symlinks are
+ * not supported anywhere under the staged entries and are not handled.
  */
 export function syncTreeByContent(srcRoot: string, destRoot: string): number {
+  // A path that flipped kind between runs (a file where a directory now
+  // stands, or the reverse) can't be reconciled entry-by-entry — reading a
+  // directory as bytes just throws EISDIR. Clear it and let the copy below
+  // rebuild it, so the staging self-heals instead of wedging on an error
+  // whose remedy ("delete resources/skill/ and re-run") isn't obvious.
+  if (existsSync(srcRoot) && existsSync(destRoot)) {
+    if (statSync(srcRoot).isDirectory() !== statSync(destRoot).isDirectory()) {
+      rmSync(destRoot, { recursive: true, force: true });
+    }
+  }
+
   const srcFiles = new Set(listFilesRecursive(srcRoot));
   let changed = 0;
 
@@ -166,7 +202,15 @@ export function syncTreeByContent(srcRoot: string, destRoot: string): number {
   for (const rel of srcFiles) {
     const src = join(srcRoot, rel);
     const dest = join(destRoot, rel);
-    if (existsSync(dest) && readFileSync(dest).equals(readFileSync(src))) continue;
+    if (existsSync(dest)) {
+      // Same self-healing as above, one level down: a nested path that is now
+      // a file but was staged as a directory can't be byte-compared.
+      if (statSync(dest).isDirectory()) {
+        rmSync(dest, { recursive: true, force: true });
+      } else if (readFileSync(dest).equals(readFileSync(src))) {
+        continue;
+      }
+    }
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(src, dest);
     changed += 1;
@@ -230,6 +274,40 @@ export function isNotACompileInput(relativePath: string): boolean {
 }
 
 /**
+ * Compiles `entrypoint` into a standalone binary at `outfile`, via a
+ * temporary sibling that is renamed into place only once the compile has
+ * succeeded.
+ *
+ * The indirection is what makes the mtime guard above safe to trust.
+ * `bun build --compile` writes its output incrementally, so a run killed
+ * partway (Ctrl-C, OOM, a full disk) would otherwise leave a truncated
+ * `outfile` carrying a brand-new mtime — newer than every input, and so
+ * reported fresh by `isOutputFresh` forever after. Every later `build:skill`
+ * would then skip the compile and ship the corrupt binary, with the only
+ * recovery a manual `rm` of a file most developers don't know exists, and the
+ * symptom surfacing far downstream as a broken skill install at app runtime.
+ *
+ * Renaming within a directory is atomic, so the guard can only ever observe a
+ * complete binary: either the rename happened and `outfile` is whole, or it
+ * didn't and `outfile` is left exactly as it was (stale, but honestly stale —
+ * still older than its inputs, so the next run retries the compile). The temp
+ * file is cleaned up on failure so a dead partial doesn't accumulate.
+ */
+export async function compileInstaller(entrypoint: string, outfile: string): Promise<void> {
+  const tempfile = `${outfile}.tmp-${process.pid}`;
+  try {
+    await $`bun build --compile ${entrypoint} --outfile ${tempfile}`.quiet();
+    if (platform() !== 'win32') {
+      chmodSync(tempfile, 0o755);
+    }
+    renameSync(tempfile, outfile);
+  } catch (error) {
+    rmSync(tempfile, { force: true });
+    throw error;
+  }
+}
+
+/**
  * Entries staged into `resources/skill/`. Anything else found there is a
  * leftover from an earlier layout and gets dropped.
  *
@@ -285,10 +363,7 @@ async function main(): Promise<void> {
       console.log(`Standalone skill installer is current -> ${outfile} (skipping compile).`);
     } else {
       console.log(`Compiling standalone skill installer -> ${outfile}`);
-      await $`bun build --compile ${join(SKILL_DIR, 'src', 'install.ts')} --outfile ${outfile}`.quiet();
-      if (platform() !== 'win32') {
-        chmodSync(outfile, 0o755);
-      }
+      await compileInstaller(join(SKILL_DIR, 'src', 'install.ts'), outfile);
     }
   }
 

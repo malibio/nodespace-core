@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   compileInputs,
+  compileInstaller,
   isNotACompileInput,
   isOutputFresh,
   listFilesRecursive,
@@ -242,6 +243,43 @@ describe("syncTreeByContent", () => {
     expect(existsSync(join(root, "dest", "keep.txt"))).toBe(true);
   });
 
+  test("self-heals when a staged directory is now a plain file in the source", () => {
+    // Byte-comparing a directory throws EISDIR. Clearing the flipped path and
+    // rebuilding it keeps the staging self-correcting rather than wedging on
+    // an error whose remedy isn't obvious from the message.
+    mkdirSync(join(root, "dest", "SKILL.md"), { recursive: true });
+    writeFileSync(join(root, "dest", "SKILL.md", "stray.txt"), "stale");
+    write("SKILL.md", "# skill");
+
+    const changed = syncTreeByContent(join(root, "SKILL.md"), join(root, "dest", "SKILL.md"));
+
+    expect(changed).toBe(1);
+    expect(statSync(join(root, "dest", "SKILL.md")).isFile()).toBe(true);
+    expect(readFileSync(join(root, "dest", "SKILL.md"), "utf8")).toBe("# skill");
+  });
+
+  test("self-heals when a staged file is now a directory in the source", () => {
+    write("dest/refs", "was a file");
+    write("refs/cli.md", "# cli");
+
+    const changed = syncTreeByContent(join(root, "refs"), join(root, "dest", "refs"));
+
+    expect(changed).toBe(1);
+    expect(readFileSync(join(root, "dest", "refs", "cli.md"), "utf8")).toBe("# cli");
+  });
+
+  test("self-heals a nested path that flipped from directory to file", () => {
+    write("src/nested/a.txt", "a");
+    syncTreeByContent(join(root, "src"), join(root, "dest"));
+    rmSync(join(root, "src", "nested"), { recursive: true });
+    write("src/nested", "now a file");
+
+    const changed = syncTreeByContent(join(root, "src"), join(root, "dest"));
+
+    expect(changed).toBeGreaterThan(0);
+    expect(readFileSync(join(root, "dest", "nested"), "utf8")).toBe("now a file");
+  });
+
   test("stages a plain file as a plain file", () => {
     write("SKILL.md", "# skill");
 
@@ -303,6 +341,48 @@ describe("compileInputs", () => {
       expect(inputs).not.toContain(join("/skill", runtimeOnly));
     }
   });
+});
+
+describe("compileInstaller", () => {
+  test("produces a runnable binary at outfile and leaves no temp file behind", async () => {
+    const entrypoint = write("entry.ts", "console.log('hello from installer');");
+    const outfile = join(root, "installer");
+
+    await compileInstaller(entrypoint, outfile);
+
+    expect(existsSync(outfile)).toBe(true);
+    expect(statSync(outfile).size).toBeGreaterThan(0);
+    expect(listFilesRecursive(root).filter((rel) => rel.includes(".tmp-"))).toEqual([]);
+  }, 60_000);
+
+  test("leaves a previous good binary untouched when the compile fails", async () => {
+    // The latch this guards against: a failed compile must not leave a
+    // freshly-stamped broken outfile, or isOutputFresh reports it fresh
+    // forever and every later run ships the corrupt binary.
+    const outfile = write("installer", "previous good binary");
+    setMtime(outfile, 1_000);
+    const brokenEntry = write("broken.ts", "this is not ; valid typescript <<<<");
+
+    await expect(compileInstaller(brokenEntry, outfile)).rejects.toThrow();
+
+    expect(readFileSync(outfile, "utf8")).toBe("previous good binary");
+    expect(statSync(outfile).mtimeMs).toBe(1_000_000);
+    expect(listFilesRecursive(root).filter((rel) => rel.includes(".tmp-"))).toEqual([]);
+  }, 60_000);
+
+  test("a failed compile leaves the output still stale, so the next run retries", async () => {
+    // The end-to-end property that matters: after a failure, the guard must
+    // still say "not fresh" rather than latching.
+    const source = write("src/entry.ts", "console.log('x');");
+    const outfile = write("installer", "previous good binary");
+    setMtime(outfile, 1_000);
+    setMtime(source, 5_000);
+    const brokenEntry = write("broken.ts", "this is not ; valid typescript <<<<");
+
+    await expect(compileInstaller(brokenEntry, outfile)).rejects.toThrow();
+
+    expect(isOutputFresh(outfile, [join(root, "src")])).toBe(false);
+  }, 60_000);
 });
 
 describe("STAGED_ENTRIES", () => {
