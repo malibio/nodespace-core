@@ -218,9 +218,27 @@ async fn undeclared_name_errors_instead_of_returning_zero() -> Result<()> {
                 msg.contains("decisions"),
                 "error names the reverse spelling that works: {msg}"
             );
+            // BOTH working spellings must be offered. A relationship carrying a
+            // reverse_name is still reachable by its forward name read inbound,
+            // and listing only the reverse one omits a spelling that
+            // demonstrably works — the same under-reporting this error exists to
+            // prevent. Asserted separately from the reverse name because a
+            // regrouping of this list once dropped exactly this entry while the
+            // reverse-name assertion above kept passing.
+            assert!(
+                msg.contains("decided_by"),
+                "error names the forward spelling that also works: {msg}"
+            );
         }
         other => panic!("expected InvalidParams, got {other:?}"),
     }
+
+    // The forward spelling the error advertises must actually work.
+    make_node(&svc, "adr1", "adr").await?;
+    svc.create_relationship("adr1", "decided_by", "p1", json!({}))
+        .await?;
+    let advertised = rel_ops::get_related_nodes(&svc, get("p1", "decided_by", "in")).await?;
+    assert_eq!(advertised.count, 1);
     Ok(())
 }
 

@@ -266,13 +266,17 @@ async fn resolve_relationship_name(
         if BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
             continue;
         }
-        // The inbound side is always reachable by the forward name read inbound;
-        // a declared reverse_name is the second, more natural spelling for the
-        // same traversal, and needs no --direction flag.
-        match rel.reverse_name.as_deref() {
-            Some(reverse) => direct.push(reverse.to_string()),
-            None => needs_direction_in.push(rel.name.clone()),
+        // The inbound side is ALWAYS reachable by the forward name read inbound,
+        // whether or not a reverse_name exists — so that spelling is listed
+        // either way. A declared reverse_name is an ADDITIONAL, more natural
+        // spelling for the same traversal that needs no --direction flag; it
+        // does not replace the forward one. Listing only the reverse name would
+        // omit a spelling that demonstrably works, which is the same
+        // under-reporting this error exists to prevent.
+        if let Some(reverse) = rel.reverse_name.as_deref() {
+            direct.push(reverse.to_string());
         }
+        needs_direction_in.push(rel.name.clone());
     }
     for list in [&mut direct, &mut needs_direction_in] {
         list.sort();
