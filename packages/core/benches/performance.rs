@@ -794,9 +794,11 @@ async fn create_schema_chain(svc: &Arc<NodeService>, depth: usize) -> Vec<String
         let rels = if i < depth - 1 {
             json!([{
                 "name": type_names[i + 1],
-                "target_type": type_names[i + 1],
+                "targetType": type_names[i + 1],
                 "direction": "out",
-                "cardinality": "one"
+                "cardinality": "one",
+                "reverseName": format!("{}_sources", type_names[i]),
+                "reverseCardinality": "many"
             }])
         } else {
             json!([])

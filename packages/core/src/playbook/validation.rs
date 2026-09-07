@@ -1332,7 +1332,9 @@ mod tests {
                     {
                         "name": "owned_by",
                         "direction": "out",
-                        "cardinality": "one"
+                        "cardinality": "one",
+                        "reverseName": "owns",
+                        "reverseCardinality": "many"
                     }
                 ]),
             )
@@ -1366,7 +1368,9 @@ mod tests {
                     {
                         "name": "linked_to",
                         "direction": "out",
-                        "cardinality": "many"
+                        "cardinality": "many",
+                        "reverseName": "linked_from",
+                        "reverseCardinality": "many"
                     }
                 ]),
             )
@@ -1537,7 +1541,9 @@ mod tests {
                     "name": "story",
                     "targetType": "vp_story",
                     "direction": "out",
-                    "cardinality": "one"
+                    "cardinality": "one",
+                    "reverseName": "issues",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;
@@ -1630,7 +1636,9 @@ mod tests {
                 json!([{
                     "name": "linked",
                     "direction": "out",
-                    "cardinality": "many"
+                    "cardinality": "many",
+                    "reverseName": "linked_from",
+                    "reverseCardinality": "many"
                     // no target_type
                 }]),
             )
@@ -1753,7 +1761,9 @@ mod tests {
                     "name": "vi_epic",
                     "direction": "out",
                     "cardinality": "one",
-                    "targetType": "vi_epic"
+                    "targetType": "vi_epic",
+                    "reverseName": "vi_children",
+                    "reverseCardinality": "many"
                 }]),
             )
             .await;

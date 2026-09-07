@@ -231,7 +231,7 @@ async fn resolve_relationship_name(
     }
 
     for (source_type, rel) in &inbound {
-        if rel.reverse_name.as_deref() == Some(relationship_name) {
+        if rel.reverse_name == relationship_name {
             return Ok(ResolvedRelName::Reverse {
                 forward_name: rel.name.clone(),
                 source_type: source_type.clone(),
@@ -266,16 +266,13 @@ async fn resolve_relationship_name(
         if BUILTIN_RELATIONSHIP_NAMES.contains(&rel.name.as_str()) {
             continue;
         }
-        // The inbound side is ALWAYS reachable by the forward name read inbound,
-        // whether or not a reverse_name exists — so that spelling is listed
-        // either way. A declared reverse_name is an ADDITIONAL, more natural
+        // The inbound side is ALWAYS reachable by the forward name read
+        // inbound. The declared reverse_name is an ADDITIONAL, more natural
         // spelling for the same traversal that needs no --direction flag; it
         // does not replace the forward one. Listing only the reverse name would
         // omit a spelling that demonstrably works, which is the same
         // under-reporting this error exists to prevent.
-        if let Some(reverse) = rel.reverse_name.as_deref() {
-            direct.push(reverse.to_string());
-        }
+        direct.push(rel.reverse_name.clone());
         needs_direction_in.push(rel.name.clone());
     }
     for list in [&mut direct, &mut needs_direction_in] {
@@ -436,15 +433,16 @@ pub struct RelationshipGroup {
     /// The node type on the FAR end of the edge (outbound: the declared
     /// `target_type`; inbound: the declaring `source_type`).
     pub target_type: Option<String>,
-    /// Reverse label supplied by the source schema; the inbound side displays
-    /// this when present (falling back to a derived label in the viewer).
-    pub reverse_name: Option<String>,
-    /// The schema type that DECLARES this relationship (used to build the inbound
-    /// fallback label when `reverse_name` is absent).
+    /// Reverse label supplied by the source schema. Always present — every
+    /// declaration names the edge from both ends — so the inbound side displays
+    /// it directly rather than deriving a label.
+    pub reverse_name: String,
+    /// The schema type that DECLARES this relationship.
     pub source_type: String,
     /// Effective cardinality for THIS side: the forward `cardinality` outbound,
-    /// the `reverse_cardinality` inbound (may be absent inbound).
-    pub cardinality: Option<RelationshipCardinality>,
+    /// the `reverse_cardinality` inbound. Known on both sides, since a
+    /// declaration must supply both.
+    pub cardinality: RelationshipCardinality,
     /// Whether the forward relationship is required (outbound only). The viewer
     /// uses this to confirm-on-delete; last-edge removal is enforced server-side
     /// in `NodeService::delete_relationship`.
@@ -565,7 +563,7 @@ pub async fn get_node_relationships(
                 target_type: rel.target_type.clone(),
                 reverse_name: rel.reverse_name.clone(),
                 source_type: node_type.clone(),
-                cardinality: Some(rel.cardinality.clone()),
+                cardinality: rel.cardinality.clone(),
                 required: rel.required,
                 edge_fields: rel.edge_fields.clone(),
                 description: rel.description.clone(),

@@ -18,7 +18,7 @@ function makeGroup(overrides: Partial<RawRelationshipGroup> = {}): RawRelationsh
     relationshipName: 'assigned_to',
     direction: 'out',
     targetType: 'person',
-    reverseName: null,
+    reverseName: 'tasks',
     sourceType: 'task',
     cardinality: 'many',
     required: null,
@@ -49,7 +49,7 @@ describe('relationship-grouping: groupDisplayLabel', () => {
     );
   });
 
-  it('uses reverseName for inbound groups when present', () => {
+  it('uses reverseName for inbound groups', () => {
     const group = makeGroup({
       direction: 'in',
       relationshipName: 'assigned_to',
@@ -59,14 +59,17 @@ describe('relationship-grouping: groupDisplayLabel', () => {
     expect(groupDisplayLabel(group)).toBe('Tasks');
   });
 
-  it('falls back to "{SourceType} ({Relationship Name})" when reverseName is absent', () => {
+  it('never synthesizes a label from the source type, since reverseName is declared', () => {
+    // The schema layer requires reverseName on every relationship, so the
+    // inbound label is always the author's chosen name — "Invoices", not the
+    // old synthesized "Invoice (Customer)".
     const group = makeGroup({
       direction: 'in',
-      relationshipName: 'assigned_to',
-      reverseName: null,
-      sourceType: 'task'
+      relationshipName: 'billed_to',
+      reverseName: 'invoices',
+      sourceType: 'invoice'
     });
-    expect(groupDisplayLabel(group)).toBe('Task (Assigned To)');
+    expect(groupDisplayLabel(group)).toBe('Invoices');
   });
 });
 

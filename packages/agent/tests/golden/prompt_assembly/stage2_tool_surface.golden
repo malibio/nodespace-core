@@ -417,6 +417,18 @@ parameters_schema:
             "description": "Relationship name, lowercase snake_case (e.g. 'supersedes', 'blocks', 'assigned_to')",
             "type": "string"
           },
+          "reverseCardinality": {
+            "description": "REQUIRED. How many sources may point at one target: 'one' or 'many'. An invoice billed_to one customer, where a customer may have many invoices, is cardinality 'one' with reverseCardinality 'many'.",
+            "enum": [
+              "one",
+              "many"
+            ],
+            "type": "string"
+          },
+          "reverseName": {
+            "description": "REQUIRED. What this edge is called read from the target's end — one edge is stored and read from both sides, so it needs a name from each. Choose it: plural where the target may hold many (an invoice billed_to a customer reads back as 'invoices', NOT 'Invoice (Customer)').",
+            "type": "string"
+          },
           "targetType": {
             "description": "Target node type ID — MUST be an existing type from the EXISTING SCHEMAS list (e.g., 'task', 'ticket', 'adr'). Do NOT invent types that don't exist yet.",
             "type": "string"
@@ -426,7 +438,9 @@ parameters_schema:
           "name",
           "targetType",
           "direction",
-          "cardinality"
+          "cardinality",
+          "reverseName",
+          "reverseCardinality"
         ],
         "type": "object"
       },
@@ -522,6 +536,18 @@ parameters_schema:
           "name": {
             "type": "string"
           },
+          "reverseCardinality": {
+            "description": "REQUIRED. How many sources may point at one target: 'one' or 'many'. An invoice billed_to one customer, where a customer may have many invoices, is cardinality 'one' with reverseCardinality 'many'.",
+            "enum": [
+              "one",
+              "many"
+            ],
+            "type": "string"
+          },
+          "reverseName": {
+            "description": "REQUIRED. What this edge is called read from the target's end — one edge is stored and read from both sides, so it needs a name from each. Choose it: plural where the target may hold many (an invoice billed_to a customer reads back as 'invoices', NOT 'Invoice (Customer)').",
+            "type": "string"
+          },
           "targetType": {
             "type": "string"
           }
@@ -530,7 +556,9 @@ parameters_schema:
           "name",
           "targetType",
           "direction",
-          "cardinality"
+          "cardinality",
+          "reverseName",
+          "reverseCardinality"
         ],
         "type": "object"
       },

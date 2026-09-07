@@ -47,7 +47,9 @@ async fn service_with_gizmo_schema(
                     "targetType": "person",
                     "direction": "out",
                     "cardinality": cardinality,
-                    "required": required
+                    "required": required,
+                    "reverseName": "gizmos",
+                    "reverseCardinality": "many"
                 }
             ]
         }),

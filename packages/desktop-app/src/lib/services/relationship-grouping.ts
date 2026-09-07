@@ -9,9 +9,8 @@
  * Responsibilities:
  * - Keep outbound and inbound as SEPARATE groups (never flatten different
  *   directions / target types together).
- * - Derive each group's display label — inbound uses `reverseName`, falling back
- *   to `"{SourceType} ({relationship_name})"` when it is absent, rather than
- *   hiding the group.
+ * - Derive each group's display label — outbound uses the relationship name,
+ *   inbound uses the schema-declared `reverseName`.
  * - Classify each group as a `table` (carries edge attributes) or `chips`
  *   (bare edge with no edge data) layout.
  * - Compute the ordered edge-attribute column set for the table layout.
@@ -58,9 +57,9 @@ export interface RawRelationshipGroup {
   relationshipName: string;
   direction: RelationshipDirection;
   targetType: string | null;
-  reverseName: string | null;
+  reverseName: string;
   sourceType: string;
-  cardinality: RelationshipCardinality | null;
+  cardinality: RelationshipCardinality;
   required: boolean | null;
   edgeFields: RawEdgeField[] | null;
   description: string | null;
@@ -138,18 +137,18 @@ export function humanizeName(name: string): string {
 /**
  * Display label for a group.
  * - Outbound: the humanized relationship name.
- * - Inbound: the humanized `reverseName` when present, else a derived
- *   `"{SourceType} ({Relationship Name})"` fallback — never hide the group,
- *   since that would make the edge invisible from one side.
+ * - Inbound: the humanized `reverseName`.
+ *
+ * There is no synthesized `"{SourceType} ({Relationship Name})"` fallback: a
+ * schema relationship must declare `reverseName`, so every inbound group
+ * carries a name its author chose. The fallback was what produced
+ * "Invoice (Customer)" where the modeled answer was "Invoices", and keeping it
+ * as a defensive branch would only hide a schema that failed validation.
  */
 export function groupDisplayLabel(group: RawRelationshipGroup): string {
-  if (group.direction === 'out') {
-    return humanizeName(group.relationshipName);
-  }
-  if (group.reverseName && group.reverseName.trim().length > 0) {
-    return humanizeName(group.reverseName);
-  }
-  return `${humanizeName(group.sourceType)} (${humanizeName(group.relationshipName)})`;
+  return humanizeName(
+    group.direction === 'out' ? group.relationshipName : group.reverseName
+  );
 }
 
 /**

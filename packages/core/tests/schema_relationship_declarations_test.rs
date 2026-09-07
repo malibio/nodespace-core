@@ -106,7 +106,7 @@ async fn declarations_are_relationship_rows_not_properties_json() -> Result<()> 
     let rel = &declarations[0];
     assert_eq!(rel.name, "widgets");
     assert_eq!(rel.target_type.as_deref(), Some("widget"));
-    assert_eq!(rel.reverse_name.as_deref(), Some("assemblies"));
+    assert_eq!(rel.reverse_name, "assemblies");
     Ok(())
 }
 
@@ -118,7 +118,7 @@ async fn untyped_declaration_stores_as_self_edge_and_round_trips() -> Result<()>
         json!({
             "name": "Notebook",
             "fields": [],
-            "relationships": [{ "name": "related", "direction": "out", "cardinality": "many" }]
+            "relationships": [{ "name": "related", "direction": "out", "cardinality": "many", "reverseName": "related_from", "reverseCardinality": "many" }]
         }),
     )
     .await
@@ -251,7 +251,7 @@ async fn reserved_builtin_names_are_rejected_at_declaration_time() -> Result<()>
         json!({
             "name": "Bad",
             "fields": [],
-            "relationships": [{ "name": "has_child", "direction": "out", "cardinality": "many" }]
+            "relationships": [{ "name": "has_child", "direction": "out", "cardinality": "many", "reverseName": "parent", "reverseCardinality": "one" }]
         }),
     )
     .await
@@ -271,12 +271,101 @@ async fn reserved_builtin_names_are_rejected_at_declaration_time() -> Result<()>
         &svc,
         json!({
             "schema_id": "good",
-            "add_relationships": [{ "name": "mentions", "direction": "out", "cardinality": "many" }]
+            "add_relationships": [{ "name": "mentions", "direction": "out", "cardinality": "many", "reverseName": "mentioned_by", "reverseCardinality": "many" }]
         }),
     )
     .await
     .expect_err("update_schema must reject reserved relationship names");
     assert!(err.to_string().contains("mentions"));
+    Ok(())
+}
+
+/// A reserved name is rejected as a `reverseName` too, not only as the forward
+/// `name`.
+///
+/// The failure differs from the forward case and is easy to wave off as
+/// harmless: a reverse name is never written to `relationship_type` — it is a
+/// resolution alias — so it cannot make stored edges ambiguous the way a
+/// reserved forward name does. What it does instead is nothing at all.
+/// `resolve_relationship_name` short-circuits on the built-in names before it
+/// consults any declaration, so a `reverseName` of `has_child` can never
+/// resolve to this relationship; the built-in wins and the author's chosen
+/// reverse spelling is silently inert.
+///
+/// This matters more now that every relationship must carry a reverse name:
+/// what used to be a sparsely-populated opt-in namespace now gains an entry per
+/// declaration.
+#[tokio::test]
+async fn reserved_builtin_names_are_rejected_as_reverse_names() -> Result<()> {
+    let (svc, _t) = create_test_service().await?;
+
+    let err = handle_create_schema(
+        &svc,
+        json!({
+            "name": "Folder",
+            "fields": [],
+            "relationships": [{
+                "name": "contains",
+                "direction": "out",
+                "cardinality": "many",
+                "reverseName": "has_child",
+                "reverseCardinality": "one"
+            }]
+        }),
+    )
+    .await
+    .expect_err("a reserved reverseName must be rejected");
+    assert!(
+        err.to_string().contains("reverseName"),
+        "the error must say WHICH end is at fault, so the fix is unambiguous: {err}"
+    );
+    assert!(
+        err.to_string().contains("has_child"),
+        "error should name the reserved relationship: {err}"
+    );
+    // The rejection must not leave a half-created schema behind.
+    assert!(svc.get_schema_node("folder").await?.is_none());
+
+    // Same via update_schema on an existing schema.
+    handle_create_schema(&svc, json!({ "name": "Tray", "fields": [] }))
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let err = handle_update_schema(
+        &svc,
+        json!({
+            "schema_id": "tray",
+            "add_relationships": [{
+                "name": "holds",
+                "direction": "out",
+                "cardinality": "many",
+                "reverseName": "member_of",
+                "reverseCardinality": "one"
+            }]
+        }),
+    )
+    .await
+    .expect_err("update_schema must reject a reserved reverseName");
+    assert!(err.to_string().contains("member_of"), "got: {err}");
+
+    // A non-reserved reverse name on the same shape is still accepted — the
+    // guard must reject the reserved word, not the direction.
+    handle_create_schema(
+        &svc,
+        json!({
+            "name": "Crate",
+            "fields": [],
+            "relationships": [{
+                "name": "contains",
+                "direction": "out",
+                "cardinality": "many",
+                "reverseName": "contained_by",
+                "reverseCardinality": "one"
+            }]
+        }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("a non-reserved reverseName must still be accepted: {e}"))?;
+
     Ok(())
 }
 
@@ -343,7 +432,9 @@ async fn retargeting_a_declaration_with_live_edges_is_blocked() -> Result<()> {
                 "name": "widgets",
                 "targetType": "gear",
                 "direction": "out",
-                "cardinality": "many"
+                "cardinality": "many",
+                "reverseName": "assemblies",
+                "reverseCardinality": "one"
             }]
         }),
     )
@@ -423,7 +514,7 @@ async fn create_relationship_refuses_schema_node_endpoints() -> Result<()> {
         json!({
             "name": "Board",
             "fields": [],
-            "relationships": [{ "name": "pins", "direction": "out", "cardinality": "many" }]
+            "relationships": [{ "name": "pins", "direction": "out", "cardinality": "many", "reverseName": "pinned_on", "reverseCardinality": "many" }]
         }),
     )
     .await

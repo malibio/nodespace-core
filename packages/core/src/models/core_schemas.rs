@@ -402,8 +402,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 direction: RelationshipDirection::Out,
                 cardinality: RelationshipCardinality::Many,
                 required: None,
-                reverse_name: Some("project".to_string()),
-                reverse_cardinality: Some(RelationshipCardinality::One),
+                reverse_name: "project".to_string(),
+                reverse_cardinality: RelationshipCardinality::One,
                 edge_fields: None,
                 description: Some("Tasks belonging to this project".to_string()),
             }],
@@ -1602,8 +1602,8 @@ mod tests {
         assert_eq!(rel.name, "tasks");
         assert_eq!(rel.target_type.as_deref(), Some("task"));
         assert_eq!(rel.cardinality, RelationshipCardinality::Many);
-        assert_eq!(rel.reverse_name.as_deref(), Some("project"));
-        assert_eq!(rel.reverse_cardinality, Some(RelationshipCardinality::One));
+        assert_eq!(rel.reverse_name, "project");
+        assert_eq!(rel.reverse_cardinality, RelationshipCardinality::One);
 
         let task = schemas.iter().find(|s| s.id == "task").unwrap();
         assert!(

@@ -890,8 +890,8 @@ mod tests {
             direction: RelationshipDirection::Out,
             cardinality: RelationshipCardinality::Many,
             required: None,
-            reverse_name: None,
-            reverse_cardinality: None,
+            reverse_name: format!("reverse_{name}"),
+            reverse_cardinality: RelationshipCardinality::Many,
             edge_fields: None,
             description: None,
         }
