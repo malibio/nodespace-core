@@ -143,11 +143,18 @@ class NodeSpaceGitHubManager {
   async createIssue(title: string, body: string, labels?: string[], assignees?: string[]) {
     try {
       const issue = await this.client.createIssue(title, body, labels, assignees);
-      
+
       console.log("✅ Issue created:");
       console.log(`#${issue.number}: ${title}`);
       console.log(`URL: ${issue.url}`);
-      
+      if (issue.addedToProject) {
+        console.log("📊 Added to the NodeSpace project board");
+      } else {
+        console.log(
+          "⚠️  Could not add it to the project board — `gh:status` will add it on the first status update"
+        );
+      }
+
       return issue;
     } catch (error) {
       console.error(`❌ Failed to create issue: ${error.message}`);

@@ -253,15 +253,16 @@ export class GitHubClient {
 
     for (const issueNumber of issueNumbers) {
       try {
-        const itemId = await this.getItemIdForIssue(issueNumber);
-        
+        // An issue that isn't on the board yet has no status to set. Add it
+        // rather than failing: setting a status is a statement about where the
+        // work stands, and refusing because the row is missing turns a
+        // bookkeeping gap into a blocked workflow step. This also back-fills
+        // issues created before creation started adding them.
+        let itemId = await this.getItemIdForIssue(issueNumber);
+
         if (!itemId) {
-          results.push({ 
-            issueNumber, 
-            success: false, 
-            error: "Issue not found in project" 
-          });
-          continue;
+          const nodeId = await this.getIssueNodeId(issueNumber);
+          itemId = await this.addIssueToProject(nodeId);
         }
 
         const mutation = `
@@ -459,7 +460,7 @@ export class GitHubClient {
     body: string,
     labels?: string[],
     assignees?: string[]
-  ): Promise<{ number: number; url: string }> {
+  ): Promise<{ number: number; url: string; addedToProject: boolean }> {
     const response = await this.octokit.rest.issues.create({
       owner: this.owner,
       repo: this.repo,
@@ -469,10 +470,66 @@ export class GitHubClient {
       assignees: assignees || []
     });
 
+    // Put the issue on the board immediately. Nothing else does this, so an
+    // issue created without it never gets a project item — and every later
+    // `gh:status` call on it fails with "Issue not found in project",
+    // including the ones the startup sequence in CLAUDE.md makes mandatory.
+    // Board placement is a convenience, not the point of creating the issue,
+    // so a failure here is reported rather than thrown: the issue itself
+    // exists and its number is what the caller actually needs.
+    const addedToProject = await this.addIssueToProject(response.data.node_id)
+      .then(() => true)
+      .catch(() => false);
+
     return {
       number: response.data.number,
-      url: response.data.html_url
+      url: response.data.html_url,
+      addedToProject
     };
+  }
+
+  /**
+   * Add an existing issue to the ProjectV2 board by its GraphQL node ID.
+   *
+   * Idempotent on GitHub's side: adding an issue already on the board returns
+   * that same item rather than erroring or duplicating it, so this is safe to
+   * call on an issue whose membership is unknown.
+   */
+  async addIssueToProject(issueNodeId: string): Promise<string> {
+    const mutation = `
+      mutation AddIssueToProject($projectId: ID!, $contentId: ID!) {
+        addProjectV2ItemById(input: {
+          projectId: $projectId
+          contentId: $contentId
+        }) {
+          item {
+            id
+          }
+        }
+      }
+    `;
+
+    const result = await this.octokit.graphql<{
+      addProjectV2ItemById: { item: { id: string } };
+    }>(mutation, {
+      projectId: this.projectId,
+      contentId: issueNodeId
+    });
+
+    return result.addProjectV2ItemById.item.id;
+  }
+
+  /**
+   * The GraphQL node ID for an issue number, needed by the ProjectV2
+   * mutations (which key on node IDs, not the REST issue number).
+   */
+  async getIssueNodeId(issueNumber: number): Promise<string> {
+    const response = await this.octokit.rest.issues.get({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: issueNumber
+    });
+    return response.data.node_id;
   }
 
   /**
