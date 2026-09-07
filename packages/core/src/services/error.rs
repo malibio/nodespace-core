@@ -111,6 +111,20 @@ pub enum NodeServiceError {
         "Unknown node_type '{node_type}': no such core type or schema. Create the schema first with create_schema, or use an existing type id."
     )]
     UnknownNodeType { node_type: String },
+
+    /// The persisted hierarchy is malformed — a cyclic or unreachably deep
+    /// `has_child` chain found while reading, not proposed by the caller.
+    ///
+    /// Distinct from [`Self::CircularReference`] and [`Self::HierarchyViolation`],
+    /// which the write paths raise when a caller *proposes* a cycle (moving a
+    /// node under its own descendant); those are genuine `invalid_argument`
+    /// cases the caller can fix by sending a different request. This one is a
+    /// stored-data bug: the request was valid, retrying it unchanged fails
+    /// identically, and only a repair of the graph resolves it. It therefore
+    /// maps to an internal error so it lands in server-error reporting rather
+    /// than being counted as client misuse.
+    #[error("Corrupt stored hierarchy: {0}")]
+    CorruptHierarchy(String),
 }
 
 impl NodeServiceError {
@@ -138,6 +152,11 @@ impl NodeServiceError {
         Self::CircularReference {
             context: context.into(),
         }
+    }
+
+    /// Create a corrupt-stored-hierarchy error
+    pub fn corrupt_hierarchy(msg: impl Into<String>) -> Self {
+        Self::CorruptHierarchy(msg.into())
     }
 
     /// Create a hierarchy violation error

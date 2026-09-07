@@ -1859,7 +1859,9 @@ const MAX_TREE_DEPTH: usize = 100;
 /// filtered upstream. Since a Rust stack overflow aborts the process rather
 /// than unwinding, an unguarded walk of cyclic data would kill the daemon with
 /// no error to surface. The depth ceiling and path-visited set below make a
-/// malformed hierarchy a handled error instead.
+/// malformed hierarchy a handled [`NodeServiceError::CorruptHierarchy`] instead
+/// — an internal error, since the caller's request was valid and only a repair
+/// of the stored graph can resolve it.
 fn build_node_tree_recursive(
     node: &Node,
     node_map: &HashMap<String, Node>,
@@ -1890,7 +1892,7 @@ fn build_node_tree_guarded(
             max_depth = MAX_TREE_DEPTH,
             "Hierarchy exceeds the maximum tree depth; refusing to build the subtree"
         );
-        return Err(NodeServiceError::hierarchy_violation(format!(
+        return Err(NodeServiceError::corrupt_hierarchy(format!(
             "maximum tree depth ({}) exceeded at node '{}'",
             MAX_TREE_DEPTH, node.id
         )));
@@ -1901,7 +1903,7 @@ fn build_node_tree_guarded(
             depth,
             "Cyclic has_child edge in stored hierarchy; refusing to build the subtree"
         );
-        return Err(NodeServiceError::circular_reference(format!(
+        return Err(NodeServiceError::corrupt_hierarchy(format!(
             "node '{}' appears more than once on the same branch",
             node.id
         )));
@@ -5960,8 +5962,8 @@ mod tests {
             .expect_err("a cyclic adjacency list must return an error, not recurse");
 
         assert!(
-            matches!(err, NodeServiceError::CircularReference { .. }),
-            "cycle should surface as CircularReference, got: {err}"
+            matches!(err, NodeServiceError::CorruptHierarchy(_)),
+            "a cycle in stored data is a server-side fault, not caller error: {err}"
         );
         assert!(
             err.to_string().contains('a'),
@@ -5979,8 +5981,8 @@ mod tests {
             .expect_err("a self-referential edge must return an error, not recurse");
 
         assert!(
-            matches!(err, NodeServiceError::CircularReference { .. }),
-            "self-edge should surface as CircularReference, got: {err}"
+            matches!(err, NodeServiceError::CorruptHierarchy(_)),
+            "self-edge should surface as CorruptHierarchy, got: {err}"
         );
     }
 
@@ -6038,8 +6040,8 @@ mod tests {
             .expect_err("a chain deeper than MAX_TREE_DEPTH must return an error");
 
         assert!(
-            matches!(err, NodeServiceError::HierarchyViolation(_)),
-            "excessive depth should surface as HierarchyViolation, got: {err}"
+            matches!(err, NodeServiceError::CorruptHierarchy(_)),
+            "excessive depth should surface as CorruptHierarchy, got: {err}"
         );
     }
 
