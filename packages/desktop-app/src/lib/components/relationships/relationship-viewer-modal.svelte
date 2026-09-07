@@ -146,8 +146,10 @@
   //
   // Keys, not objects: every mutation reloads `view` into a new object graph, so
   // a captured group/row would leave the editor rendering — and saving — values
-  // from before the reload. Resolving per render also closes the editor by
-  // itself if the edge it points at disappears.
+  // from before the reload. Resolving per render also hides the editor once a
+  // reload no longer contains the edge. Note the limit: that is a reaction to a
+  // reload, not a check at save time, so a save racing an out-of-band delete
+  // still reaches the daemon and relies on its error being surfaced.
   let editingKey = $state<{ groupKey: string; rowId: string } | null>(null);
   // Whether the "Add relationship" type chooser is open.
   let addChooserOpen = $state(false);
@@ -174,12 +176,33 @@
   const addableGroups = $derived(partitioned.addable);
 
   // Both resolve against the CURRENT view every render, so an open editor or
-  // picker always reflects the latest reload — and collapses to null (closing
-  // itself) if the group or edge it refers to is gone.
+  // picker always reflects the latest reload — and resolves to null once the
+  // group or edge it refers to is gone, which unmounts what was open.
   const editing = $derived(
     findRowByKey(view?.groups ?? [], editingKey?.groupKey ?? null, editingKey?.rowId ?? null)
   );
   const addGroup = $derived(findGroupByKey(view?.groups ?? [], addGroupKey));
+
+  // Resolving to null hides the editor but does NOT by itself forget which row
+  // was open, and neither key is unique enough to leave lying around: a group
+  // key is `direction:name:targetType` and a row id is the TARGET NODE's id, not
+  // the edge's. So re-adding the same target to the same relationship would
+  // rebuild a row that matches the dangling key and pop the editor open unbidden
+  // over the new edge, pre-filled with the draft from the old one. Drop the key
+  // and its draft the moment resolution misses, so a closed editor stays closed.
+  $effect(() => {
+    if (editingKey && !editing) {
+      const stale = draftKey(editingKey.groupKey, editingKey.rowId);
+      editingKey = null;
+      clearDraftKey(stale);
+    }
+  });
+
+  // Same reasoning for the target picker: a group key outliving its group would
+  // reopen the picker if a schema change brought that relationship back.
+  $effect(() => {
+    if (addGroupKey && !addGroup) closeAdd();
+  });
 
   $effect(() => {
     if (!open) {
@@ -423,8 +446,13 @@
 
   // --- Edge-attribute editing ----------------------------------------------
 
+  /** The `edgeDrafts` key for one row, from the same parts `editingKey` holds. */
+  function draftKey(groupKey: string, rowId: string): string {
+    return `${groupKey}::${rowId}`;
+  }
+
   function rowKey(group: RelationshipGroupView, row: RelationshipRowView): string {
-    return `${group.key}::${row.id}`;
+    return draftKey(group.key, row.id);
   }
 
   function currentEdgeValue(
@@ -449,7 +477,15 @@
 
   /** Drop a single row's draft without disturbing any other row's unsaved edits. */
   function clearRowDraft(group: RelationshipGroupView, row: RelationshipRowView) {
-    const key = rowKey(group, row);
+    clearDraftKey(rowKey(group, row));
+  }
+
+  /**
+   * Drop a draft by its composite key, for the case where the row object is no
+   * longer reachable — its edge has gone from the view — but its draft is still
+   * held under the key that row had.
+   */
+  function clearDraftKey(key: string) {
     if (!(key in edgeDrafts)) return;
     const next = { ...edgeDrafts };
     delete next[key];
@@ -568,9 +604,11 @@
       addResults = results.filter((n) => !existing.has(n.id));
     } catch (error) {
       log.error('Target search failed', error);
-      addResults = [];
+      // Only blank the results if this response still belongs to the open
+      // picker — a superseded request must not clear what replaced it.
+      if (addGroupKey === requestedKey) addResults = [];
     } finally {
-      addSearching = false;
+      if (addGroupKey === requestedKey) addSearching = false;
     }
   }
 

@@ -329,7 +329,13 @@ export function findGroupByKey(
  * Resolve a `(group key, row id)` pair against the current view, for UI state
  * scoped to a single edge. Returns `null` when either half has gone — the group
  * removed from the schema, or the row's edge deleted — so an editor left open
- * over a vanished edge closes instead of saving against it.
+ * over a vanished edge is hidden on the next RELOAD.
+ *
+ * That is the whole of the guarantee: it is not a substitute for the daemon
+ * rejecting a write against a deleted edge. Nothing here re-checks the view at
+ * the moment of a save, so a save racing an out-of-band delete still reaches the
+ * daemon and still needs its error surfaced — do not read this as making that
+ * path unreachable.
  */
 export function findRowByKey(
   groups: RelationshipGroupView[],

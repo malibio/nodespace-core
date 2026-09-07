@@ -543,3 +543,65 @@ describe('relationship-grouping: findGroupByKey / findRowByKey', () => {
     expect(findRowByKey(groups, inbound.key, 'adr-2')).toBeNull();
   });
 });
+
+describe('relationship-grouping: row keys are reproducible, so stale keys must be dropped', () => {
+  const related = (id: string, edge: Record<string, unknown> = {}) => ({
+    id,
+    nodeType: 'adr',
+    title: id,
+    contentPreview: '',
+    edgeProperties: edge
+  });
+
+  function viewOf(groups: RawRelationshipGroup[]) {
+    return buildRelationshipsView({ nodeId: 'adr-1', nodeType: 'adr', groups }).groups;
+  }
+
+  const withTargets = (targets: string[]) =>
+    viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: targets.length,
+        related: targets.map((id) => related(id))
+      })
+    ]);
+
+  /**
+   * A row id is the TARGET NODE's id and a group key is
+   * `direction:name:targetType` — neither is unique to a particular edge. So
+   * deleting an edge and re-adding the same target reproduces a row that a
+   * previously-held key resolves against again.
+   *
+   * This is why the modal must forget `editingKey` the moment resolution
+   * misses, rather than relying on the key staying unresolvable: otherwise a
+   * re-add silently reopens the editor over a brand-new edge, carrying the
+   * deleted edge's draft.
+   */
+  it('resolves a stale key again once the same target is re-added', () => {
+    const before = withTargets(['adr-2', 'adr-3']);
+    const groupKey = before[0].key;
+    expect(findRowByKey(before, groupKey, 'adr-2')).not.toBeNull();
+
+    // adr-2's edge is deleted — the key stops resolving.
+    const afterDelete = withTargets(['adr-3']);
+    expect(findRowByKey(afterDelete, groupKey, 'adr-2')).toBeNull();
+
+    // The same target is linked again. The key is reproducible, so it resolves
+    // once more — to a DIFFERENT row object representing a different edge.
+    const afterReAdd = withTargets(['adr-3', 'adr-2']);
+    const resolved = findRowByKey(afterReAdd, groupKey, 'adr-2');
+    expect(resolved).not.toBeNull();
+    expect(resolved?.row).not.toBe(before[0].rows[0]);
+  });
+
+  it('keeps a group key stable when the group moves between partitions', () => {
+    // The key must survive the empty→populated promotion, so an in-flight
+    // search for a group that just gained its first edge is not discarded.
+    const empty = viewOf([makeGroup({ relationshipName: 'supersedes' })]);
+    const populated = withTargets(['adr-2']);
+    expect(populated[0].key).toBe(empty[0].key);
+    expect(partitionGroups(empty).addable).toHaveLength(1);
+    expect(partitionGroups(populated).populated).toHaveLength(1);
+  });
+});
