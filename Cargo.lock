@@ -3499,6 +3499,7 @@ dependencies = [
  "nodespace-daemon",
  "nodespace-nlp-engine",
  "nodespace-proto",
+ "nodespace-types",
  "serde_json",
  "shell-words",
  "tempfile",

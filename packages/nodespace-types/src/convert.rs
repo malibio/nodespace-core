@@ -60,37 +60,55 @@ pub fn nodes_to_typed_values(nodes: Vec<Node>) -> Result<Vec<serde_json::Value>,
     nodes.into_iter().map(node_to_typed_value).collect()
 }
 
-/// Flatten namespaced properties for API response.
+/// Flatten namespaced properties into the flat API shape.
 ///
 /// Storage format: `{ "task": { "status": "open" } }`
 /// API format:     `{ "status": "open" }`
 ///
-/// Dormant namespaces (from previous type changes) are not exposed.
-fn flatten_properties_for_api(node: &mut Node) {
-    let node_type = node.node_type.clone();
-
-    let Some(props_obj) = node.properties.as_object() else {
-        return;
+/// This is the single definition of the rule. Callers that hold a `Node` should
+/// go through [`node_to_typed_value`]; this function exists for the callers that
+/// do not — notably the CLI, which only ever has the gRPC `NodeData` (whose
+/// `properties` is a JSON-encoded string) and so cannot build a `Node` to pass.
+/// Both share this body so the two surfaces cannot drift apart.
+///
+/// `_`-prefixed keys (`_schema_version`, and sibling namespaces like `_seed`)
+/// are internal and never exposed. Dormant namespaces left by a previous type
+/// change are not exposed either.
+///
+/// Note the asymmetry between the branches: inside the type's own namespace an
+/// object is a real schema-defined field value and is preserved, whereas in the
+/// already-flat fallback a nested object can only be another type's namespace
+/// and is dropped.
+pub fn flatten_namespaced_properties(
+    properties: &serde_json::Value,
+    node_type: &str,
+) -> serde_json::Value {
+    let Some(props_obj) = properties.as_object() else {
+        return properties.clone();
     };
 
-    if let Some(type_namespace) = props_obj.get(&node_type) {
-        if let Some(type_props) = type_namespace.as_object() {
-            let flat: serde_json::Map<String, serde_json::Value> = type_props
+    if let Some(type_props) = props_obj.get(node_type).and_then(|v| v.as_object()) {
+        return serde_json::Value::Object(
+            type_props
                 .iter()
                 .filter(|(k, _)| !k.starts_with('_'))
                 .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            node.properties = serde_json::Value::Object(flat);
-            return;
-        }
+                .collect(),
+        );
     }
 
-    let flat: serde_json::Map<String, serde_json::Value> = props_obj
-        .iter()
-        .filter(|(k, v)| !v.is_object() && !k.starts_with('_'))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    node.properties = serde_json::Value::Object(flat);
+    serde_json::Value::Object(
+        props_obj
+            .iter()
+            .filter(|(k, v)| !v.is_object() && !k.starts_with('_'))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    )
+}
+
+/// Flatten namespaced properties for API response, in place.
+fn flatten_properties_for_api(node: &mut Node) {
+    node.properties = flatten_namespaced_properties(&node.properties, &node.node_type);
 }
 
 fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {

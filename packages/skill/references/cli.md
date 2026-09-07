@@ -11,9 +11,8 @@ judgment calls that a generator cannot produce.
 
 All commands accept `--json` for machine-readable output.
 
-**Node JSON shape.** Commands that emit a node (`node get`, `node create`,
-`node update`, `query`, `search`, `schema list`, `schema get`) return objects of
-this shape; list-returning commands wrap them as `{"count": N, "nodes": [...]}`.
+**Node JSON shape.** Every command that emits a node returns objects of this
+shape; list-returning commands wrap them as `{"count": N, "nodes": [...]}`.
 
 ```json
 {
@@ -34,6 +33,12 @@ key and no second parse. These are the same bare names that
 `node update --property status=done` and `query --filters '{"property":"status"}'`
 accept, so what you parse and what you type always match. Internal bookkeeping
 keys are not part of the output. A node with no properties set returns `{}`.
+
+One gap to be aware of when you set an **object-valued** property on a type
+other than `task`: the write path can store it outside the type's own namespace,
+in which case it will not appear in this output. Scalars, arrays and objects on
+`task` are unaffected. If you set a nested object and don't see it read back,
+that write is the cause, not the read.
 
 
 **Selecting a database.** A single daemon can serve several local databases. The data commands that read or write a database (`node`, `query`, `search`, `mention`, `schema`, `relationship`, `import`, `diagnostics`) accept a global `--database <name|id>` flag that routes the request to a specific database; the `NODESPACE_DATABASE` environment variable sets the same target when the flag is absent. Without either, requests go to the daemon's default database. Model management (`nodespace model`) is daemon-global — the loaded inference model is shared across all databases, so the flag is accepted but has no effect there. Manage the set of databases with the `nodespace database` subcommands (below).

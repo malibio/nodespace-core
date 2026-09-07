@@ -380,10 +380,12 @@ pub async fn get_related_nodes(
     };
 
     let count = nodes.len();
-    let related_nodes: Vec<Value> = nodes
-        .into_iter()
-        .map(|n| serde_json::to_value(n).unwrap_or(json!(null)))
-        .collect();
+    // Emit the same flat, API-facing shape every other read path produces.
+    // A plain `to_value(Node)` here would serialize properties exactly as
+    // stored — namespaced under the schema id — leaking a storage detail that
+    // must not cross the API boundary, and diverging from `node get`/`query`.
+    let related_nodes: Vec<Value> =
+        crate::models::nodes_to_typed_values(nodes).map_err(OpsError::Internal)?;
 
     Ok(GetRelatedOutput {
         node_id: input.node_id,

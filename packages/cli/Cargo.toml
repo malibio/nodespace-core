@@ -23,6 +23,9 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 nodespace-daemon = { path = "../daemon" }
 nodespace-proto = { workspace = true }
+# For `flatten_namespaced_properties` — the single definition of the storage
+# nesting → flat API shape rule this CLI's output must honour.
+nodespace-types = { workspace = true }
 # Already resolved in the workspace lockfile as a transitive dep of
 # portable-pty (via the `session` PTY commands) — reused here for the same
 # POSIX-shell-style argument splitting, applied to the `mcp` passthrough

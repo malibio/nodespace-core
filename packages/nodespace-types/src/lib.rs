@@ -19,7 +19,7 @@ mod schema;
 mod task;
 
 pub use ai_chat::{AiChatMessage, AiChatNode};
-pub use convert::{node_to_typed_value, nodes_to_typed_values};
+pub use convert::{flatten_namespaced_properties, node_to_typed_value, nodes_to_typed_values};
 pub use helpers::{is_valid_lifecycle_status, LIFECYCLE_STATUSES};
 pub use node::{
     DeleteResult, Node, NodeQuery, NodeReference, NodeUpdate, OrderBy, ValidationError,

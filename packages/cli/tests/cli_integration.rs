@@ -1006,6 +1006,103 @@ async fn relationship_create_and_get() {
     let _ = shutdown.send(());
 }
 
+/// `relationship get` is a documented read path that does NOT go through
+/// `output.rs`, so it needs its own guard: the daemon builds
+/// `related_nodes_json` itself, and a plain `to_value(Node)` there would
+/// serialize properties exactly as stored — namespaced under the schema id.
+#[tokio::test]
+async fn relationship_get_emits_flat_properties() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    commands::schema::run(
+        &mut client,
+        commands::schema::SchemaAction::Create(commands::schema::SchemaParamsArgs {
+            params: Some(
+                serde_json::json!({
+                    "name": "Ticket",
+                    "fields": [{"name": "severity", "type": "string"}],
+                    "relationships": [
+                        {"name": "blocks", "target_type": "ticket", "direction": "out", "cardinality": "many"}
+                    ]
+                })
+                .to_string(),
+            ),
+            params_file: None,
+        }),
+        true,
+    )
+    .await
+    .expect("create ticket schema");
+
+    let make_ticket = |content: &str, severity: &str| {
+        let mut raw = raw.clone();
+        let req = CreateNodeRequest {
+            node_type: "ticket".into(),
+            content: content.into(),
+            parent_id: None,
+            properties: serde_json::json!({"severity": severity}).to_string(),
+            collection: None,
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        };
+        async move {
+            raw.create_node(req)
+                .await
+                .expect("seed ticket")
+                .into_inner()
+                .node_id
+        }
+    };
+
+    let source = make_ticket("source", "low").await;
+    let target = make_ticket("target", "high").await;
+
+    commands::relationship::run(
+        &mut client,
+        commands::relationship::RelationshipAction::Create(commands::relationship::CreateArgs {
+            from: source.clone(),
+            relationship_name: "blocks".into(),
+            to: target.clone(),
+            edge_data: None,
+        }),
+        true,
+    )
+    .await
+    .expect("create relationship");
+
+    let response = raw
+        .get_related_nodes(GetRelatedNodesRequest {
+            node_id: source.clone(),
+            relationship_name: "blocks".into(),
+            direction: "out".into(),
+        })
+        .await
+        .expect("get related nodes")
+        .into_inner();
+
+    let related: serde_json::Value =
+        serde_json::from_str(&response.related_nodes_json).expect("parse related_nodes_json");
+    let first = &related[0];
+
+    assert_eq!(
+        first["properties"]["severity"], "high",
+        "related nodes must carry flat properties like every other read path"
+    );
+    assert!(
+        first["properties"].get("ticket").is_none(),
+        "the schema id must not be observable in `relationship get` output"
+    );
+
+    let _ = shutdown.send(());
+}
+
 #[tokio::test]
 async fn relationship_create_rejects_relationship_undefined_on_source_schema() {
     let (sock, shutdown, _tempdir) = spawn_test_daemon().await;

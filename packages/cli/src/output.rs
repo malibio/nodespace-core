@@ -70,6 +70,8 @@ fn write_human_node(node: &NodeData) {
     // Flattened for the same reason as JSON mode: the schema-id nesting is a
     // storage detail and must not surface anywhere on the CLI.
     let properties = properties_to_json(node);
+    // Object is the flattened shape; String only the malformed-JSON fallback.
+    // Any other variant is unreachable, but print rather than silently drop it.
     let has_properties = match &properties {
         serde_json::Value::Object(map) => !map.is_empty(),
         serde_json::Value::String(s) => !s.is_empty() && s != "{}",
@@ -87,7 +89,7 @@ fn write_human_node(node: &NodeData) {
     }
 }
 
-/// Flatten a node's stored properties into the flat API shape.
+/// Parse the wire `properties` string into the flat API shape.
 ///
 /// Storage nests properties under the schema id: `{"task": {"status": "open"}}`.
 /// That nesting is a storage-layer concern and must never be observable on the
@@ -96,51 +98,17 @@ fn write_human_node(node: &NodeData) {
 /// names too. A consumer can then `jq '.properties.status'` with no second
 /// parse and no knowledge of the schema id.
 ///
-/// Mirrors `flatten_properties_for_api` in `nodespace-types::convert`, which is
-/// the same contract the frontend receives via `node_to_typed_value`. It is not
-/// reused directly because that function operates on a `Node`, while the CLI
-/// only ever holds the gRPC `NodeData` — whose `properties` is a JSON-encoded
-/// string (see `node_service.proto`). Keep the two in step.
-///
-/// `_`-prefixed keys (`_schema_version`, and sibling namespaces like `_seed`)
-/// are internal and are dropped in both branches. Dormant namespaces left over
-/// from a previous type change are likewise not exposed.
-fn flatten_properties(properties: &serde_json::Value, node_type: &str) -> serde_json::Value {
-    let Some(props_obj) = properties.as_object() else {
-        return properties.clone();
-    };
-
-    // Preferred: the namespace matching this node's type.
-    if let Some(type_props) = props_obj.get(node_type).and_then(|v| v.as_object()) {
-        return serde_json::Value::Object(
-            type_props
-                .iter()
-                .filter(|(k, _)| !k.starts_with('_'))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        );
-    }
-
-    // Fallback: already-flat properties (no namespace for this type). Nested
-    // objects are dropped because they can only be other types' namespaces —
-    // exposing them would leak the storage shape this function exists to hide.
-    serde_json::Value::Object(
-        props_obj
-            .iter()
-            .filter(|(k, v)| !v.is_object() && !k.starts_with('_'))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-    )
-}
-
-/// Parse the wire `properties` string into the flat API shape.
+/// The rule itself lives in `nodespace_types::flatten_namespaced_properties`,
+/// shared with the `Node`-based frontend path so the two cannot drift. This
+/// wrapper exists only because the CLI holds the gRPC `NodeData`, whose
+/// `properties` is a JSON-encoded string (see `node_service.proto`).
 ///
 /// Falls back to the raw string if it doesn't parse; in practice this branch is
 /// unreachable because the daemon serializes via `serde_json::Value::to_string`,
 /// but we'd rather degrade than panic if that contract ever breaks.
 fn properties_to_json(node: &NodeData) -> serde_json::Value {
     match serde_json::from_str::<serde_json::Value>(&node.properties) {
-        Ok(parsed) => flatten_properties(&parsed, &node.node_type),
+        Ok(parsed) => nodespace_types::flatten_namespaced_properties(&parsed, &node.node_type),
         Err(_) => serde_json::Value::String(node.properties.clone()),
     }
 }
@@ -217,16 +185,19 @@ mod tests {
         assert!(json["properties"].get("task").is_none());
     }
 
-    /// `_`-prefixed keys are internal, matching the frontend contract.
+    /// `_`-prefixed keys are internal in the fallback branch too, where the
+    /// properties carry no namespace for this node's type.
     #[test]
-    fn node_to_json_hides_underscore_prefixed_internals() {
+    fn node_to_json_hides_underscore_prefixed_internals_when_already_flat() {
         let mut node = sample_node();
-        node.node_type = "task".into();
-        node.properties = r#"{"task":{"_schema_version":1,"status":"open"}}"#.into();
+        node.node_type = "text".into();
+        node.properties = r#"{"_schema_version":1,"_seed":{"v":"x"},"note":"keep"}"#.into();
 
         let json = node_to_json(&node);
 
+        assert_eq!(json["properties"]["note"], "keep");
         assert!(json["properties"].get("_schema_version").is_none());
+        assert!(json["properties"].get("_seed").is_none());
     }
 
     /// Sibling namespaces (e.g. a seeded node's `_seed`) coexist with the type
@@ -303,7 +274,11 @@ mod tests {
     /// leaked namespace — and human mode omits the line entirely.
     #[test]
     fn flatten_yields_empty_object_when_only_internals_present() {
-        let flat = flatten_properties(&serde_json::json!({"task": {"_schema_version": 1}}), "task");
+        let flat = properties_to_json(&NodeData {
+            node_type: "task".into(),
+            properties: r#"{"task":{"_schema_version":1}}"#.into(),
+            ..sample_node()
+        });
         assert_eq!(flat, serde_json::json!({}));
     }
 }
