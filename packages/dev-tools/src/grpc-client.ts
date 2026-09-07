@@ -96,44 +96,46 @@ export const DEV_PROXY_CHANNEL_OPTIONS: grpc.ClientOptions = {
  * ---------------------------------------------------------------------------
  * Why the watch stream needs a connection of its own
  * ---------------------------------------------------------------------------
- * HTTP/2 accounts flow control per connection as well as per stream, and the
- * connection window opens at 65,535 bytes. Parking a long-lived server-
- * streaming call on the connection the unary RPCs share stops that window from
- * being replenished: once roughly 64 KiB of response data has arrived, every
- * later RPC on the connection hangs forever. The channel still reports READY
- * and the daemon sits idle — the requests simply never reach it.
+ * Parking a long-lived server-streaming call on the HTTP/2 connection the
+ * unary RPCs share wedges that connection under Bun: after roughly 64 KiB of
+ * response data has arrived, every later RPC on it hangs forever. The channel
+ * still reports READY and the daemon sits idle — the requests never reach it.
  *
- * Measured through the dev-proxy against the real daemon, with one `WatchNodes`
- * stream open on the shared channel: `GetAllSchemas` (~21 KB each) completed 3
- * times — 62,856 bytes, just under the 65,535-byte window — and every call
- * after that hung. `GetDaemonVersion` (~19 bytes) ran 400/400 because it never
- * approached the window. Moving the watch stream to its own connection: 200/200
- * calls and 4.19 MB, i.e. 66x past the point that used to wedge.
+ * This is a Bun defect, not HTTP/2 semantics. The same grpc-js, daemon, socket
+ * and channel options, varying ONLY the runtime, with a `WatchNodes` stream
+ * open on the shared channel:
  *
- * The obvious lever does not work. gRPC-js exposes
- * `grpc-node.flow_control_window` and, on `remoteSettings`, calls
- * `session.setLocalWindowSize()` to widen the connection window
- * (`@grpc/grpc-js/build/src/transport.js`). Bun 1.2.16 provides that method and
- * it does not throw, but it has no effect here — raising the window to 16 MiB
- * left the wedge at the same 3 calls and the same byte count. So the window
- * cannot be grown from the client; the stream has to stop sharing the
- * connection.
+ *   Bun 1.2.16     3/40 calls, 62,856 bytes, then wedged
+ *   Node v26.8.1   40/40 calls, 838,080 bytes, clean
  *
- * `grpc.use_local_subchannel_pool` is gRPC-js's supported way to ask for that:
- * a channel carrying it draws from a per-channel subchannel pool instead of the
- * process-global one (`internal-channel.js` passes it to `getSubchannelPool`),
- * so this client dials its own connection rather than being pooled onto the one
- * the unary RPCs use. Each then has its own connection window, and the unary
- * one is replenished normally because no stream is parked on it.
+ * Node never wedges, so grpc-js's own flow-control handling is not at fault.
+ * The 62,856-byte stopping point sits just under HTTP/2's default 65,535-byte
+ * connection window, which is why byte volume rather than call count decides
+ * when it hits: `GetAllSchemas` (~21 KB) wedged on the 4th call, while
+ * `GetDaemonVersion` (~19 bytes) ran 400/400. Whether Bun fails to emit its own
+ * WINDOW_UPDATEs or mishandles hyper's, we did not determine — an in-process
+ * grpc-js stub server does NOT reproduce the wedge, only the real tonic/hyper
+ * daemon does, so something the two servers do differently is also involved.
  *
- * Scope, stated as far as it was actually verified: the wedge reproduces
- * reliably for this Bun proxy against the tonic/hyper daemon, and NOT against
- * an in-process gRPC-js stub server — a stub-based regression test passed even
- * with this fix removed, which is why `watch-stream-isolation.e2e.ts` drives
- * the real daemon instead. Which side omits the WINDOW_UPDATE was not pinned
- * down; only that separating the connections fixes it. The production Tauri
- * path (Rust/tonic on both ends) has never shown this, so the split is applied
- * only to the dev-proxy.
+ * Widening the window from the client does not help. gRPC-js exposes
+ * `grpc-node.flow_control_window` and calls `session.setLocalWindowSize()` on
+ * `remoteSettings` (`@grpc/grpc-js/build/src/transport.js`); Bun provides that
+ * method and it does not throw, but raising the window to 16 MiB left the wedge
+ * at the same 3 calls and the same byte count. So the stream has to stop
+ * sharing the connection.
+ *
+ * `grpc.use_local_subchannel_pool` is gRPC-js's supported way to ask for that.
+ * `internal-channel.js` passes it to `getSubchannelPool`, which returns a fresh
+ * `SubchannelPool` instead of the process-global one, so this client can never
+ * be pooled onto the connection the unary clients share — separation by
+ * construction rather than by incidentally-unequal options. Verified: 200/200
+ * unary calls and 4.19 MB through the proxy, versus 3 before.
+ *
+ * Switching the proxy to Node would also avoid the defect, but that trades a
+ * one-line channel option for a runtime split against this repo's Bun-only
+ * standard, and would change how the dev-proxy runs for developers rather than
+ * only in tests. The production Tauri path (Rust/tonic on both ends, no Bun) is
+ * unaffected either way, so this split stays dev-proxy-specific.
  */
 export const WATCH_CHANNEL_OPTIONS: grpc.ClientOptions = {
   ...DEV_PROXY_CHANNEL_OPTIONS,
