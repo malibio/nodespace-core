@@ -190,8 +190,14 @@
   // rebuild a row that matches the dangling key and pop the editor open unbidden
   // over the new edge, pre-filled with the draft from the old one. Drop the key
   // and its draft the moment resolution misses, so a closed editor stays closed.
+  //
+  // Terminates on the first run: it only writes when `editingKey` is set and
+  // unresolvable, and nulling the key makes that guard false. `load()` blanking
+  // `view` cannot trip it either — that path calls `resetTransient()`, which has
+  // already cleared both keys, so there is no open editor left to close.
   $effect(() => {
     if (editingKey && !editing) {
+      // Read the draft key BEFORE nulling the state it is derived from.
       const stale = draftKey(editingKey.groupKey, editingKey.rowId);
       editingKey = null;
       clearDraftKey(stale);
