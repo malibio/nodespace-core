@@ -81,6 +81,14 @@ pub struct SetupState {
     /// success. Used solely to decide whether a failure is "new" (surface
     /// it) or a repeat of an already-known failure (log quietly, no event).
     pub skill_install_failed: bool,
+    /// Agents the last successful install actually wrote files into. Read
+    /// back by [`install_skill`]'s idempotency guard so the answer survives
+    /// past the run that produced it -- without this, every later launch
+    /// (and the Settings page, which calls the same status command) saw an
+    /// empty list once `skill_installed` was already true, with no way to
+    /// tell which harnesses actually have the skill without checking the
+    /// filesystem by hand.
+    pub agents_installed: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +97,12 @@ pub struct SkillSetupResult {
     pub success: bool,
     /// Agents the skill was installed into (e.g. ["claude-code"]).
     pub agents_installed: Vec<String>,
+    /// Agents whose directory was detected but had nothing to install
+    /// (an incomplete package), each paired with the installer's own
+    /// explanation. Distinct from an agent simply not being present at
+    /// all -- that's the normal, unremarkable case for a harness the user
+    /// doesn't use and isn't listed here.
+    pub agents_skipped: Vec<SkippedAgent>,
     /// true if `nodespace` CLI was found on PATH.
     pub cli_on_path: bool,
     /// Human-readable warning shown in the UI when cli_on_path is false.
@@ -98,6 +112,25 @@ pub struct SkillSetupResult {
     /// particular failure (vs. a persisted repeat of an already-known one).
     /// Always false when `success` is true. See module docs.
     pub failure_is_new: bool,
+}
+
+/// One entry of [`SkillSetupResult::agents_skipped`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedAgent {
+    pub agent: String,
+    pub reason: String,
+}
+
+/// The three-state outcome [`parse_installer_output`] extracts from a
+/// finished installer invocation: which agents actually got files, which
+/// were detected but had nothing to install, and — implicitly, by omission
+/// from both — which weren't present at all (not tracked here; "not
+/// present" needs no representation beyond simply not appearing).
+#[derive(Debug, Default, PartialEq)]
+struct InstallOutcome {
+    installed: Vec<String>,
+    skipped: Vec<SkippedAgent>,
 }
 
 fn setup_path() -> Result<PathBuf> {
@@ -117,11 +150,7 @@ pub async fn read_setup_state() -> Result<SetupState> {
 }
 
 pub async fn reset_skill_state() -> Result<()> {
-    write_setup_state(&SetupState {
-        skill_installed: false,
-        skill_install_failed: false,
-    })
-    .await
+    write_setup_state(&SetupState::default()).await
 }
 
 async fn write_setup_state(state: &SetupState) -> Result<()> {
@@ -252,7 +281,8 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
                 let cli_on_path = check_cli_on_path();
                 return SkillSetupResult {
                     success: true,
-                    agents_installed: vec![],
+                    agents_installed: state.agents_installed,
+                    agents_skipped: vec![],
                     cli_on_path,
                     cli_warning: cli_warning(cli_on_path),
                     error: None,
@@ -289,19 +319,24 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
             .await
         }
         Ok(Err(exec_err)) => finish_failed(previously_failed, cli_on_path, exec_err).await,
-        Ok(Ok(agents)) => {
-            // Persist the setup flag so we don't re-run on the next launch,
-            // and clear any previously-recorded failure.
+        Ok(Ok(outcome)) => {
+            // Persist the setup flag and which agents actually got files, so
+            // both the next launch's idempotency check and the Settings page
+            // (which reads back through that same guard) see the real list
+            // instead of an empty one -- and clear any previously-recorded
+            // failure.
             let state = SetupState {
                 skill_installed: true,
                 skill_install_failed: false,
+                agents_installed: outcome.installed.clone(),
             };
             if let Err(e) = write_setup_state(&state).await {
                 tracing::warn!("Failed to persist setup state: {:#}", e);
             }
             SkillSetupResult {
                 success: true,
-                agents_installed: agents,
+                agents_installed: outcome.installed,
+                agents_skipped: outcome.skipped,
                 cli_on_path,
                 cli_warning: cli_warning(cli_on_path),
                 error: None,
@@ -320,9 +355,14 @@ async fn finish_failed(
     cli_on_path: bool,
     error: String,
 ) -> SkillSetupResult {
+    // agents_installed cleared, not preserved from an earlier success --
+    // skill_installed: false already means "nothing is currently confirmed
+    // installed," and a stale list under that flag would be misleading to
+    // anything reading the file directly.
     let state = SetupState {
         skill_installed: false,
         skill_install_failed: true,
+        agents_installed: vec![],
     };
     if let Err(e) = write_setup_state(&state).await {
         tracing::warn!("Failed to persist setup state: {:#}", e);
@@ -338,6 +378,7 @@ async fn finish_failed(
     SkillSetupResult {
         success: false,
         agents_installed: vec![],
+        agents_skipped: vec![],
         cli_on_path,
         cli_warning: cli_warning(cli_on_path),
         error: Some(error),
@@ -488,7 +529,7 @@ fn compiled_installer_command(binary: &Path, resource_root: &Path) -> Command {
 /// an error string on non-zero exit. Dispatches on [`Installer`]: the
 /// compiled binary needs no runtime fallthrough at all, the script needs
 /// [`run_installer_with_runtimes`]'s `bun`-then-`node` logic.
-fn run_skill_installer(installer: &Installer) -> Result<Vec<String>, String> {
+fn run_skill_installer(installer: &Installer) -> Result<InstallOutcome, String> {
     match installer {
         Installer::Compiled {
             binary,
@@ -521,7 +562,7 @@ fn run_skill_installer(installer: &Installer) -> Result<Vec<String>, String> {
 fn run_installer_with_runtimes(
     installer_path: &Path,
     runtimes: &[&str],
-) -> Result<Vec<String>, String> {
+) -> Result<InstallOutcome, String> {
     let mut output = None;
     for runtime in runtimes {
         match installer_command(installer_path, runtime).output() {
@@ -552,7 +593,7 @@ fn run_installer_with_runtimes(
 /// [`Installer::Compiled`] and [`Installer::Script`] — the underlying
 /// `packages/skill` `install()` call and its console output are identical
 /// either way, only how the process got launched differs.
-fn parse_installer_output(output: std::process::Output) -> Result<Vec<String>, String> {
+fn parse_installer_output(output: std::process::Output) -> Result<InstallOutcome, String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -574,24 +615,49 @@ fn parse_installer_output(output: std::process::Output) -> Result<Vec<String>, S
         ));
     }
 
-    // Parse agent names from success lines like "✓ claude-code: installed 2 file(s)".
-    // Filter on the original line first so file-path sub-lines ("  → /path/...")
-    // and diagnostic text ("Checked:", "To install manually...") are excluded.
-    let agents = stdout
+    // A "marker: agent[: rest]" line, split on the first `:` after the
+    // marker -- shared by both the ✓ (installed) and ⚠ (skipped) cases
+    // below, which differ only in which marker and whether there's a
+    // reason after the agent name.
+    fn agent_after_marker(line: &str, marker: char) -> Option<&str> {
+        let rest = line.trim_start();
+        let rest = rest.strip_prefix(marker)?.trim_start();
+        let agent = rest.split(':').next()?.trim();
+        if agent.is_empty() {
+            None
+        } else {
+            Some(agent)
+        }
+    }
+
+    // "✓ claude-code: installed 2 file(s)" -- filtered on the original line
+    // first so file-path sub-lines ("  → /path/...") don't also match.
+    let installed = stdout
         .lines()
-        .filter(|line| line.trim_start().starts_with('✓'))
+        .filter_map(|line| agent_after_marker(line, '✓'))
+        .map(str::to_string)
+        .collect();
+
+    // "⚠ claude-code: detected but no files to install (package may be incomplete)"
+    let skipped = stdout
+        .lines()
         .filter_map(|line| {
-            let line = line.trim_start_matches(['✓', ' ', '\t']);
-            let agent = line.split(':').next()?.trim();
-            if !agent.is_empty() {
-                Some(agent.to_string())
-            } else {
-                None
-            }
+            let agent = agent_after_marker(line, '⚠')?;
+            let reason = line
+                .trim_start()
+                .strip_prefix('⚠')?
+                .trim_start()
+                .split_once(':')?
+                .1
+                .trim();
+            Some(SkippedAgent {
+                agent: agent.to_string(),
+                reason: reason.to_string(),
+            })
         })
         .collect();
 
-    Ok(agents)
+    Ok(InstallOutcome { installed, skipped })
 }
 
 pub(crate) fn cli_warning(cli_on_path: bool) -> Option<String> {
@@ -862,9 +928,10 @@ mod tests {
             .env("PATH", "/usr/bin:/bin")
             .output()
             .expect("compiled binary must run standalone");
-        let agents = parse_installer_output(output).expect("install succeeds with zero runtime");
+        let outcome = parse_installer_output(output).expect("install succeeds with zero runtime");
 
-        assert_eq!(agents, vec!["claude-code".to_string()]);
+        assert_eq!(outcome.installed, vec!["claude-code".to_string()]);
+        assert!(outcome.skipped.is_empty());
         let installed_skill = fake_home.path().join(".claude/skills/nodespace/SKILL.md");
         assert!(
             installed_skill.exists(),
@@ -939,9 +1006,75 @@ mod tests {
 
         assert_eq!(
             result,
-            Ok(vec!["claude-code".to_string()]),
+            Ok(InstallOutcome {
+                installed: vec!["claude-code".to_string()],
+                skipped: vec![],
+            }),
             "expected the fallback runtime to run and report success"
         );
+    }
+
+    /// Runs a throwaway shell script (the only way to get a real
+    /// `std::process::Output` — `ExitStatus` has no public success
+    /// constructor) that prints exactly the mixed stdout a real installer
+    /// invocation can produce, to exercise `parse_installer_output`'s
+    /// three-way split without needing a real installer run.
+    fn fake_output(stdout_script: &str) -> std::process::Output {
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s\\n' {}", stdout_script))
+            .output()
+            .expect("sh must be available to run this test's fixture script")
+    }
+
+    /// The bug this exists to prevent: a harness that was correctly
+    /// detected and installed into read as a failure because nothing
+    /// surfaced which agents actually got the skill. Confirms both
+    /// installed agents are captured, in the order they appeared.
+    #[test]
+    fn parse_installer_output_captures_every_installed_agent() {
+        let output = fake_output(
+            "'✓ claude-code: installed 3 file(s)' '  → /fake/SKILL.md' '✓ gemini: installed 4 file(s)'",
+        );
+        let outcome = parse_installer_output(output).expect("both agents installed cleanly");
+
+        assert_eq!(
+            outcome.installed,
+            vec!["claude-code".to_string(), "gemini".to_string()]
+        );
+        assert!(outcome.skipped.is_empty());
+    }
+
+    /// The detected-but-skipped state must carry the installer's own
+    /// reason text, and must NOT be confused with an installed agent just
+    /// because both lines mention an agent name.
+    #[test]
+    fn parse_installer_output_captures_a_skipped_agent_with_its_reason() {
+        let output = fake_output(
+            "'✓ claude-code: installed 2 file(s)' '⚠ codex: detected but no files to install (package may be incomplete)'",
+        );
+        let outcome = parse_installer_output(output).expect("a skip is not a failure");
+
+        assert_eq!(outcome.installed, vec!["claude-code".to_string()]);
+        assert_eq!(outcome.skipped.len(), 1);
+        assert_eq!(outcome.skipped[0].agent, "codex");
+        assert_eq!(
+            outcome.skipped[0].reason,
+            "detected but no files to install (package may be incomplete)"
+        );
+    }
+
+    /// A "not detected" line (install.ts's report for a configured agent
+    /// that simply isn't present) must not be picked up by either the ✓ or
+    /// ⚠ parser — it carries neither marker, by design, since "not present"
+    /// needs no representation beyond not appearing in either list at all.
+    #[test]
+    fn parse_installer_output_ignores_a_not_detected_line() {
+        let output = fake_output("'✓ claude-code: installed 1 file(s)' '  opencode: not detected'");
+        let outcome = parse_installer_output(output).expect("one real agent installed");
+
+        assert_eq!(outcome.installed, vec!["claude-code".to_string()]);
+        assert!(outcome.skipped.is_empty());
     }
 
     /// When no runtime in the list resolves, the error names both `bun` and

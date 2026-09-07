@@ -14,9 +14,15 @@
     pathAlreadyConfigured: boolean;
   }
 
+  interface SkippedAgent {
+    agent: string;
+    reason: string;
+  }
+
   interface SkillSetupResult {
     success: boolean;
     agentsInstalled: string[];
+    agentsSkipped: SkippedAgent[];
     cliOnPath: boolean;
     cliWarning: string | null;
     error: string | null;
@@ -84,7 +90,10 @@
         const installed = result.agentsInstalled.length > 0
           ? `Installed into: ${result.agentsInstalled.join(', ')}.`
           : 'Already up to date — no changes needed.';
-        skillFeedback = { ok: true, message: installed };
+        const skipped = result.agentsSkipped.length > 0
+          ? ` ${result.agentsSkipped.map((s) => `${s.agent}: ${s.reason}`).join('; ')}.`
+          : '';
+        skillFeedback = { ok: true, message: installed + skipped };
       } else {
         skillFeedback = { ok: false, message: result.error ?? 'Skill installation failed.' };
       }
