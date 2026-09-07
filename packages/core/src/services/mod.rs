@@ -6,7 +6,6 @@
 //! - `NodeEmbeddingService` - Embedding generation and semantic search (`nlp` feature)
 //! - `EmbeddingProcessor` - Background task for processing stale root embeddings (`nlp` feature)
 //! - `NodeAccessor` - Read-only trait for behavior-driven node access
-//! - `MigrationRegistry` - Schema migration infrastructure (for future use)
 //! - `QueryService` - Query execution with SQL translation
 //! - `CollectionService` - Collection path parsing and membership management
 //!
@@ -25,8 +24,6 @@ pub mod embedding_processor;
 #[cfg(feature = "nlp")]
 pub mod embedding_service;
 pub mod error;
-pub mod migration_registry;
-pub mod migrations;
 pub mod node_service;
 pub mod query_service;
 
@@ -41,7 +38,7 @@ pub mod query_service;
 /// - **Read-only**: Behaviors cannot mutate through this interface
 /// - **Minimal**: Only the methods behaviors actually need (no `get_nodes_in_subtree`)
 /// - **Trait-based**: Enables mocking in tests without a real database
-/// - **`NodeService` implements this**: Ensures all business rules (migrations, mentions) apply
+/// - **`NodeService` implements this**: Ensures all business rules (mentions, etc.) apply
 ///
 /// ## Circular Dependency Prevention
 ///
@@ -185,7 +182,6 @@ pub use embedding_processor::{
 #[cfg(feature = "nlp")]
 pub use embedding_service::{NodeEmbeddingService, EMBEDDING_DIMENSION};
 pub use error::NodeServiceError;
-pub use migration_registry::{MigrationRegistry, MigrationTransform};
 pub use node_service::{
     flatten_subtree_content, CompletenessResult, CreateNodeParams, NodeService, SubtreeData,
     DEFAULT_QUERY_LIMIT,

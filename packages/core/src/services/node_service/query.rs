@@ -65,31 +65,9 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // OPTIMIZATION: Pre-fetch schemas for all unique node types in the result set.
-        // This avoids N*2 database calls (one per node for backfill + one for migration).
-        // Instead, we do at most K calls where K = number of unique node types.
-        let unique_types: std::collections::HashSet<&str> =
-            nodes.iter().map(|n| n.node_type.as_str()).collect();
-
-        let mut schema_cache: std::collections::HashMap<String, Option<serde_json::Value>> =
-            std::collections::HashMap::new();
-        for node_type in unique_types {
-            let schema = self.get_schema_for_type(node_type).await?;
-            schema_cache.insert(node_type.to_string(), schema);
-        }
-
-        // Apply migrations using cached schemas
-        let mut migrated_nodes = Vec::new();
-        for mut node in nodes {
-            self.backfill_schema_version_with_cache(&mut node, &schema_cache);
-            self.apply_lazy_migration_with_cache(&mut node, &schema_cache)
-                .await?;
-            migrated_nodes.push(node);
-        }
-
         // Apply property filters in-memory if present
         let result_nodes = if let Some(ref property_filters) = filter.property_filters {
-            let mut filtered = Self::apply_property_filters(migrated_nodes, property_filters);
+            let mut filtered = Self::apply_property_filters(nodes, property_filters);
             // Apply offset in memory
             if let Some(offset) = filter.offset {
                 if offset < filtered.len() {
@@ -104,7 +82,7 @@ impl NodeService {
             }
             filtered
         } else {
-            migrated_nodes
+            nodes
         };
 
         Ok(result_nodes)
@@ -305,19 +283,11 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Apply migrations to results
-        let mut migrated_nodes = Vec::new();
-        for mut node in nodes {
-            self.backfill_schema_version(&mut node).await?;
-            self.apply_lazy_migration(&mut node).await?;
-            migrated_nodes.push(node);
-        }
-
-        Ok(migrated_nodes)
+        Ok(nodes)
     }
 
-    /// Count nodes matching `query` without fetching (or migrating) the
-    /// matching records — the O(1)-response-size counterpart to
+    /// Count nodes matching `query` without fetching the matching
+    /// records — the O(1)-response-size counterpart to
     /// `query_nodes_simple`, for callers (e.g. `nodespace diagnostics`) that
     /// only need a total. Mirrors `query_nodes_simple`'s id-lookup priority
     /// tier so the two never disagree on what an `id`-only query means, then

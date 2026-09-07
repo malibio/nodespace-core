@@ -1,5 +1,13 @@
 //! Versioned DDL migration runner.
 //!
+//! This is the SQL schema bootstrap — how a database gets its tables at all — and is
+//! *not* the kind of migration the project's zero-users rule prohibits. That rule bans
+//! **data** migrations: startup backfills and format upgrades that carry existing rows
+//! from an old shape to a new one. Under zero users the answer to "how do existing
+//! databases get the new shape?" is to change the shape and reset the database, never
+//! to write a backfill. A fresh database still needs its tables created, which is what
+//! this runner does. The shared word "migration" is the only thing the two have in common.
+//!
 //! Schema changes are tracked via SQLite's `PRAGMA user_version` (an integer stored
 //! in the database file header). On startup, `run` compares the database's current
 //! version against the known migrations and applies any with a higher version, in
