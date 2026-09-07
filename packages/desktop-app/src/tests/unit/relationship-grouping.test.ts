@@ -4,6 +4,10 @@ import {
   groupDisplayLabel,
   groupEdgeColumns,
   groupLayout,
+  findGroupByKey,
+  findRowByKey,
+  groupSupportsEdgeEditing,
+  partitionGroups,
   humanizeName,
   type RawNodeRelationships,
   type RawRelationshipGroup
@@ -296,5 +300,308 @@ describe('relationship-grouping: buildRelationshipsView', () => {
     const view = buildRelationshipsView(raw);
     expect(view.groups[0].label).toBe('Tasks');
     expect(view.groups[0].rows[0].label).toBe('t-42');
+  });
+});
+
+describe('relationship-grouping: partitionGroups', () => {
+  const relatedNode = (id: string) => ({
+    id,
+    nodeType: 'adr',
+    title: id,
+    contentPreview: '',
+    edgeProperties: {}
+  });
+
+  function viewOf(groups: RawRelationshipGroup[]) {
+    return buildRelationshipsView({ nodeId: 'adr-1', nodeType: 'adr', groups }).groups;
+  }
+
+  it('gives a section only to groups that have edges, in either direction', () => {
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes', count: 1, related: [relatedNode('adr-2')] }),
+      makeGroup({
+        relationshipName: 'supersedes',
+        direction: 'in',
+        reverseName: 'superseded_by',
+        count: 1,
+        related: [relatedNode('adr-9')]
+      })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(2);
+    expect(addable).toHaveLength(0);
+  });
+
+  it('folds empty OUTBOUND groups into the add chooser rather than sections', () => {
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes' }),
+      makeGroup({ relationshipName: 'depends_on' })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(0);
+    expect(addable.map((g) => g.relationshipName)).toEqual(['supersedes', 'depends_on']);
+  });
+
+  it('drops empty INBOUND groups entirely — they have no Add to justify a section', () => {
+    const groups = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        direction: 'in',
+        reverseName: 'superseded_by'
+      })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(0);
+    expect(addable).toHaveLength(0);
+  });
+
+  it('renders the six-declared-relationships-no-edges case as zero sections and one chooser', () => {
+    // The issue's benchmark: an `adr` with four outbound and two inbound
+    // declared relationships and no edges must not produce six empty sections.
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes' }),
+      makeGroup({ relationshipName: 'depends_on' }),
+      makeGroup({ relationshipName: 'implements' }),
+      makeGroup({ relationshipName: 'authored_by' }),
+      makeGroup({ relationshipName: 'supersedes', direction: 'in', reverseName: 'superseded_by' }),
+      makeGroup({ relationshipName: 'relates_to', direction: 'in', reverseName: 'related_from' })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated).toHaveLength(0);
+    expect(addable).toHaveLength(4);
+  });
+
+  it('offers a populated outbound group its own section AND keeps other empty types addable', () => {
+    const groups = viewOf([
+      makeGroup({ relationshipName: 'supersedes', count: 1, related: [relatedNode('adr-2')] }),
+      makeGroup({ relationshipName: 'depends_on' })
+    ]);
+    const { populated, addable } = partitionGroups(groups);
+    expect(populated.map((g) => g.relationshipName)).toEqual(['supersedes']);
+    expect(addable.map((g) => g.relationshipName)).toEqual(['depends_on']);
+  });
+});
+
+describe('relationship-grouping: groupSupportsEdgeEditing', () => {
+  function groupView(overrides: Partial<RawRelationshipGroup>) {
+    return buildRelationshipsView({
+      nodeId: 'n-1',
+      nodeType: 'collection',
+      groups: [makeGroup(overrides)]
+    }).groups[0];
+  }
+
+  it('is true for an outbound group whose schema declares edge fields', () => {
+    const group = groupView({
+      edgeFields: [{ name: 'access', type: 'string' }]
+    });
+    expect(groupSupportsEdgeEditing(group)).toBe(true);
+  });
+
+  it('is false when the schema declares no edge fields — nothing to edit', () => {
+    expect(groupSupportsEdgeEditing(groupView({ edgeFields: null }))).toBe(false);
+    expect(groupSupportsEdgeEditing(groupView({ edgeFields: [] }))).toBe(false);
+  });
+
+  it('is false for an inbound group even when it declares edge fields', () => {
+    // The edge belongs to the other node's schema; it is edited from there.
+    const group = groupView({
+      direction: 'in',
+      reverseName: 'members',
+      edgeFields: [{ name: 'access', type: 'string' }]
+    });
+    expect(groupSupportsEdgeEditing(group)).toBe(false);
+  });
+
+  it('is false for ad-hoc edge keys with no declared field to render an input from', () => {
+    const group = groupView({
+      edgeFields: null,
+      count: 1,
+      related: [
+        {
+          id: 'p-1',
+          nodeType: 'person',
+          title: 'Ada',
+          contentPreview: '',
+          edgeProperties: { note: 'ad-hoc' }
+        }
+      ]
+    });
+    // The group still renders as a table (it has edge data) but offers no editor.
+    expect(group.layout).toBe('table');
+    expect(groupSupportsEdgeEditing(group)).toBe(false);
+  });
+});
+
+describe('relationship-grouping: findGroupByKey / findRowByKey', () => {
+  const related = (id: string, edge: Record<string, unknown> = {}) => ({
+    id,
+    nodeType: 'adr',
+    title: id,
+    contentPreview: '',
+    edgeProperties: edge
+  });
+
+  function viewOf(groups: RawRelationshipGroup[]) {
+    return buildRelationshipsView({ nodeId: 'adr-1', nodeType: 'adr', groups }).groups;
+  }
+
+  const populated = () =>
+    viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: 2,
+        related: [related('adr-2', { reason: 'first' }), related('adr-3', { reason: 'second' })]
+      })
+    ]);
+
+  it('resolves a group by its stable key', () => {
+    const groups = populated();
+    const key = groups[0].key;
+    expect(findGroupByKey(groups, key)).toBe(groups[0]);
+  });
+
+  it('returns null for a null key or a key no longer present', () => {
+    const groups = populated();
+    expect(findGroupByKey(groups, null)).toBeNull();
+    expect(findGroupByKey(groups, 'out:removed:adr')).toBeNull();
+    expect(findGroupByKey([], groups[0].key)).toBeNull();
+  });
+
+  it('resolves a (group key, row id) pair to the CURRENT objects, not a snapshot', () => {
+    // The staleness this guards: a reload rebuilds the whole object graph, so a
+    // resolver must hand back the new row carrying the new edge values.
+    const before = populated();
+    const key = before[0].key;
+
+    const after = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: 2,
+        related: [related('adr-2', { reason: 'edited' }), related('adr-3', { reason: 'second' })]
+      })
+    ]);
+
+    const resolved = findRowByKey(after, key, 'adr-2');
+    expect(resolved?.row.edgeValues.reason).toBe('edited');
+    // Identity check: it is the post-reload row, not the one we started from.
+    expect(resolved?.row).not.toBe(before[0].rows[0]);
+    expect(resolved?.group).toBe(after[0]);
+  });
+
+  it('returns null once the row it points at is gone, so an open editor closes', () => {
+    const groups = populated();
+    const key = groups[0].key;
+    // The edge was removed by another action while the editor was open.
+    const afterRemoval = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: 1,
+        related: [related('adr-3', { reason: 'second' })]
+      })
+    ]);
+    expect(findRowByKey(afterRemoval, key, 'adr-2')).toBeNull();
+  });
+
+  it('returns null when the whole group is gone, not just the row', () => {
+    const groups = populated();
+    expect(findRowByKey([], groups[0].key, 'adr-2')).toBeNull();
+  });
+
+  it('returns null for a missing key or row id', () => {
+    const groups = populated();
+    expect(findRowByKey(groups, null, 'adr-2')).toBeNull();
+    expect(findRowByKey(groups, groups[0].key, null)).toBeNull();
+  });
+
+  it('does not confuse same-named groups facing opposite directions', () => {
+    // Both groups share `relationshipName`; only the key distinguishes them, and
+    // an editor keyed to the outbound one must never resolve to the inbound.
+    const groups = viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        count: 1,
+        related: [related('adr-2')]
+      }),
+      makeGroup({
+        relationshipName: 'supersedes',
+        direction: 'in',
+        reverseName: 'superseded_by',
+        count: 1,
+        related: [related('adr-9')]
+      })
+    ]);
+    const [outbound, inbound] = groups;
+    expect(outbound.key).not.toBe(inbound.key);
+    expect(findGroupByKey(groups, outbound.key)?.direction).toBe('out');
+    expect(findGroupByKey(groups, inbound.key)?.direction).toBe('in');
+    // The outbound group holds adr-2, the inbound adr-9 — no cross-resolution.
+    expect(findRowByKey(groups, outbound.key, 'adr-9')).toBeNull();
+    expect(findRowByKey(groups, inbound.key, 'adr-2')).toBeNull();
+  });
+});
+
+describe('relationship-grouping: row keys are reproducible, so stale keys must be dropped', () => {
+  const related = (id: string, edge: Record<string, unknown> = {}) => ({
+    id,
+    nodeType: 'adr',
+    title: id,
+    contentPreview: '',
+    edgeProperties: edge
+  });
+
+  function viewOf(groups: RawRelationshipGroup[]) {
+    return buildRelationshipsView({ nodeId: 'adr-1', nodeType: 'adr', groups }).groups;
+  }
+
+  const withTargets = (targets: string[]) =>
+    viewOf([
+      makeGroup({
+        relationshipName: 'supersedes',
+        edgeFields: [{ name: 'reason', type: 'string' }],
+        count: targets.length,
+        related: targets.map((id) => related(id))
+      })
+    ]);
+
+  /**
+   * A row id is the TARGET NODE's id and a group key is
+   * `direction:name:targetType` — neither is unique to a particular edge. So
+   * deleting an edge and re-adding the same target reproduces a row that a
+   * previously-held key resolves against again.
+   *
+   * This is why the modal must forget `editingKey` the moment resolution
+   * misses, rather than relying on the key staying unresolvable: otherwise a
+   * re-add silently reopens the editor over a brand-new edge, carrying the
+   * deleted edge's draft.
+   */
+  it('resolves a stale key again once the same target is re-added', () => {
+    const before = withTargets(['adr-2', 'adr-3']);
+    const groupKey = before[0].key;
+    expect(findRowByKey(before, groupKey, 'adr-2')).not.toBeNull();
+
+    // adr-2's edge is deleted — the key stops resolving.
+    const afterDelete = withTargets(['adr-3']);
+    expect(findRowByKey(afterDelete, groupKey, 'adr-2')).toBeNull();
+
+    // The same target is linked again. The key is reproducible, so it resolves
+    // once more — to a DIFFERENT row object representing a different edge.
+    const afterReAdd = withTargets(['adr-3', 'adr-2']);
+    const resolved = findRowByKey(afterReAdd, groupKey, 'adr-2');
+    expect(resolved).not.toBeNull();
+    expect(resolved?.row).not.toBe(before[0].rows[0]);
+  });
+
+  it('keeps a group key stable when the group moves between partitions', () => {
+    // The key must survive the empty→populated promotion, so an in-flight
+    // search for a group that just gained its first edge is not discarded.
+    const empty = viewOf([makeGroup({ relationshipName: 'supersedes' })]);
+    const populated = withTargets(['adr-2']);
+    expect(populated[0].key).toBe(empty[0].key);
+    expect(partitionGroups(empty).addable).toHaveLength(1);
+    expect(partitionGroups(populated).populated).toHaveLength(1);
   });
 });

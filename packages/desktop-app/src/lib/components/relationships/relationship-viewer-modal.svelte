@@ -1,6 +1,5 @@
 <!--
-  RelationshipViewerModal — view AND edit a node's schema-declared typed
-  relationships (issue #1918).
+  RelationshipViewerModal — view and edit a node's typed relationships.
 
   Displays relationships grouped by name, keeping BOTH directions as separate
   groups (outbound declared on this node's schema + inbound resolved via the
@@ -8,12 +7,32 @@
   of target + edge values; bare relationships (no edge data) render as compact
   chips.
 
-  An "Edit" toggle turns the viewer editable: each row gains a remove control,
-  edge-attribute groups gain per-row editable inputs with a Save action, and each
-  group gains an Add control with a type-ahead target picker (searching nodes of
-  the declared target type by title, or accepting a pasted UUID). All mutations
-  route through the dual-mode relationship service, so this works in both the
-  Tauri desktop app and `dev:browser`.
+  ## The panel's size tracks the node's DATA, not its schema
+
+  Only groups that actually HAVE edges get a section. Every outbound relationship
+  with no edges yet collapses into a single "Add relationship" chooser, and empty
+  inbound groups are dropped outright (see `partitionGroups`). Without this, a
+  type declaring six relationships renders six empty sections before any edge
+  exists — at its most overwhelming exactly when it has least to say.
+
+  ## Outbound is editable; inbound is read-only
+
+  An inbound group is not a second relationship — it is the SAME physical edge
+  seen from the other end, declared on and owned by the OTHER node's schema.
+  Editing it from here would write to a node the panel isn't showing, and an
+  "Add" would have to invert the picker's meaning (choose a source, not a
+  target) and would simply fail whenever the other type doesn't declare the
+  forward relationship. So inbound rows are read-only and instead NAVIGATE to
+  the node that owns the edge, where it can be edited properly.
+
+  ## Controls are per row, never a panel-wide mode
+
+  Outbound rows carry their own remove control, and — only where the schema
+  declares `edge_fields` to edit — an edit control opening `EdgePropertiesModal`
+  for that one edge. Edge values stay visible as read-only cells throughout;
+  editing one row leaves every other row exactly as it was. All mutations route
+  through the dual-mode relationship service, so this works in both the Tauri
+  desktop app and `dev:browser`.
 -->
 <script lang="ts">
   import * as Dialog from '$lib/components/ui/dialog';
@@ -27,12 +46,13 @@
   import PencilIcon from '@lucide/svelte/icons/pencil';
   import XIcon from '@lucide/svelte/icons/x';
   import PlusIcon from '@lucide/svelte/icons/plus';
-  import CheckIcon from '@lucide/svelte/icons/check';
   import SlidersIcon from '@lucide/svelte/icons/sliders-horizontal';
   import * as Popover from '$lib/components/ui/popover';
   import * as Select from '$lib/components/ui/select';
   import { createLogger } from '$lib/utils/logger';
+  import { getNavigationService } from '$lib/services/navigation-service';
   import { getEnumValues, enumValueLabel } from '$lib/utils/schema-enum-values';
+  import EdgePropertiesModal from './edge-properties-modal.svelte';
   import {
     loadNodeRelationshipsView,
     addEdge,
@@ -42,12 +62,24 @@
     fetchTargetSchemaFields,
     fetchNodesProperties
   } from '$lib/services/relationship-viewer-service';
-  import type {
-    NodeRelationshipsView,
-    RelationshipGroupView,
-    RelationshipRowView,
-    RawEdgeField
+  import {
+    findGroupByKey,
+    findRowByKey,
+    groupSupportsEdgeEditing,
+    partitionGroups,
+    type NodeRelationshipsView,
+    type RawEdgeField,
+    type RelationshipGroupView,
+    type RelationshipRowView
   } from '$lib/services/relationship-grouping';
+  import {
+    coerceNumber,
+    edgeInputKind,
+    edgeInputType,
+    edgeInputValue,
+    formatEdgeFieldLabel,
+    toInputString
+  } from '$lib/services/edge-field-input';
   import {
     LABEL_COLUMN,
     applyViewSettings,
@@ -84,7 +116,6 @@
   let loadedKey: string | null = null;
 
   // --- Edit state -----------------------------------------------------------
-  let editMode = $state(false);
   let busy = $state(false);
   let mutationError = $state<string | null>(null);
 
@@ -111,8 +142,23 @@
   // property-fetch effect never double-fetches or loops.
   let requestedPropIds = new Set<string>();
 
-  // Target picker (one group open at a time).
-  let addGroup = $state<RelationshipGroupView | null>(null);
+  // The one row whose edge properties are open in EdgePropertiesModal, if any,
+  // held as a (group key, row id) pair rather than as the objects themselves.
+  // Scoped to a single edge on purpose: opening it must not change the state of
+  // any other row, nor of the panel behind it.
+  //
+  // Keys, not objects: every mutation reloads `view` into a new object graph, so
+  // a captured group/row would leave the editor rendering — and saving — values
+  // from before the reload. Resolving per render also hides the editor once a
+  // reload no longer contains the edge. Note the limit: that is a reaction to a
+  // reload, not a check at save time, so a save racing an out-of-band delete
+  // still reaches the daemon and relies on its error being surfaced.
+  let editingKey = $state<{ groupKey: string; rowId: string } | null>(null);
+  // Whether the "Add relationship" type chooser is open.
+  let addChooserOpen = $state(false);
+
+  // Target picker (one group open at a time), keyed for the same reason.
+  let addGroupKey = $state<string | null>(null);
   let addQuery = $state('');
   let addResults = $state<Node[]>([]);
   let addSearching = $state(false);
@@ -124,31 +170,65 @@
 
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  // Read mode shows only populated groups (the clean, read-only view). Edit mode
-  // shows every group — including a declared-but-empty outbound relationship — so
-  // its Add control can create the first edge. When this ends up empty (nothing
-  // populated in read mode, or genuinely no groups at all) the "no typed
-  // relationships" placeholder takes over.
-  const visibleGroups = $derived(
-    view ? (editMode ? view.groups : view.groups.filter((g) => g.rows.length > 0)) : []
+  // Sections come from groups that actually have edges; every empty outbound
+  // relationship is folded into the single Add chooser instead of standing open
+  // as an empty section. When BOTH are empty there is nothing to offer at all,
+  // and the "no typed relationships" placeholder takes over.
+  const partitioned = $derived(partitionGroups(view?.groups ?? []));
+  const populatedGroups = $derived(partitioned.populated);
+  const addableGroups = $derived(partitioned.addable);
+
+  // Both resolve against the CURRENT view every render, so an open editor or
+  // picker always reflects the latest reload — and resolves to null once the
+  // group or edge it refers to is gone, which unmounts what was open.
+  const editing = $derived(
+    findRowByKey(view?.groups ?? [], editingKey?.groupKey ?? null, editingKey?.rowId ?? null)
   );
+  const addGroup = $derived(findGroupByKey(view?.groups ?? [], addGroupKey));
+
+  // Resolving to null hides the editor but does NOT by itself forget which row
+  // was open, and neither key is unique enough to leave lying around: a group
+  // key is `direction:name:targetType` and a row id is the TARGET NODE's id, not
+  // the edge's. So re-adding the same target to the same relationship would
+  // rebuild a row that matches the dangling key and pop the editor open unbidden
+  // over the new edge, pre-filled with the draft from the old one. Drop the key
+  // and its draft the moment resolution misses, so a closed editor stays closed.
+  //
+  // Terminates on the first run: it only writes when `editingKey` is set and
+  // unresolvable, and nulling the key makes that guard false. `load()` blanking
+  // `view` cannot trip it either — that path calls `resetTransient()`, which has
+  // already cleared both keys, so there is no open editor left to close.
+  $effect(() => {
+    if (editingKey && !editing) {
+      // Read the draft key BEFORE nulling the state it is derived from.
+      const stale = draftKey(editingKey.groupKey, editingKey.rowId);
+      editingKey = null;
+      clearDraftKey(stale);
+    }
+  });
+
+  // Same reasoning for the target picker: a group key outliving its group would
+  // reopen the picker if a schema change brought that relationship back.
+  $effect(() => {
+    if (addGroupKey && !addGroup) closeAdd();
+  });
 
   $effect(() => {
     if (!open) {
       loadedKey = null;
-      editMode = false;
       resetTransient();
       return;
     }
     if (!nodeId || loadedKey === nodeId) return;
     loadedKey = nodeId;
-    editMode = false;
     void load(nodeId);
   });
 
   function resetTransient() {
     edgeDrafts = {};
-    addGroup = null;
+    editingKey = null;
+    addChooserOpen = false;
+    addGroupKey = null;
     addQuery = '';
     addResults = [];
     addSearching = false;
@@ -375,8 +455,13 @@
 
   // --- Edge-attribute editing ----------------------------------------------
 
+  /** The `edgeDrafts` key for one row, from the same parts `editingKey` holds. */
+  function draftKey(groupKey: string, rowId: string): string {
+    return `${groupKey}::${rowId}`;
+  }
+
   function rowKey(group: RelationshipGroupView, row: RelationshipRowView): string {
-    return `${group.key}::${row.id}`;
+    return draftKey(group.key, row.id);
   }
 
   function currentEdgeValue(
@@ -399,14 +484,17 @@
     edgeDrafts = { ...edgeDrafts, [key]: { ...(edgeDrafts[key] ?? {}), [fieldName]: value } };
   }
 
-  function rowHasDraft(group: RelationshipGroupView, row: RelationshipRowView): boolean {
-    const draft = edgeDrafts[rowKey(group, row)];
-    return !!draft && Object.keys(draft).length > 0;
-  }
-
   /** Drop a single row's draft without disturbing any other row's unsaved edits. */
   function clearRowDraft(group: RelationshipGroupView, row: RelationshipRowView) {
-    const key = rowKey(group, row);
+    clearDraftKey(rowKey(group, row));
+  }
+
+  /**
+   * Drop a draft by its composite key, for the case where the row object is no
+   * longer reachable — its edge has gone from the view — but its draft is still
+   * held under the key that row had.
+   */
+  function clearDraftKey(key: string) {
     if (!(key in edgeDrafts)) return;
     const next = { ...edgeDrafts };
     delete next[key];
@@ -420,7 +508,26 @@
     const ok = await runMutation(() => updateEdgeProperties(nodeId, group, row.id, properties));
     // Only this row's draft is now stale (its values are persisted); leave any
     // other row's in-progress edit untouched.
-    if (ok) clearRowDraft(group, row);
+    if (ok) {
+      clearRowDraft(group, row);
+      editingKey = null;
+    }
+    // On failure the editor stays open with the draft intact so the surfaced
+    // error can be acted on without retyping.
+  }
+
+  /** Open the edge-property editor for one row. */
+  function openEdit(group: RelationshipGroupView, row: RelationshipRowView) {
+    mutationError = null;
+    editingKey = { groupKey: group.key, rowId: row.id };
+  }
+
+  /** Close the editor, discarding only THIS row's unsaved draft. */
+  function cancelEdit() {
+    // Read the resolved pair, not the key: the draft is keyed by group+row, and
+    // if the edge has already vanished there is no draft left to clear.
+    if (editing) clearRowDraft(editing.group, editing.row);
+    editingKey = null;
   }
 
   // --- Removal --------------------------------------------------------------
@@ -437,10 +544,29 @@
     if (ok) clearRowDraft(group, row);
   }
 
+  // --- Inbound navigation ---------------------------------------------------
+
+  /**
+   * Follow an inbound row to the node that OWNS the edge. That node's own panel
+   * declares the relationship outbound, which is the only place the edge can
+   * actually be edited — so this is the read-only side's route to editing.
+   * The modal closes so it doesn't sit over the destination.
+   */
+  function navigateToOwner(row: RelationshipRowView) {
+    open = false;
+    void getNavigationService().navigateToNode(row.id);
+  }
+
   // --- Target picker --------------------------------------------------------
 
+  /** Choose a relationship type from the Add chooser, then pick its target. */
+  function chooseAddType(group: RelationshipGroupView) {
+    addChooserOpen = false;
+    openAdd(group);
+  }
+
   function openAdd(group: RelationshipGroupView) {
-    addGroup = group;
+    addGroupKey = group.key;
     addQuery = '';
     addResults = [];
     addSearching = false;
@@ -450,7 +576,7 @@
   }
 
   function closeAdd() {
-    addGroup = null;
+    addGroupKey = null;
     addQuery = '';
     addResults = [];
     addSearching = false;
@@ -467,6 +593,7 @@
   async function runSearch() {
     const group = addGroup;
     if (!group) return;
+    const requestedKey = group.key;
     const q = addQuery.trim();
     if (!q) {
       addResults = [];
@@ -475,14 +602,22 @@
     addSearching = true;
     try {
       const results = await searchTargets(group.targetType, q);
-      if (addGroup?.key !== group.key) return;
-      const existing = new Set(group.rows.map((r) => r.id));
+      // Discard a response for a picker that has since moved on.
+      if (addGroupKey !== requestedKey) return;
+      // Re-read the group AFTER the await: a mutation during the search would
+      // have reloaded the view, and filtering on the pre-search rows could
+      // offer a target that is already linked.
+      const current = addGroup;
+      if (!current) return;
+      const existing = new Set(current.rows.map((r) => r.id));
       addResults = results.filter((n) => !existing.has(n.id));
     } catch (error) {
       log.error('Target search failed', error);
-      addResults = [];
+      // Only blank the results if this response still belongs to the open
+      // picker — a superseded request must not clear what replaced it.
+      if (addGroupKey === requestedKey) addResults = [];
     } finally {
-      addSearching = false;
+      if (addGroupKey === requestedKey) addSearching = false;
     }
   }
 
@@ -514,89 +649,13 @@
     if (ok) closeAdd();
   }
 
-  // --- Edge-field input helpers --------------------------------------------
-
-  type EdgeInputKind = 'number' | 'boolean' | 'date' | 'datetime' | 'enum' | 'text';
-
-  function edgeInputKind(field: RawEdgeField): EdgeInputKind {
-    switch (field.type) {
-      case 'number':
-      case 'integer':
-      case 'float':
-        return 'number';
-      case 'boolean':
-      case 'bool':
-        return 'boolean';
-      case 'date':
-        return 'date';
-      case 'datetime':
-        // A whole-day `date` input would silently drop the time component.
-        return 'datetime';
-      case 'enum':
-        // A declared value set renders as a picker. Falling back to free text
-        // when it is somehow absent keeps an existing edge editable rather
-        // than presenting an empty dropdown with no way out; the backend
-        // requires coreValues on an enum declaration, so this is defensive.
-        return (field.coreValues?.length ?? 0) > 0 ? 'enum' : 'text';
-      default:
-        return 'text';
-    }
-  }
-
-  /** Native input `type` for a text-like edge-field kind. */
-  function edgeInputType(kind: EdgeInputKind): 'date' | 'datetime-local' | 'text' {
-    if (kind === 'date') return 'date';
-    if (kind === 'datetime') return 'datetime-local';
-    return 'text';
-  }
-
-  function coerceNumber(raw: string): number | null {
-    if (raw.trim() === '') return null;
-    const n = Number(raw);
-    return Number.isNaN(n) ? null : n;
-  }
-
-  function toInputString(value: unknown): string {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string' || typeof value === 'number') return String(value);
-    return String(value);
-  }
-
-  /**
-   * Format a stored value for a `datetime-local` input (`YYYY-MM-DDTHH:mm`),
-   * preserving the time a plain `date` input would drop. Accepts an ISO string
-   * (with or without a trailing `Z`/offset) or anything `Date` can parse; returns
-   * `''` for an unparseable/empty value. Values the input already yields (naive
-   * local `YYYY-MM-DDTHH:mm`) pass straight back through, so a save→reload round
-   * trip does not drift.
-   */
-  function toDateTimeLocalString(value: unknown): string {
-    const raw = toInputString(value).trim();
-    if (raw === '') return '';
-    const isoish = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
-    if (isoish) return `${isoish[1]}T${isoish[2]}`;
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
-  }
-
-  /** Value string for a text-like edge input, formatted for its `type`. */
-  function edgeInputValue(kind: EdgeInputKind, value: unknown): string {
-    return kind === 'datetime' ? toDateTimeLocalString(value) : toInputString(value);
-  }
-
-  // --- Read-only formatting (unchanged) ------------------------------------
+  // --- Read-only formatting -------------------------------------------------
 
   function formatValue(value: unknown): string {
     if (value === null || value === undefined || value === '') return '—';
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
     return JSON.stringify(value);
-  }
-
-  function formatColumn(name: string): string {
-    return name.replace(/[_-]+/g, ' ');
   }
 
   /**
@@ -616,28 +675,10 @@
 <Dialog.Root bind:open>
   <Dialog.Content class="sm:max-w-2xl">
     <Dialog.Header>
-      <div class="flex items-start justify-between gap-4">
-        <div class="grid gap-1">
-          <Dialog.Title>Relationships</Dialog.Title>
-          <Dialog.Description>
-            Typed relationships connecting this node to others, in both directions.
-          </Dialog.Description>
-        </div>
-        {#if phase === 'loaded' && view}
-          <Button
-            variant={editMode ? 'secondary' : 'outline'}
-            size="sm"
-            class="shrink-0"
-            onclick={() => (editMode = !editMode)}
-          >
-            {#if editMode}
-              <CheckIcon class="mr-1.5 size-4" /> Done
-            {:else}
-              <PencilIcon class="mr-1.5 size-4" /> Edit
-            {/if}
-          </Button>
-        {/if}
-      </div>
+      <Dialog.Title>Relationships</Dialog.Title>
+      <Dialog.Description>
+        Typed relationships connecting this node to others, in both directions.
+      </Dialog.Description>
     </Dialog.Header>
 
     {#if mutationError}
@@ -662,19 +703,22 @@
           <CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
           <span>{errorMessage ?? 'Failed to load relationships.'}</span>
         </div>
-      {:else if phase === 'loaded' && view && visibleGroups.length === 0}
+      {:else if phase === 'loaded' && view && populatedGroups.length === 0 && addableGroups.length === 0}
         <div class="text-muted-foreground py-6 text-center text-sm">
           This node has no typed relationships.
         </div>
       {:else if phase === 'loaded' && view}
         <div class="grid gap-5 py-1">
-          {#each visibleGroups as group (group.key)}
-            <section class="grid gap-2">
+          {#each populatedGroups as group (group.key)}
+            {@const inbound = group.direction === 'in'}
+            <section
+              class="grid gap-2 {inbound ? 'border-muted-foreground/25 border-l-2 border-dashed pl-3' : ''}"
+            >
               <header class="flex items-center gap-2">
-                {#if group.direction === 'out'}
-                  <ArrowRightIcon class="text-muted-foreground size-4 shrink-0" />
-                {:else}
+                {#if inbound}
                   <ArrowLeftIcon class="text-muted-foreground size-4 shrink-0" />
+                {:else}
+                  <ArrowRightIcon class="text-muted-foreground size-4 shrink-0" />
                 {/if}
                 <span class="text-sm font-medium">{group.label}</span>
                 {#if group.targetType}
@@ -682,6 +726,16 @@
                 {/if}
                 {#if group.required}
                   <span class="text-muted-foreground text-xs">· required</span>
+                {/if}
+                {#if inbound}
+                  <!-- The arrow alone is too subtle to carry "you cannot edit
+                       this here"; say it, and say where it can be edited. -->
+                  <span
+                    class="border-border text-muted-foreground rounded-full border px-1.5 py-0.5 text-[0.6875rem] leading-none"
+                    title="This edge is declared on the other node's schema — open that node to edit it."
+                  >
+                    incoming · read-only
+                  </span>
                 {/if}
                 <span class="text-muted-foreground ml-auto text-xs">
                   {group.count}
@@ -782,6 +836,8 @@
               {#if group.layout === 'table'}
                 {@const cols = displayedColumnsFor(group)}
                 {@const displayRows = displayedRowsFor(group)}
+                {@const canEditEdges = groupSupportsEdgeEditing(group)}
+                {@const hasControls = !inbound}
                 <div class="overflow-x-auto rounded-md border">
                   <table class="w-full border-collapse text-sm">
                     <thead>
@@ -791,7 +847,7 @@
                             {col.label}
                           </th>
                         {/each}
-                        {#if editMode}
+                        {#if hasControls}
                           <th class="px-3 py-2"></th>
                         {/if}
                       </tr>
@@ -802,88 +858,56 @@
                           {#each cols as col (col.token)}
                             <td class="px-3 py-2 align-top">
                               {#if col.token === LABEL_COLUMN}
-                                <div class="font-medium">{row.label}</div>
-                                <div class="text-muted-foreground text-xs">{row.nodeType}</div>
-                              {:else if col.source === 'edge'}
-                                {@const column = col.key}
-                                {@const field = group.edgeFields.find((f) => f.name === column)}
-                                {#if editMode && field}
-                                  {@const kind = edgeInputKind(field)}
-                                  {#if kind === 'boolean'}
-                                    <Checkbox
-                                      checked={Boolean(currentEdgeValue(group, row, column))}
-                                      onCheckedChange={(v) =>
-                                        setEdgeDraft(group, row, column, v === true)}
-                                    />
-                                  {:else if kind === 'number'}
-                                    <Input
-                                      type="number"
-                                      class="h-8"
-                                      value={toInputString(currentEdgeValue(group, row, column))}
-                                      oninput={(e) =>
-                                        setEdgeDraft(
-                                          group,
-                                          row,
-                                          column,
-                                          coerceNumber(e.currentTarget.value)
-                                        )}
-                                    />
-                                  {:else if kind === 'enum'}
-                                    {@const current = toInputString(
-                                      currentEdgeValue(group, row, column)
-                                    )}
-                                    <Select.Root
-                                      type="single"
-                                      value={current}
-                                      onValueChange={(v) => setEdgeDraft(group, row, column, v)}
-                                    >
-                                      <Select.Trigger class="h-8 w-full">
-                                        {enumValueLabel(field, current) ||
-                                          `Select ${formatColumn(field.name)}...`}
-                                      </Select.Trigger>
-                                      <Select.Content>
-                                        {#each getEnumValues(field) as ev (ev.value)}
-                                          <Select.Item value={ev.value} label={ev.label} />
-                                        {/each}
-                                      </Select.Content>
-                                    </Select.Root>
-                                  {:else}
-                                    <Input
-                                      type={edgeInputType(kind)}
-                                      class="h-8"
-                                      value={edgeInputValue(kind, currentEdgeValue(group, row, column))}
-                                      oninput={(e) => setEdgeDraft(group, row, column, e.currentTarget.value)}
-                                    />
-                                  {/if}
-                                {:else if editMode}
-                                  <!-- Undeclared edge key: editable as free text. -->
-                                  <Input
-                                    type="text"
-                                    class="h-8"
-                                    value={toInputString(currentEdgeValue(group, row, column))}
-                                    oninput={(e) => setEdgeDraft(group, row, column, e.currentTarget.value)}
-                                  />
+                                {#if inbound}
+                                  <!-- The owning node is where this edge can be
+                                       edited, so make the row the way there. -->
+                                  <button
+                                    type="button"
+                                    class="hover:text-primary text-left hover:underline"
+                                    aria-label="Open {row.label} to edit this relationship"
+                                    onclick={() => navigateToOwner(row)}
+                                  >
+                                    <span class="font-medium">{row.label}</span>
+                                    <span class="text-muted-foreground block text-xs">
+                                      {row.nodeType}
+                                    </span>
+                                  </button>
                                 {:else}
-                                  {formatEdgeValue(field, row.edgeValues[column])}
+                                  <div class="font-medium">{row.label}</div>
+                                  <div class="text-muted-foreground text-xs">{row.nodeType}</div>
                                 {/if}
                               {:else}
-                                <!-- Intrinsic (target type) or target-schema-field column: read-only. -->
-                                {formatValue(cellValue(row, col.token))}
+                                <!-- Every value column reads read-only; edge
+                                     properties are changed in the row's editor.
+                                     Edge values route through formatEdgeValue so
+                                     an enum shows its declared label rather than
+                                     the stored key. -->
+                                {#if col.source === 'edge'}
+                                  {formatEdgeValue(
+                                    group.edgeFields.find((f) => f.name === col.key),
+                                    row.edgeValues[col.key]
+                                  )}
+                                {:else}
+                                  {formatValue(cellValue(row, col.token))}
+                                {/if}
                               {/if}
                             </td>
                           {/each}
-                          {#if editMode}
+                          {#if hasControls}
                             <td class="px-3 py-2 align-top">
                               <div class="flex items-center justify-end gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  class="h-8"
-                                  disabled={busy || !rowHasDraft(group, row)}
-                                  onclick={() => saveRow(group, row)}
-                                >
-                                  Save
-                                </Button>
+                                {#if canEditEdges}
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    class="text-muted-foreground hover:text-foreground size-8"
+                                    disabled={busy}
+                                    aria-label="Edit relationship properties"
+                                    onclick={() => openEdit(group, row)}
+                                  >
+                                    <PencilIcon class="size-4" />
+                                  </Button>
+                                {/if}
                                 <Button
                                   variant="ghost"
                                   size="icon"
@@ -903,13 +927,9 @@
                         <tr>
                           <td
                             class="text-muted-foreground px-3 py-3 text-sm"
-                            colspan={cols.length + (editMode ? 1 : 0)}
+                            colspan={cols.length + (hasControls ? 1 : 0)}
                           >
-                            {#if group.rows.length === 0}
-                              No relationships yet — use Add below to create the first one.
-                            {:else}
-                              No relationships match the current filter.
-                            {/if}
+                            No relationships match the current filter.
                           </td>
                         </tr>
                       {/if}
@@ -921,11 +941,20 @@
                   {#each group.rows as row (row.id)}
                     <span
                       class="border-border bg-muted/40 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm"
-                      title={row.nodeType}
                     >
-                      <span class="font-medium">{row.label}</span>
-                      <span class="text-muted-foreground text-xs">{row.nodeType}</span>
-                      {#if editMode}
+                      {#if inbound}
+                        <button
+                          type="button"
+                          class="hover:text-primary inline-flex items-center gap-1.5 hover:underline"
+                          aria-label="Open {row.label} to edit this relationship"
+                          onclick={() => navigateToOwner(row)}
+                        >
+                          <span class="font-medium">{row.label}</span>
+                          <span class="text-muted-foreground text-xs">{row.nodeType}</span>
+                        </button>
+                      {:else}
+                        <span class="font-medium">{row.label}</span>
+                        <span class="text-muted-foreground text-xs">{row.nodeType}</span>
                         <button
                           type="button"
                           class="text-muted-foreground hover:text-destructive -mr-1 ml-0.5 inline-flex disabled:opacity-50"
@@ -941,160 +970,226 @@
                 </div>
               {/if}
 
-              {#if editMode}
+              {#if !inbound}
                 <div class="mt-1">
                   {#if addGroup?.key === group.key}
-                    <div class="bg-muted/30 grid gap-2 rounded-md border p-3">
-                      {#if addStaged}
-                        <div class="flex items-center gap-2 text-sm">
-                          <span class="font-medium">{addStaged.label}</span>
-                          <button
-                            type="button"
-                            class="text-muted-foreground hover:text-foreground text-xs underline"
-                            onclick={() => (addStaged = null)}
-                          >
-                            change
-                          </button>
-                        </div>
-                        <div class="grid gap-2">
-                          {#each group.edgeFields as field (field.name)}
-                            {@const kind = edgeInputKind(field)}
-                            <div class="grid gap-1">
-                              <span class="text-muted-foreground text-xs capitalize">
-                                {formatColumn(field.name)}
-                              </span>
-                              {#if kind === 'boolean'}
-                                <Checkbox
-                                  checked={Boolean(addEdgeDraft[field.name])}
-                                  onCheckedChange={(v) =>
-                                    (addEdgeDraft = { ...addEdgeDraft, [field.name]: v === true })}
-                                />
-                              {:else if kind === 'number'}
-                                <Input
-                                  type="number"
-                                  class="h-8"
-                                  value={toInputString(addEdgeDraft[field.name])}
-                                  oninput={(e) =>
-                                    (addEdgeDraft = {
-                                      ...addEdgeDraft,
-                                      [field.name]: coerceNumber(e.currentTarget.value)
-                                    })}
-                                />
-                              {:else if kind === 'enum'}
-                                {@const current = toInputString(addEdgeDraft[field.name])}
-                                <Select.Root
-                                  type="single"
-                                  value={current}
-                                  onValueChange={(v) =>
-                                    (addEdgeDraft = { ...addEdgeDraft, [field.name]: v })}
-                                >
-                                  <Select.Trigger class="h-8 w-full">
-                                    {enumValueLabel(field, current) ||
-                                      `Select ${formatColumn(field.name)}...`}
-                                  </Select.Trigger>
-                                  <Select.Content>
-                                    {#each getEnumValues(field) as ev (ev.value)}
-                                      <Select.Item value={ev.value} label={ev.label} />
-                                    {/each}
-                                  </Select.Content>
-                                </Select.Root>
-                              {:else}
-                                <Input
-                                  type={edgeInputType(kind)}
-                                  class="h-8"
-                                  value={edgeInputValue(kind, addEdgeDraft[field.name])}
-                                  oninput={(e) =>
-                                    (addEdgeDraft = {
-                                      ...addEdgeDraft,
-                                      [field.name]: e.currentTarget.value
-                                    })}
-                                />
-                              {/if}
-                            </div>
-                          {/each}
-                        </div>
-                        <div class="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            disabled={busy}
-                            onclick={() => confirmAdd(group, addStaged!.id, addEdgeDraft)}
-                          >
-                            Add
-                          </Button>
-                          <Button variant="ghost" size="sm" disabled={busy} onclick={closeAdd}>
-                            Cancel
-                          </Button>
-                        </div>
-                      {:else}
-                        <Input
-                          type="text"
-                          placeholder={group.targetType
-                            ? `Search ${group.targetType} by title, or paste an ID…`
-                            : 'Search by title, or paste an ID…'}
-                          value={addQuery}
-                          oninput={(e) => onAddQueryInput(e.currentTarget.value)}
-                        />
-                        <div class="max-h-40 overflow-y-auto">
-                          {#if addSearching}
-                            <div class="text-muted-foreground flex items-center gap-2 px-1 py-2 text-sm">
-                              <LoaderIcon class="size-4 animate-spin" />
-                              <span>Searching…</span>
-                            </div>
-                          {:else}
-                            {#each addResults as node (node.id)}
-                              <button
-                                type="button"
-                                class="hover:bg-muted flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm disabled:opacity-50"
-                                disabled={busy}
-                                onclick={() => pickTarget(group, node.id, nodeLabel(node))}
-                              >
-                                <span class="font-medium">{nodeLabel(node)}</span>
-                                <span class="text-muted-foreground text-xs">{node.nodeType}</span>
-                              </button>
-                            {/each}
-                            {#if UUID_RE.test(addQuery.trim())}
-                              <button
-                                type="button"
-                                class="hover:bg-muted flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-left text-sm disabled:opacity-50"
-                                disabled={busy}
-                                onclick={() =>
-                                  pickTarget(group, addQuery.trim(), addQuery.trim())}
-                              >
-                                <PlusIcon class="size-3.5 shrink-0" />
-                                <span>Use ID <code class="text-xs">{addQuery.trim()}</code></span>
-                              </button>
-                            {:else if addResults.length === 0 && addQuery.trim() !== ''}
-                              <div class="text-muted-foreground px-2 py-1.5 text-sm">No matches.</div>
-                            {/if}
-                          {/if}
-                        </div>
-                        <div>
-                          <Button variant="ghost" size="sm" disabled={busy} onclick={closeAdd}>
-                            Cancel
-                          </Button>
-                        </div>
-                      {/if}
-                    </div>
+                    {@render targetPicker(group)}
                   {:else}
+                    <!-- Deliberately lighter than the panel's one "Add
+                         relationship" control: this only extends a group that
+                         is already on screen, so it should read as part of that
+                         section rather than compete with the primary action. -->
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
+                      class="text-muted-foreground hover:text-foreground h-7 px-2"
                       disabled={busy}
                       onclick={() => openAdd(group)}
                     >
-                      <PlusIcon class="mr-1.5 size-4" /> Add
+                      <PlusIcon class="mr-1.5 size-3.5" /> Add
                     </Button>
                   {/if}
                 </div>
               {/if}
             </section>
           {/each}
+
+          <!-- Every outbound relationship with no edges yet lives behind this
+               ONE control instead of getting a standing empty section. -->
+          {#if addableGroups.length > 0}
+            <div>
+              <!-- The picker renders HERE only while its group is still empty.
+                   Once its first edge lands, the group moves to `populated` and
+                   its section renders the picker instead — but `confirmAdd`
+                   closes the picker on success, so that hand-off is never seen
+                   mid-interaction. It matters on the FAILURE path: the picker
+                   stays open, exactly where the user left it. -->
+              {#if addGroup && addableGroups.some((g) => g.key === addGroup.key)}
+                {@render targetPicker(addGroup)}
+              {:else}
+                <Popover.Root bind:open={addChooserOpen}>
+                  <Popover.Trigger
+                    class="border-input bg-background hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring inline-flex h-8 items-center rounded-md border px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-50"
+                    disabled={busy}
+                  >
+                    <PlusIcon class="mr-1.5 size-4" /> Add relationship
+                  </Popover.Trigger>
+                  <Popover.Content class="w-64 p-1" align="start">
+                    <div class="grid">
+                      {#each addableGroups as group (group.key)}
+                        <button
+                          type="button"
+                          class="hover:bg-muted flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm"
+                          onclick={() => chooseAddType(group)}
+                        >
+                          <span class="font-medium">{group.label}</span>
+                          {#if group.targetType}
+                            <span class="text-muted-foreground text-xs">{group.targetType}</span>
+                          {/if}
+                        </button>
+                      {/each}
+                    </div>
+                  </Popover.Content>
+                </Popover.Root>
+              {/if}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
-
-    <Dialog.Footer>
-      <Button variant="ghost" onclick={() => (open = false)}>Close</Button>
-    </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<!--
+  The target picker, shared by a populated group's inline Add and the chooser
+  for groups with no edges yet — one implementation, so both paths stage edge
+  attributes and accept a pasted ID identically.
+-->
+{#snippet targetPicker(group: RelationshipGroupView)}
+  <div class="bg-muted/30 grid gap-2 rounded-md border p-3">
+    <div class="text-muted-foreground text-xs">
+      Add <span class="text-foreground font-medium">{group.label}</span>
+      {#if group.targetType}· {group.targetType}{/if}
+    </div>
+    {#if addStaged}
+      <div class="flex items-center gap-2 text-sm">
+        <span class="font-medium">{addStaged.label}</span>
+        <button
+          type="button"
+          class="text-muted-foreground hover:text-foreground text-xs underline"
+          onclick={() => (addStaged = null)}
+        >
+          change
+        </button>
+      </div>
+      <div class="grid gap-2">
+        {#each group.edgeFields as field (field.name)}
+          {@const kind = edgeInputKind(field)}
+          <div class="grid gap-1">
+            <span class="text-muted-foreground text-xs capitalize">
+              {formatEdgeFieldLabel(field.name)}
+            </span>
+            {#if kind === 'boolean'}
+              <Checkbox
+                checked={Boolean(addEdgeDraft[field.name])}
+                aria-label={formatEdgeFieldLabel(field.name)}
+                onCheckedChange={(v) =>
+                  (addEdgeDraft = { ...addEdgeDraft, [field.name]: v === true })}
+              />
+            {:else if kind === 'number'}
+              <Input
+                type="number"
+                class="h-8"
+                aria-label={formatEdgeFieldLabel(field.name)}
+                value={toInputString(addEdgeDraft[field.name])}
+                oninput={(e) =>
+                  (addEdgeDraft = {
+                    ...addEdgeDraft,
+                    [field.name]: coerceNumber(e.currentTarget.value)
+                  })}
+              />
+            {:else if kind === 'enum'}
+              {@const current = toInputString(addEdgeDraft[field.name])}
+              <Select.Root
+                type="single"
+                value={current}
+                onValueChange={(v) => (addEdgeDraft = { ...addEdgeDraft, [field.name]: v })}
+              >
+                <Select.Trigger class="h-8 w-full" aria-label={formatEdgeFieldLabel(field.name)}>
+                  {enumValueLabel(field, current) ||
+                    `Select ${formatEdgeFieldLabel(field.name)}...`}
+                </Select.Trigger>
+                <Select.Content>
+                  {#each getEnumValues(field) as ev (ev.value)}
+                    <Select.Item value={ev.value} label={ev.label} />
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            {:else}
+              <Input
+                type={edgeInputType(kind)}
+                class="h-8"
+                aria-label={formatEdgeFieldLabel(field.name)}
+                value={edgeInputValue(kind, addEdgeDraft[field.name])}
+                oninput={(e) =>
+                  (addEdgeDraft = {
+                    ...addEdgeDraft,
+                    [field.name]: e.currentTarget.value
+                  })}
+              />
+            {/if}
+          </div>
+        {/each}
+      </div>
+      <div class="flex items-center gap-2">
+        <Button size="sm" disabled={busy} onclick={() => confirmAdd(group, addStaged!.id, addEdgeDraft)}>
+          Add
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onclick={closeAdd}>Cancel</Button>
+      </div>
+    {:else}
+      <Input
+        type="text"
+        placeholder={group.targetType
+          ? `Search ${group.targetType} by title, or paste an ID…`
+          : 'Search by title, or paste an ID…'}
+        value={addQuery}
+        oninput={(e) => onAddQueryInput(e.currentTarget.value)}
+      />
+      <div class="max-h-40 overflow-y-auto">
+        {#if addSearching}
+          <div class="text-muted-foreground flex items-center gap-2 px-1 py-2 text-sm">
+            <LoaderIcon class="size-4 animate-spin" />
+            <span>Searching…</span>
+          </div>
+        {:else}
+          {#each addResults as node (node.id)}
+            <button
+              type="button"
+              class="hover:bg-muted flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm disabled:opacity-50"
+              disabled={busy}
+              onclick={() => pickTarget(group, node.id, nodeLabel(node))}
+            >
+              <span class="font-medium">{nodeLabel(node)}</span>
+              <span class="text-muted-foreground text-xs">{node.nodeType}</span>
+            </button>
+          {/each}
+          {#if UUID_RE.test(addQuery.trim())}
+            <button
+              type="button"
+              class="hover:bg-muted flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-left text-sm disabled:opacity-50"
+              disabled={busy}
+              onclick={() => pickTarget(group, addQuery.trim(), addQuery.trim())}
+            >
+              <PlusIcon class="size-3.5 shrink-0" />
+              <span>Use ID <code class="text-xs">{addQuery.trim()}</code></span>
+            </button>
+          {:else if addResults.length === 0 && addQuery.trim() !== ''}
+            <div class="text-muted-foreground px-2 py-1.5 text-sm">No matches.</div>
+          {/if}
+        {/if}
+      </div>
+      <div>
+        <Button variant="ghost" size="sm" disabled={busy} onclick={closeAdd}>Cancel</Button>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+<!--
+  One edge's properties, in their own dialog. Each relationship declares its own
+  `edge_fields`, so the form is built per relationship rather than from a fixed
+  column set — and the panel behind it stays exactly as it was.
+-->
+{#if editing}
+  <EdgePropertiesModal
+    relationshipLabel={editing.group.label}
+    rowLabel={editing.row.label}
+    fields={editing.group.edgeFields}
+    valueFor={(name) => currentEdgeValue(editing.group, editing.row, name)}
+    onChange={(name, value) => setEdgeDraft(editing.group, editing.row, name, value)}
+    onSave={() => void saveRow(editing.group, editing.row)}
+    onCancel={cancelEdit}
+    {busy}
+  />
+{/if}

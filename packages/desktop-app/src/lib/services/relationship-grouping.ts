@@ -1,5 +1,5 @@
 /**
- * Relationship viewer — pure grouping/normalization (issue #1918, read-only slice).
+ * Relationship viewer — pure grouping/normalization.
  *
  * Turns the `get_node_relationships` command payload (see
  * `rel_ops::NodeRelationshipsOutput` on the Rust side) into the view model the
@@ -15,6 +15,9 @@
  * - Classify each group as a `table` (carries edge attributes) or `chips`
  *   (bare edge with no edge data) layout.
  * - Compute the ordered edge-attribute column set for the table layout.
+ * - Decide how the panel surfaces each group: a populated section, an entry in
+ *   the Add chooser, or nothing at all (`partitionGroups`), and whether its
+ *   edges can be edited from this node (`groupSupportsEdgeEditing`).
  */
 
 import type { EnumValue } from '$lib/types/schema-node';
@@ -258,11 +261,108 @@ export function resolveEdgeEndpoints(
 }
 
 /**
+ * A relationship group's edge properties can only be edited when the schema
+ * declares fields to edit. Inbound groups are never editable: the edge is owned
+ * by the other node's schema.
+ *
+ * A group carrying only AD-HOC edge keys — present on stored edges but never
+ * declared in `edgeFields` — is deliberately not editable either, even though
+ * `groupEdgeColumns` still surfaces those keys as read-only columns so the data
+ * stays visible. An undeclared key has no `type`, so an editor could only ever
+ * guess a free-text input, and the update path replaces edge properties
+ * wholesale — which would coerce a stored number or boolean into a string on
+ * the first save. Showing the value and declining to edit it is the honest
+ * option; declaring the field on the schema is how it becomes editable.
+ */
+export function groupSupportsEdgeEditing(group: RelationshipGroupView): boolean {
+  return group.direction === 'out' && group.edgeFields.length > 0;
+}
+
+/** The groups a node's relationship panel renders, partitioned by what each needs. */
+export interface PartitionedGroups {
+  /** Groups with at least one edge — rendered as full sections, either direction. */
+  populated: RelationshipGroupView[];
+  /**
+   * Outbound groups with no edges yet. They get no section of their own; they
+   * are the entries of the single "Add relationship" chooser.
+   */
+  addable: RelationshipGroupView[];
+}
+
+/**
+ * Split groups into what the panel renders as sections versus what it offers
+ * behind the single Add control.
+ *
+ * The panel's size must track the node's DATA, not the schema's declared
+ * relationship count — a type declaring six relationships with no edges yet is
+ * six empty sections' worth of scaffolding carrying zero information. So an
+ * empty group never gets a section:
+ *  - empty OUTBOUND groups collapse into `addable`, keeping the first edge one
+ *    interaction away;
+ *  - empty INBOUND groups are dropped entirely. An inbound group is the same
+ *    physical edge seen from the other end, owned by the other node's schema, so
+ *    it has no Add of its own to justify standing open and empty.
+ */
+export function partitionGroups(groups: RelationshipGroupView[]): PartitionedGroups {
+  return {
+    populated: groups.filter((group) => group.rows.length > 0),
+    addable: groups.filter((group) => group.direction === 'out' && group.rows.length === 0)
+  };
+}
+
+/** A group plus one of its rows, resolved together against the current view. */
+export interface ResolvedRow {
+  group: RelationshipGroupView;
+  row: RelationshipRowView;
+}
+
+/**
+ * Look a group up in the CURRENT view by its stable key.
+ *
+ * Every mutation reloads the view into a wholly new object graph, so UI state
+ * that outlives a mutation (an open editor, an open target picker) must hold a
+ * key and resolve it each time rather than capture the group object it started
+ * with — otherwise it goes on rendering, and writing from, a pre-reload
+ * snapshot. Returns `null` once the group is gone, which callers treat as
+ * "close the thing that was open".
+ */
+export function findGroupByKey(
+  groups: RelationshipGroupView[],
+  key: string | null
+): RelationshipGroupView | null {
+  if (!key) return null;
+  return groups.find((group) => group.key === key) ?? null;
+}
+
+/**
+ * Resolve a `(group key, row id)` pair against the current view, for UI state
+ * scoped to a single edge. Returns `null` when either half has gone — the group
+ * removed from the schema, or the row's edge deleted — so an editor left open
+ * over a vanished edge is hidden on the next RELOAD.
+ *
+ * That is the whole of the guarantee: it is not a substitute for the daemon
+ * rejecting a write against a deleted edge. Nothing here re-checks the view at
+ * the moment of a save, so a save racing an out-of-band delete still reaches the
+ * daemon and still needs its error surfaced — do not read this as making that
+ * path unreachable.
+ */
+export function findRowByKey(
+  groups: RelationshipGroupView[],
+  groupKey: string | null,
+  rowId: string | null
+): ResolvedRow | null {
+  const group = findGroupByKey(groups, groupKey);
+  if (!group || !rowId) return null;
+  const row = group.rows.find((candidate) => candidate.id === rowId);
+  return row ? { group, row } : null;
+}
+
+/**
  * Build the modal's view model from the command payload. Every group returned by
  * the command is retained — including declared groups with no related nodes yet —
- * so the editable modal can offer to add the first edge; the read-only view
- * filters empty groups out itself. `isEmpty` is true when no group has any rows,
- * i.e. there is genuinely nothing populated to show.
+ * and `partitionGroups` decides how each is surfaced (a populated section, or an
+ * entry in the Add chooser). `isEmpty` is true when no group has any rows, i.e.
+ * there is genuinely nothing populated to show.
  */
 export function buildRelationshipsView(raw: RawNodeRelationships): NodeRelationshipsView {
   const groups = raw.groups.map(buildGroupView);
