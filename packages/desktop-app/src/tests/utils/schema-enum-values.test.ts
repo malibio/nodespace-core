@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { SchemaField } from '$lib/types/schema-node';
+import type { RawEdgeField } from '$lib/services/relationship-grouping';
 import { getEnumValues, formatEnumFallbackLabel, enumValueLabel } from '$lib/utils/schema-enum-values';
 
 function enumField(overrides: Partial<SchemaField> = {}): SchemaField {
@@ -113,5 +114,42 @@ describe('enumValueLabel', () => {
     // now calls this same helper) would otherwise show something.
     const field = enumField({ coreValues: [{ value: 'in_progress', label: '' }] });
     expect(enumValueLabel(field, 'in_progress')).toBe('In Progress');
+  });
+});
+
+describe('edge fields', () => {
+  // An edge field is a closed vocabulary: it declares coreValues and has no
+  // userValues/extensible half. These helpers were widened from SchemaField to
+  // EnumFieldLike so the relationships modal's role picker resolves values
+  // through the same lookup the node property forms use, rather than growing a
+  // second copy that could drift on how a value renders.
+  const roleEdgeField: RawEdgeField = {
+    name: 'role',
+    type: 'enum',
+    coreValues: [
+      { value: 'owner', label: 'Owner' },
+      { value: 'editor', label: 'Editor' },
+      { value: 'viewer', label: 'Viewer' }
+    ]
+  };
+
+  it('returns an edge field\'s declared values in order', () => {
+    expect(getEnumValues(roleEdgeField)).toEqual([
+      { value: 'owner', label: 'Owner' },
+      { value: 'editor', label: 'Editor' },
+      { value: 'viewer', label: 'Viewer' }
+    ]);
+  });
+
+  it('resolves an edge value to its declared label', () => {
+    expect(enumValueLabel(roleEdgeField, 'owner')).toBe('Owner');
+  });
+
+  it('humanizes a stored edge value the schema no longer declares', () => {
+    expect(enumValueLabel(roleEdgeField, 'legacy_admin')).toBe('Legacy Admin');
+  });
+
+  it('returns an empty list for an edge field with no declared values', () => {
+    expect(getEnumValues({ name: 'role', type: 'enum' } as RawEdgeField)).toEqual([]);
   });
 });

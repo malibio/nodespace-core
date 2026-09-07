@@ -447,6 +447,95 @@ fn reject_reserved_relationship_names(
     Ok(())
 }
 
+/// Validate the `edgeFields` declared on each relationship.
+///
+/// Mirrors the node-side `validate_schema_field` enum rule (an enum must
+/// declare its values) and adds the two guards an edge enum needs to be
+/// trustworthy as a closed vocabulary:
+///
+/// - `coreValues` is required on an `enum` edge field and rejected on any other
+///   type, so a value set can never sit on a field nothing validates against.
+/// - a declared `default` must itself be a member of that set — otherwise every
+///   edge created without an explicit value carries an illegal one, and the
+///   value check on write would reject a value the schema itself supplied.
+///
+/// Enum values must also be unique: a duplicated `value` makes the label
+/// ambiguous at display time and silently shadows one of the two entries.
+///
+/// Unlike `SchemaField`, an edge enum has no `userValues`/`extensible` half —
+/// see [`EdgeField::core_values`](nodespace_types::EdgeField::core_values).
+fn validate_edge_field_declarations(
+    relationships: &[crate::models::schema::SchemaRelationship],
+) -> Result<(), MarkdownError> {
+    for rel in relationships {
+        let Some(edge_fields) = rel.edge_fields.as_deref() else {
+            continue;
+        };
+        for field in edge_fields {
+            let is_enum = field.field_type == "enum";
+
+            if !is_enum {
+                if field.core_values.is_some() {
+                    return Err(MarkdownError::invalid_params(format!(
+                        "Edge field '{}' on relationship '{}' declares coreValues but has type \
+                         '{}'. coreValues is only meaningful on an enum edge field — set \
+                         \"type\": \"enum\" or drop coreValues.",
+                        field.name, rel.name, field.field_type
+                    )));
+                }
+                continue;
+            }
+
+            let values = field.core_values.as_deref().unwrap_or(&[]);
+            if values.is_empty() {
+                return Err(MarkdownError::invalid_params(format!(
+                    "Enum edge field '{}' on relationship '{}' must declare its permitted values \
+                     in coreValues, e.g. \"coreValues\": [{{\"value\": \"owner\", \"label\": \
+                     \"Owner\"}}]. An enum with no declared values admits nothing.",
+                    field.name, rel.name
+                )));
+            }
+
+            for (i, ev) in values.iter().enumerate() {
+                if values[..i].iter().any(|prev| prev.value == ev.value) {
+                    return Err(MarkdownError::invalid_params(format!(
+                        "Enum edge field '{}' on relationship '{}' declares the value '{}' more \
+                         than once in coreValues. Each value must be unique.",
+                        field.name, rel.name, ev.value
+                    )));
+                }
+            }
+
+            if let Some(default) = &field.default {
+                let Some(default_str) = default.as_str() else {
+                    return Err(MarkdownError::invalid_params(format!(
+                        "Enum edge field '{}' on relationship '{}' has a default of {}, but an \
+                         enum default must be a string naming one of its coreValues.",
+                        field.name,
+                        rel.name,
+                        json_type_name(default)
+                    )));
+                };
+                if !values.iter().any(|ev| ev.value == default_str) {
+                    return Err(MarkdownError::invalid_params(format!(
+                        "Enum edge field '{}' on relationship '{}' has default '{}', which is not \
+                         one of its declared values ({}).",
+                        field.name,
+                        rel.name,
+                        default_str,
+                        values
+                            .iter()
+                            .map(|ev| ev.value.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Name of a JSON value's type, for error messages.
 fn json_type_name(v: &Value) -> &'static str {
     match v {
@@ -604,6 +693,7 @@ pub async fn handle_create_schema(
     // resolve.
     let pending_schema_id = (!schema_id.is_empty()).then_some(schema_id.as_str());
     reject_reserved_relationship_names(&relationships)?;
+    validate_edge_field_declarations(&relationships)?;
     validate_relationship_targets_exist(node_service, &relationships, pending_schema_id).await?;
 
     // Check if schema already exists — return a clear error so the agent knows
@@ -1142,6 +1232,7 @@ pub async fn handle_update_schema(
             }
         }
         reject_reserved_relationship_names(add_rels)?;
+        validate_edge_field_declarations(add_rels)?;
         // Reject a targetType that doesn't exist yet — see
         // validate_relationship_targets_exist. No pending schema here: the
         // schema being edited was loaded above, so a relationship targeting
@@ -1440,5 +1531,156 @@ mod tests {
         let (fields, warnings) = warn_reserved_property_names(vec![field("email")]);
         assert_eq!(fields.len(), 1);
         assert!(warnings.is_empty());
+    }
+
+    // --- validate_edge_field_declarations ------------------------------------
+
+    use crate::models::schema::{
+        EdgeField, EnumValue, RelationshipCardinality, RelationshipDirection, SchemaRelationship,
+    };
+
+    /// A relationship carrying exactly the given edge fields.
+    fn rel_with_edge_fields(edge_fields: Vec<EdgeField>) -> SchemaRelationship {
+        SchemaRelationship {
+            name: "member_of_org".to_string(),
+            target_type: Some("collection".to_string()),
+            direction: RelationshipDirection::Out,
+            cardinality: RelationshipCardinality::Many,
+            required: None,
+            reverse_name: None,
+            reverse_cardinality: None,
+            edge_fields: Some(edge_fields),
+            description: None,
+        }
+    }
+
+    fn edge_field(name: &str, field_type: &str) -> EdgeField {
+        EdgeField {
+            name: name.to_string(),
+            field_type: field_type.to_string(),
+            core_values: None,
+            indexed: None,
+            required: None,
+            default: None,
+            target_type: None,
+            description: None,
+        }
+    }
+
+    fn rbac_values() -> Vec<EnumValue> {
+        vec![
+            EnumValue {
+                value: "owner".to_string(),
+                label: "Owner".to_string(),
+            },
+            EnumValue {
+                value: "editor".to_string(),
+                label: "Editor".to_string(),
+            },
+            EnumValue {
+                value: "viewer".to_string(),
+                label: "Viewer".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn edge_enum_with_values_and_valid_default_is_accepted() {
+        // The motivating RBAC shape from the issue.
+        let mut role = edge_field("role", "enum");
+        role.core_values = Some(rbac_values());
+        role.required = Some(true);
+        role.default = Some(serde_json::json!("viewer"));
+
+        let rels = vec![rel_with_edge_fields(vec![role])];
+        assert!(validate_edge_field_declarations(&rels).is_ok());
+    }
+
+    #[test]
+    fn edge_enum_without_core_values_is_rejected() {
+        let rels = vec![rel_with_edge_fields(vec![edge_field("role", "enum")])];
+        let err = validate_edge_field_declarations(&rels).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("role") && msg.contains("coreValues"),
+            "expected an error naming the field and coreValues, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn edge_enum_with_empty_core_values_is_rejected() {
+        let mut role = edge_field("role", "enum");
+        role.core_values = Some(vec![]);
+        let rels = vec![rel_with_edge_fields(vec![role])];
+        assert!(validate_edge_field_declarations(&rels).is_err());
+    }
+
+    #[test]
+    fn core_values_on_a_non_enum_edge_field_is_rejected() {
+        // A value set on a field nothing validates against is a declaration
+        // whose author believed it would be enforced.
+        let mut role = edge_field("role", "string");
+        role.core_values = Some(rbac_values());
+        let rels = vec![rel_with_edge_fields(vec![role])];
+        let err = validate_edge_field_declarations(&rels).unwrap_err();
+        assert!(
+            err.to_string().contains("only meaningful on an enum"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn edge_enum_default_outside_the_declared_set_is_rejected() {
+        let mut role = edge_field("role", "enum");
+        role.core_values = Some(rbac_values());
+        role.default = Some(serde_json::json!("admin"));
+
+        let rels = vec![rel_with_edge_fields(vec![role])];
+        let err = validate_edge_field_declarations(&rels).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("admin") && msg.contains("owner"),
+            "error should name the bad default and the legal values, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn edge_enum_non_string_default_is_rejected() {
+        let mut role = edge_field("role", "enum");
+        role.core_values = Some(rbac_values());
+        role.default = Some(serde_json::json!(3));
+
+        let rels = vec![rel_with_edge_fields(vec![role])];
+        assert!(validate_edge_field_declarations(&rels).is_err());
+    }
+
+    #[test]
+    fn edge_enum_duplicate_values_are_rejected() {
+        let mut role = edge_field("role", "enum");
+        let mut values = rbac_values();
+        values.push(EnumValue {
+            value: "owner".to_string(),
+            label: "Owner (duplicate)".to_string(),
+        });
+        role.core_values = Some(values);
+
+        let rels = vec![rel_with_edge_fields(vec![role])];
+        let err = validate_edge_field_declarations(&rels).unwrap_err();
+        assert!(err.to_string().contains("more than once"), "got: {err}");
+    }
+
+    #[test]
+    fn non_enum_edge_fields_and_relationships_without_edge_fields_are_untouched() {
+        let plain = vec![
+            rel_with_edge_fields(vec![
+                edge_field("billing_date", "date"),
+                edge_field("payment_terms", "string"),
+            ]),
+            SchemaRelationship {
+                edge_fields: None,
+                ..rel_with_edge_fields(vec![])
+            },
+        ];
+        assert!(validate_edge_field_declarations(&plain).is_ok());
     }
 }

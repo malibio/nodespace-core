@@ -30,7 +30,9 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import SlidersIcon from '@lucide/svelte/icons/sliders-horizontal';
   import * as Popover from '$lib/components/ui/popover';
+  import * as Select from '$lib/components/ui/select';
   import { createLogger } from '$lib/utils/logger';
+  import { getEnumValues, enumValueLabel } from '$lib/utils/schema-enum-values';
   import {
     loadNodeRelationshipsView,
     addEdge,
@@ -514,7 +516,7 @@
 
   // --- Edge-field input helpers --------------------------------------------
 
-  type EdgeInputKind = 'number' | 'boolean' | 'date' | 'datetime' | 'text';
+  type EdgeInputKind = 'number' | 'boolean' | 'date' | 'datetime' | 'enum' | 'text';
 
   function edgeInputKind(field: RawEdgeField): EdgeInputKind {
     switch (field.type) {
@@ -530,9 +532,13 @@
       case 'datetime':
         // A whole-day `date` input would silently drop the time component.
         return 'datetime';
+      case 'enum':
+        // A declared value set renders as a picker. Falling back to free text
+        // when it is somehow absent keeps an existing edge editable rather
+        // than presenting an empty dropdown with no way out; the backend
+        // requires coreValues on an enum declaration, so this is defensive.
+        return (field.coreValues?.length ?? 0) > 0 ? 'enum' : 'text';
       default:
-        // enum has no declared option set on the edge-field definition, so it
-        // falls back to a free-text input alongside string/text/unknown types.
         return 'text';
     }
   }
@@ -591,6 +597,19 @@
 
   function formatColumn(name: string): string {
     return name.replace(/[_-]+/g, ' ');
+  }
+
+  /**
+   * Read-only rendering of an edge value. An enum shows its declared label
+   * rather than the stored key, so the viewer and the picker agree on how a
+   * value reads. Everything else — including an undeclared edge key, where
+   * `field` is undefined — formats as before.
+   */
+  function formatEdgeValue(field: RawEdgeField | undefined, value: unknown): string {
+    if (field && edgeInputKind(field) === 'enum' && typeof value === 'string' && value !== '') {
+      return enumValueLabel(field, value) ?? value;
+    }
+    return formatValue(value);
   }
 </script>
 
@@ -809,6 +828,25 @@
                                           coerceNumber(e.currentTarget.value)
                                         )}
                                     />
+                                  {:else if kind === 'enum'}
+                                    {@const current = toInputString(
+                                      currentEdgeValue(group, row, column)
+                                    )}
+                                    <Select.Root
+                                      type="single"
+                                      value={current}
+                                      onValueChange={(v) => setEdgeDraft(group, row, column, v)}
+                                    >
+                                      <Select.Trigger class="h-8 w-full">
+                                        {enumValueLabel(field, current) ||
+                                          `Select ${formatColumn(field.name)}...`}
+                                      </Select.Trigger>
+                                      <Select.Content>
+                                        {#each getEnumValues(field) as ev (ev.value)}
+                                          <Select.Item value={ev.value} label={ev.label} />
+                                        {/each}
+                                      </Select.Content>
+                                    </Select.Root>
                                   {:else}
                                     <Input
                                       type={edgeInputType(kind)}
@@ -826,7 +864,7 @@
                                     oninput={(e) => setEdgeDraft(group, row, column, e.currentTarget.value)}
                                   />
                                 {:else}
-                                  {formatValue(row.edgeValues[column])}
+                                  {formatEdgeValue(field, row.edgeValues[column])}
                                 {/if}
                               {:else}
                                 <!-- Intrinsic (target type) or target-schema-field column: read-only. -->
@@ -942,6 +980,24 @@
                                       [field.name]: coerceNumber(e.currentTarget.value)
                                     })}
                                 />
+                              {:else if kind === 'enum'}
+                                {@const current = toInputString(addEdgeDraft[field.name])}
+                                <Select.Root
+                                  type="single"
+                                  value={current}
+                                  onValueChange={(v) =>
+                                    (addEdgeDraft = { ...addEdgeDraft, [field.name]: v })}
+                                >
+                                  <Select.Trigger class="h-8 w-full">
+                                    {enumValueLabel(field, current) ||
+                                      `Select ${formatColumn(field.name)}...`}
+                                  </Select.Trigger>
+                                  <Select.Content>
+                                    {#each getEnumValues(field) as ev (ev.value)}
+                                      <Select.Item value={ev.value} label={ev.label} />
+                                    {/each}
+                                  </Select.Content>
+                                </Select.Root>
                               {:else}
                                 <Input
                                   type={edgeInputType(kind)}

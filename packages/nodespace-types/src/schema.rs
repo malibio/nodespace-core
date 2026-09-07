@@ -198,6 +198,17 @@ pub struct EdgeField {
     pub name: String,
     #[serde(rename = "type")]
     pub field_type: String,
+    /// The closed set of values an `enum` edge field admits, each with a display
+    /// label. Required for `field_type == "enum"` and rejected on any other type.
+    ///
+    /// Deliberately narrower than [`SchemaField`], which also carries
+    /// `user_values` and `extensible`: an edge enum is a fixed vocabulary. The
+    /// motivating case is an access-control role on an edge (owner/editor/viewer),
+    /// where a user-extensible value set would mean a permission level nothing
+    /// downstream knows how to check. Add the extensible half only if a real
+    /// use case for it appears.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub core_values: Option<Vec<EnumValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indexed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -770,6 +781,7 @@ mod tests {
         let field = EdgeField {
             name: "role".to_string(),
             field_type: "string".to_string(),
+            core_values: None,
             indexed: Some(true),
             required: Some(false),
             default: Some(json!("member")),
@@ -812,6 +824,7 @@ mod tests {
         let field = EdgeField {
             name: "approved_by".to_string(),
             field_type: "record".to_string(),
+            core_values: None,
             indexed: Some(true),
             required: None,
             default: None,
@@ -838,6 +851,69 @@ mod tests {
         assert!(field.indexed.is_none());
         assert!(field.required.is_none());
         assert!(field.default.is_none());
+        assert!(field.core_values.is_none());
+    }
+
+    #[test]
+    fn test_edge_field_enum_round_trip() {
+        // The RBAC-style case: a closed role vocabulary declared on the edge.
+        // Serializing must emit `coreValues` (camelCase) with value+label, and
+        // deserializing the same JSON must reproduce the field exactly — this is
+        // the property that fails if `core_values` is ever dropped at the
+        // conversion boundary.
+        let field = EdgeField {
+            name: "role".to_string(),
+            field_type: "enum".to_string(),
+            core_values: Some(vec![
+                EnumValue {
+                    value: "owner".to_string(),
+                    label: "Owner".to_string(),
+                },
+                EnumValue {
+                    value: "editor".to_string(),
+                    label: "Editor".to_string(),
+                },
+                EnumValue {
+                    value: "viewer".to_string(),
+                    label: "Viewer".to_string(),
+                },
+            ]),
+            indexed: Some(true),
+            required: Some(true),
+            default: Some(json!("viewer")),
+            target_type: None,
+            description: Some("Access level on this membership".to_string()),
+        };
+
+        let json = serde_json::to_value(&field).unwrap();
+        assert_eq!(json["type"], "enum");
+        // snake_case `core_values` must serialize to the camelCase wire key
+        assert!(json.get("core_values").is_none());
+        assert_eq!(json["coreValues"].as_array().unwrap().len(), 3);
+        assert_eq!(json["coreValues"][0]["value"], "owner");
+        assert_eq!(json["coreValues"][0]["label"], "Owner");
+        assert_eq!(json["default"], "viewer");
+
+        let round_tripped: EdgeField = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped, field);
+    }
+
+    #[test]
+    fn test_edge_field_omits_core_values_when_absent() {
+        // A non-enum edge field must not gain an empty `coreValues` key.
+        let field = EdgeField {
+            name: "billing_date".to_string(),
+            field_type: "date".to_string(),
+            core_values: None,
+            indexed: None,
+            required: None,
+            default: None,
+            target_type: None,
+            description: None,
+        };
+
+        let json = serde_json::to_value(&field).unwrap();
+        assert!(json.get("coreValues").is_none());
     }
 
     #[test]
@@ -896,6 +972,7 @@ mod tests {
                 EdgeField {
                     name: "billing_date".to_string(),
                     field_type: "date".to_string(),
+                    core_values: None,
                     indexed: Some(true),
                     required: Some(true),
                     default: None,
@@ -905,6 +982,7 @@ mod tests {
                 EdgeField {
                     name: "payment_terms".to_string(),
                     field_type: "string".to_string(),
+                    core_values: None,
                     indexed: None,
                     required: None,
                     default: Some(json!("net-30")),

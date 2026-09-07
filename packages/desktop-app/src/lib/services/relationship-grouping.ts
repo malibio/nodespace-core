@@ -17,6 +17,8 @@
  * - Compute the ordered edge-attribute column set for the table layout.
  */
 
+import type { EnumValue } from '$lib/types/schema-node';
+
 export type RelationshipDirection = 'out' | 'in';
 export type RelationshipCardinality = 'one' | 'many';
 export type RelationshipLayout = 'table' | 'chips';
@@ -25,6 +27,13 @@ export type RelationshipLayout = 'table' | 'chips';
 export interface RawEdgeField {
   name: string;
   type: string;
+  /**
+   * The closed value set of an `enum` edge field. Present only when
+   * `type === 'enum'`; the backend rejects a declaration that pairs one
+   * without the other. Edge enums have no user-extensible half, so there is
+   * no `userValues` counterpart here.
+   */
+  coreValues?: EnumValue[];
   indexed?: boolean;
   required?: boolean;
   default?: unknown;

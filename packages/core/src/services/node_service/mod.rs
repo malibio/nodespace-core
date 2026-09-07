@@ -5841,4 +5841,262 @@ mod tests {
             "combined update must compute title from the new (post-merge) assignee, not the stale one"
         );
     }
+
+    /// Build a `gadget --assigned_to--> widget` schema pair whose edge carries
+    /// an enum `role` field, plus one instance of each type. Returns the
+    /// service, ready for edge writes between `g1` and `w1`.
+    async fn service_with_enum_edge_field() -> (std::sync::Arc<NodeService>, TempDir) {
+        let (service, temp) = create_test_service().await;
+        let service = std::sync::Arc::new(service);
+        let store = service.store();
+
+        for (id, title) in [("widget", "Widget"), ("gadget", "Gadget")] {
+            store
+                .create_node(
+                    Node::new_with_id(
+                        id.to_string(),
+                        "schema".to_string(),
+                        title.to_string(),
+                        serde_json::json!({ "fields": [], "relationships": [] }),
+                    ),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let declarations: Vec<crate::models::schema::SchemaRelationship> =
+            serde_json::from_value(serde_json::json!([{
+                "name": "assigned_to",
+                "targetType": "widget",
+                "direction": "out",
+                "cardinality": "many",
+                "edgeFields": [
+                    {
+                        "name": "role",
+                        "type": "enum",
+                        "coreValues": [
+                            {"value": "owner", "label": "Owner"},
+                            {"value": "editor", "label": "Editor"},
+                            {"value": "viewer", "label": "Viewer"}
+                        ]
+                    },
+                    { "name": "note", "type": "string" }
+                ]
+            }]))
+            .unwrap();
+        service
+            .set_schema_relationships("gadget", &declarations)
+            .await
+            .unwrap();
+
+        for (id, node_type, title) in [
+            ("g1", "gadget", "Gadget One"),
+            ("w1", "widget", "Widget One"),
+        ] {
+            store
+                .create_node(
+                    Node::new_with_id(
+                        id.to_string(),
+                        node_type.to_string(),
+                        title.to_string(),
+                        serde_json::json!({}),
+                    ),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        (service, temp)
+    }
+
+    /// A declared enum value is accepted and stored on the edge.
+    #[tokio::test]
+    async fn create_relationship_accepts_a_declared_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "owner"}),
+            )
+            .await
+            .expect("a declared enum value must be accepted");
+
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let group = view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap();
+        assert_eq!(group.related[0].edge_properties["role"], "owner");
+    }
+
+    /// The case the issue is about: a typo'd RBAC role must not be stored as a
+    /// silently-powerless permission.
+    #[tokio::test]
+    async fn create_relationship_rejects_an_undeclared_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        let err = service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "onwer"}),
+            )
+            .await
+            .expect_err("a value outside the declared set must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("onwer") && msg.contains("role") && msg.contains("Owner (owner)"),
+            "error should name the bad value, the field and the legal values, got: {msg}"
+        );
+
+        // Nothing was written.
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let group = view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap();
+        assert_eq!(group.count, 0, "rejected edge must not be persisted");
+    }
+
+    /// Case matters: `"Owner"` is a different value from `"owner"`.
+    #[tokio::test]
+    async fn create_relationship_rejects_a_wrongly_cased_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+        assert!(service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "Owner"})
+            )
+            .await
+            .is_err());
+    }
+
+    /// A non-enum edge field and an undeclared key are both left alone —
+    /// validation is scoped to enum membership, not to edge data in general.
+    #[tokio::test]
+    async fn create_relationship_leaves_non_enum_and_undeclared_edge_keys_alone() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "viewer", "note": "anything", "adhoc": 7}),
+            )
+            .await
+            .expect("non-enum and undeclared edge keys must pass through");
+
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let props = &view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap()
+            .related[0]
+            .edge_properties;
+        assert_eq!(props["note"], "anything");
+        assert_eq!(props["adhoc"], 7);
+    }
+
+    /// An omitted enum key is not a validation failure — `required` on an edge
+    /// field is not enforced anywhere today, and this check does not change that.
+    #[tokio::test]
+    async fn create_relationship_allows_an_omitted_or_null_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship("g1", "assigned_to", "w1", serde_json::json!({}))
+            .await
+            .expect("an omitted enum edge value must be accepted");
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": serde_json::Value::Null}),
+            )
+            .await
+            .expect("an explicit null must be accepted");
+    }
+
+    /// A non-string value for an enum edge field is rejected with a shape error.
+    #[tokio::test]
+    async fn create_relationship_rejects_a_non_string_enum_edge_value() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        let err = service
+            .create_relationship("g1", "assigned_to", "w1", serde_json::json!({"role": 3}))
+            .await
+            .expect_err("a numeric enum value must be rejected");
+        assert!(err.to_string().contains("must be a string"), "got: {err}");
+    }
+
+    /// The in-place edit path is validated too — otherwise an edge created with
+    /// a legal role could be edited into an illegal one.
+    #[tokio::test]
+    async fn update_relationship_properties_validates_enum_edge_values() {
+        let (service, _temp) = service_with_enum_edge_field().await;
+
+        service
+            .create_relationship(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "viewer"}),
+            )
+            .await
+            .unwrap();
+
+        let err = service
+            .update_relationship_properties(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "superuser"}),
+            )
+            .await
+            .expect_err("an illegal enum value must be rejected on edit");
+        assert!(err.to_string().contains("superuser"), "got: {err}");
+
+        // The original value survives the rejected edit.
+        let view = crate::ops::rel_ops::get_node_relationships(&service, "g1")
+            .await
+            .unwrap();
+        let group = view
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "assigned_to" && g.direction == "out")
+            .unwrap();
+        assert_eq!(group.related[0].edge_properties["role"], "viewer");
+
+        // A legal edit still goes through.
+        service
+            .update_relationship_properties(
+                "g1",
+                "assigned_to",
+                "w1",
+                serde_json::json!({"role": "editor"}),
+            )
+            .await
+            .expect("a declared value must be accepted on edit");
+    }
 }
