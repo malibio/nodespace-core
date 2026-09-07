@@ -1288,7 +1288,10 @@ pub struct SchemaNodeBehavior;
 ///
 /// The check is on the stored key, which is the full name verbatim, so only a
 /// leading `_` on the whole name is fatal: `custom:_internal` stores under a
-/// key beginning `c`, survives the flattener, and stays legal.
+/// key beginning `c`, survives the flattener, and stays legal. The rejection
+/// names that alternative, so it redirects rather than merely refuses — a
+/// caller reaching for `_internal` wants a private-looking field, and the
+/// namespaced form gives them one that actually round-trips.
 pub(crate) fn validate_schema_field_name(name: &str) -> Result<(), NodeValidationError> {
     let invalid = |reason: &str| {
         Err(NodeValidationError::InvalidProperties(format!(
@@ -1298,10 +1301,27 @@ pub(crate) fn validate_schema_field_name(name: &str) -> Result<(), NodeValidatio
     };
 
     if name.starts_with('_') {
-        return invalid(
+        // Name the legal alternative rather than only the rule: a caller
+        // reaching for `_internal` wants a private-looking field, and a
+        // namespaced name is exactly that and does round-trip. Built from the
+        // caller's own name so the suggestion is theirs to paste, not a
+        // generic example they have to translate — except for an all-underscore
+        // name, which leaves nothing to suggest and falls back to the rule
+        // alone rather than proposing the equally invalid 'custom:'.
+        let suggestion = name.trim_start_matches('_');
+        let remedy = if suggestion.is_empty() {
+            "Use a '<namespace>:' prefix instead, e.g. 'custom:name'.".to_string()
+        } else {
+            format!(
+                "Use a '<namespace>:' prefix instead, e.g. 'custom:{}', which round-trips normally.",
+                suggestion
+            )
+        };
+        return invalid(&format!(
             "a leading '_' is reserved for internal bookkeeping — such a field is \
-             dropped from every read path, so it could be written but never read back",
-        );
+             dropped from every read path, so it could be written but never read \
+             back. {remedy}"
+        ));
     }
 
     let is_valid_segment =

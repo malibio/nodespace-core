@@ -309,8 +309,15 @@ async fn schema_cannot_declare_an_underscore_prefixed_field() -> Result<()> {
 
     let msg = err.to_string();
     assert!(
-        msg.contains("_internal_id") && msg.contains('_'),
-        "the error must name the offending field and its reserved prefix, got: {msg}"
+        msg.contains("_internal_id"),
+        "the error must name the offending field, got: {msg}"
+    );
+    // The rejection redirects rather than merely refusing: it names the legal
+    // form of the same intent, built from the caller's own field name, so the
+    // suggestion can be pasted rather than translated.
+    assert!(
+        msg.contains("custom:internal_id"),
+        "the error must suggest the namespaced alternative, got: {msg}"
     );
 
     // Rejected before any write — a half-created schema would be worse than
