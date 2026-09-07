@@ -3075,15 +3075,15 @@ async fn test_punctuation_only_name_does_not_make_the_exemption_vacuous() {
 async fn test_self_referential_declaration_writes_a_self_loop_row() {
     let (svc, _tmp) = create_test_service().await;
 
-    // Everything else here asserts through get_schema_node, which reads
-    // declarations back out of the properties JSON. This drops to the
-    // relationship table itself, because a self-referential declaration is the
-    // one shape whose stored row has in_node == out_node
-    // (`set_schema_declarations` writes out_node = target_type ?? schema_id).
-    // The forward/reverse pair shares both endpoints and differs only in
-    // relationship_type, which is exactly what idx_rel_unique keys on — so if
-    // that index ever narrowed, the second declaration would be silently lost
-    // and only a storage-level assertion would notice.
+    // Every other test here reads declarations back through
+    // `get_schema_declarations`, which selects only the `properties` column —
+    // so `target_type` comes from the serialized declaration JSON and the
+    // stored `out_node` is never observed. This queries the relationship row
+    // directly, because `set_schema_declarations` writes
+    // `out_node = target_type ?? schema_id`, and a self-referential
+    // declaration is the one shape where that yields `in_node == out_node`.
+    // Nothing above this layer can tell a correct self-loop from an `out_node`
+    // written as something else entirely.
     handle_create_schema(
         &svc,
         json!({
@@ -3100,24 +3100,45 @@ async fn test_self_referential_declaration_writes_a_self_loop_row() {
     .await
     .expect("self-referential create should succeed");
 
-    let declarations = svc
-        .store
-        .get_schema_declarations("adr")
+    let conn = svc
+        .store()
+        .read()
         .await
-        .expect("get_schema_declarations failed");
+        .expect("failed to open a read connection");
+    // Declaration rows only. The schema's description subtree also hangs off
+    // 'adr' via a built-in `has_child` edge, which is structural hierarchy
+    // rather than a declaration — the production reader excludes the built-in
+    // names for the same reason.
+    let mut rows = conn
+        .query(
+            "SELECT in_node, out_node, relationship_type FROM relationship \
+             WHERE in_node = 'adr' AND relationship_type NOT IN \
+             ('has_child', 'mentions', 'member_of', 'has_role') \
+             ORDER BY relationship_type",
+            (),
+        )
+        .await
+        .expect("failed to query relationship rows");
 
-    assert_eq!(
-        declarations.len(),
-        2,
-        "both edges of a self-referential pair must survive as distinct rows: {declarations:?}"
-    );
-    for rel in &declarations {
-        assert_eq!(
-            rel.target_type.as_deref(),
-            Some("adr"),
-            "a self-referential declaration must point back at its own schema: {rel:?}"
-        );
+    let mut stored: Vec<(String, String, String)> = Vec::new();
+    while let Some(row) = rows.next().await.expect("row read failed") {
+        stored.push((
+            row.get(0).expect("in_node"),
+            row.get(1).expect("out_node"),
+            row.get(2).expect("relationship_type"),
+        ));
     }
+
+    // ORDER BY relationship_type — "superseded_by" sorts before "supersedes".
+    let expected: Vec<(String, String, String)> = vec![
+        ("adr".into(), "adr".into(), "superseded_by".into()),
+        ("adr".into(), "adr".into(), "supersedes".into()),
+    ];
+    assert_eq!(
+        stored, expected,
+        "both edges must be stored as self-loops (in_node == out_node == 'adr'), \
+         distinguished only by relationship_type"
+    );
 }
 
 #[tokio::test]
