@@ -625,7 +625,7 @@ mod tests {
         emit_routed(&handle, "test-event", "payload", None);
     }
 
-    // --- geometry_is_onscreen / resolve_restore_geometry (#2205) ---
+    // --- geometry_is_onscreen / resolve_restore_geometry ---
 
     fn geom(width: u32, height: u32, x: i32, y: i32) -> WindowGeometry {
         WindowGeometry {

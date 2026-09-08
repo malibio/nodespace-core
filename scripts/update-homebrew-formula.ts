@@ -10,16 +10,16 @@
  * x86_64 -- see REQUIRED_HEADLESS_TARGETS, imported from
  * publish-install-script.ts, the same list install.sh pins against) x 2
  * binaries (`nodespace`, `nodespaced`) = 6 digests, versus the cask's
- * single arm64 .dmg. Before this script existed, the formula (added in
- * nodespace-core#2146) hardcoded its own version and all 6 digests,
- * independent of the cask's sync automation -- the same "hand-maintained
+ * single arm64 .dmg. Before this script existed, the formula hardcoded its
+ * own version and all 6 digests, independent of the cask's sync automation
+ * -- the same "hand-maintained
  * artifact silently drifts" failure mode already fixed once for the cask,
  * reintroduced for the formula in the very PR that added it.
  *
  * The formula's `on_intel do odie(...) end` block under `on_macos` (no
  * macOS Intel build) stays hardcoded rather than becoming conditional on
  * asset presence: unlike the cask's now-removed Intel .dmg leg (which
- * `build-tauri` used to produce until nodespace-core#2169), release.yml's
+ * `build-tauri` used to produce), release.yml's
  * `build-headless` matrix has never had a macOS x86_64 leg at all -- there
  * is no CI job this script could observe flip from absent to present.
  * Making this conditional now would be speculative generality for a
@@ -51,8 +51,8 @@
  * matrix, so `needs` only exposes its aggregate result, not individual
  * legs. This script's own resolveFormulaDigests() re-verifies the specific
  * assets it needs via `gh release view` and fails loudly (a hard error,
- * matching nodespace-core#2171's "missing arm64 is a hard error, not a
- * warning" precedent for the cask) if any of the 6 is missing -- every one
+ * matching the "missing arm64 is a hard error, not a
+ * warning" precedent set for the cask) if any of the 6 is missing -- every one
  * of REQUIRED_HEADLESS_TARGETS is required for this formula, not optional,
  * so there is no partial/degraded formula to render. `homebrew-drift-check.yml`
  * is an independent scheduled backstop that catches a stale formula even
@@ -125,8 +125,8 @@ export interface FormulaDigests {
  * it claims to support -- there is no architecture to gracefully omit the
  * way the cask can (a headless Linux user with a missing Linux binary has
  * no working install path at all), so a missing asset is a hard error,
- * not a warning -- matching nodespace-core#2171's "missing arm64 is a hard
- * error" precedent for the cask. */
+ * not a warning -- matching the "missing arm64 is a hard
+ * error" precedent set for the cask. */
 export async function resolveFormulaDigests(
   version: string,
   workDir: string,

@@ -1,5 +1,5 @@
 <!--
-  Your identity (ADR-037, core#2388) — edit path for the seeded local-user
+  Your identity (ADR-037) — edit path for the seeded local-user
   PersonNode's name/email, and the backfill target for an install whose
   seeded person was never filled in (see OnboardingWizard's identity step,
   which points here: "Settings → Database").

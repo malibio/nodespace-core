@@ -1,5 +1,5 @@
 /**
- * Pure logic for the structured query filter builder (issue #1920).
+ * Pure logic for the structured query filter builder.
  *
  * Extracted from query-editor.svelte so the operator-narrowing, value-coercion,
  * and definition-building rules are unit-testable without rendering the Svelte

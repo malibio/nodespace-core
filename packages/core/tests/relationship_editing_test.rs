@@ -1,4 +1,4 @@
-//! Integration tests for the relationship-viewer editing surface (issue #1918).
+//! Integration tests for the relationship-viewer editing surface.
 //!
 //! Covers the write paths added for the editable modal:
 //! - `update_relationship_properties` (edit an edge's stored `edge_fields` values)

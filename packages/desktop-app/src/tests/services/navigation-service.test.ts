@@ -681,7 +681,7 @@ describe('NavigationService - navigateToNodeInOtherPane', () => {
   });
 });
 
-describe('NavigationService - Entity node navigation (Issue #915)', () => {
+describe('NavigationService - Entity node navigation', () => {
   let navService: ReturnType<typeof getNavigationService>;
 
   function makeNode(id: string, nodeType: string, content: string = ''): Node {

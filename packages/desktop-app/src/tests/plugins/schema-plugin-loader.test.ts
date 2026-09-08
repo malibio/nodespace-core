@@ -250,7 +250,7 @@ describe('Schema Plugin Loader - registerSchemaPlugin()', () => {
     expect(pluginRegistry.hasPlugin('task-123')).toBe(false);
   });
 
-  it('refreshes an already-registered plugin instead of leaving it stale (core#2219)', async () => {
+  it('refreshes an already-registered plugin instead of leaving it stale', async () => {
     // First registration: no title_template yet.
     vi.mocked(backendAdapter.getSchema).mockResolvedValue(
       createMockSchemaNode('customer', { description: 'Customer' })
@@ -374,7 +374,7 @@ describe('Schema Plugin Loader - initializeSchemaPluginSystem()', () => {
   });
 });
 
-describe('Schema Plugin Loader - resyncSchemaPluginsForDatabaseSwitch() (core#2219)', () => {
+describe('Schema Plugin Loader - resyncSchemaPluginsForDatabaseSwitch()', () => {
   beforeEach(() => {
     pluginRegistry.clear();
     vi.clearAllMocks();

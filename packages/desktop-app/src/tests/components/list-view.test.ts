@@ -1,5 +1,5 @@
 /**
- * ListView — stale-title regression (issue #2012).
+ * ListView — stale-title regression.
  *
  * `sharedNodeStore`'s cached `title` only refreshes via a backend round-trip; optimistic
  * content updates patch `content` and leave `title` untouched. ListView used to render

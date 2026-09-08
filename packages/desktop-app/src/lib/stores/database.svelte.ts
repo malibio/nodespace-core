@@ -37,8 +37,8 @@ export interface DatabaseInfo {
   /** Cloud tenant schema this database syncs to (ADR-053); null/empty when the
    * database is local-only (not bound to any tenant). */
   boundTenantSchema: string | null;
-  /** The bound tenant's default (landing) collection id (ADR-053 / sync#297
-   * per-install root). Used as the tree root to hide from the sidebar so
+  /** The bound tenant's default (landing) collection id (ADR-053), a
+   * per-install root. Used as the tree root to hide from the sidebar so
    * top-level collections render as peers rather than nested under the root.
    * null on the public/legacy tenant, where the collections store falls back to
    * the well-known root id. */
@@ -477,7 +477,7 @@ class DatabaseStore {
    * `node:updated` watch events, which have unrecoverable loss modes (watcher
    * reconnect backoff, broadcast lag drops, failed coalescer refetch) — miss one
    * and the variant is stuck stale, e.g. at `sign-in` after the daemon already
-   * flipped `auth_status` to connected (#1674). Callers re-pull on the
+   * flipped `auth_status` to connected. Callers re-pull on the
    * transitions that matter: sync-status edges, the consent decision, database
    * switch, and initial load.
    *

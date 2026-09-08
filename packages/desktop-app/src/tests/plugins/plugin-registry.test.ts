@@ -773,7 +773,7 @@ describe('PluginRegistry - Core Functionality', () => {
     });
   });
 
-  describe('Node Updater Management (Issue #709)', () => {
+  describe('Node Updater Management', () => {
     it('should return updater for plugin with registered updater', () => {
       const plugin: PluginDefinition = {
         id: 'task',
@@ -1532,7 +1532,7 @@ describe('PluginRegistry - Core Functionality', () => {
     });
   });
 
-  describe('getNodeTitle (issue #1564)', () => {
+  describe('getNodeTitle', () => {
     it('uses plugin getTitle when defined', () => {
       const plugin: PluginDefinition = {
         id: 'date',
@@ -1551,7 +1551,7 @@ describe('PluginRegistry - Core Functionality', () => {
       expect(plugin.getTitle).toHaveBeenCalledWith(node);
     });
 
-    it('prefers content over a stale node.title for a non-template type (issue #2012)', () => {
+    it('prefers content over a stale node.title for a non-template type', () => {
       // Regression: a node without a title_template (e.g. task) has its `title` refreshed
       // only by a backend round-trip, while optimistic content edits patch `content`
       // directly. A stale title left over from an earlier state (e.g. a slash command typed
@@ -1644,7 +1644,7 @@ describe('PluginRegistry - Core Functionality', () => {
     });
   });
 
-  describe('resolveDisplayTitle (issue #2012)', () => {
+  describe('resolveDisplayTitle', () => {
     // Used by row-based surfaces (query list/kanban/table views, the collections sidebar)
     // instead of getNodeTitle: same title-vs-content rule, but never applies a plugin's
     // getTitle override (e.g. date's "Today"/"Tomorrow" formatting) — those surfaces show
@@ -1742,7 +1742,7 @@ describe('PluginRegistry - Core Functionality', () => {
     });
   });
 
-  describe('hasTitleTemplate / getTitleTemplate (issue #2152)', () => {
+  describe('hasTitleTemplate / getTitleTemplate', () => {
     it('reads a per-type plugin field, not a slash command — true for a type with no slash command at all', () => {
       const plugin: PluginDefinition = {
         id: 'venue',
@@ -1964,7 +1964,7 @@ describe('PluginRegistry - Core Functionality', () => {
     });
   });
 
-  describe('Schema Form Management (Issue #709)', () => {
+  describe('Schema Form Management', () => {
     it('should return schema form for plugin with registered form', async () => {
       const MockSchemaForm = vi.fn() as unknown as import('$lib/plugins/types').SchemaFormComponent;
       const plugin: PluginDefinition = {

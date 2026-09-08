@@ -809,7 +809,7 @@ async fn search_skills_response_includes_schema_metadata() {
     assert!(
         !schema_metadata.is_empty(),
         "schema_metadata must not be empty — it is the on-demand type context that \
-         replaced the global entity-type injection (#1283)"
+         replaced the global entity-type injection"
     );
 
     // Verify structure: each entry has type_id, name, fields

@@ -31,7 +31,7 @@ struct NodespaceConfig {
     onboarding_completed: bool,
     #[serde(default)]
     integrations: IntegrationsConfig,
-    /// core#2388: set once the user has explicitly saved or skipped the
+    /// Set once the user has explicitly saved or skipped the
     /// identity backfill prompt (the nudge shown to an already-onboarded
     /// install whose seeded local person is still blank), so it surfaces at
     /// most once rather than nagging on every launch. The identity itself
@@ -296,7 +296,7 @@ pub async fn complete_onboarding(
     write_config(&cfg).await
 }
 
-// ── local identity (ADR-037, core#2388) ─────────────────────────────────────
+// ── local identity (ADR-037) ─────────────────────────────────────────────────
 
 /// The seeded local-user PersonNode's identity, as shown to the frontend.
 #[derive(Serialize, Clone)]
@@ -364,7 +364,7 @@ pub async fn get_local_identity(
 }
 
 /// Write first_name/last_name/email into the seeded local-user PersonNode
-/// (never a newly created one — see core#2388 and
+/// (never a newly created one — see
 /// `NodeService::set_local_person_identity`). All fields are written
 /// together; an empty value clears that field.
 #[tauri::command]
@@ -393,7 +393,7 @@ pub async fn set_local_identity(
 /// Best-effort suggestion for the identity prompt, sourced from `git config`
 /// (both fields), falling back to the OS account's full name for `name`
 /// alone. Never written anywhere on its own — the caller shows this for
-/// confirmation only (core#2388's "prefill, do not auto-commit" criterion).
+/// confirmation only ("prefill, do not auto-commit").
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityPrefill {

@@ -25,7 +25,7 @@ const makeNode = (id: string, content: string, version = 1): Node => ({
 const dbSource = { type: 'database' as const, reason: 'initial-load' };
 const viewerSource = { type: 'viewer' as const, viewerId: 'pane-1' };
 
-describe('Node content persistence regression (#1307)', () => {
+describe('Node content persistence regression', () => {
   let store: SharedNodeStore;
 
   beforeEach(() => {

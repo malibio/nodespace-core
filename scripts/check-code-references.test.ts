@@ -52,6 +52,24 @@ describe("countReferences — issue-number patterns", () => {
     expect(result.issueNumberReferences).toBe(0);
   });
 
+  test("matches PR#NNNN", () => {
+    writeFixture("scripts/a.ts", "// caught by review of PR#2290\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
+  test("matches pre-#NNNN and post-#NNNN", () => {
+    writeFixture("scripts/a.ts", "// pre-#2132 behavior, changed post-#2088\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
+  test("matches pre-issue-NNNN and post-issue-NNNN", () => {
+    writeFixture("scripts/a.ts", "// unchanged pre-issue-1689 behavior\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
   test("counts one match per line, not per file", () => {
     writeFixture("scripts/a.ts", "// core#1\n// core#2\n// core#3\n");
     const result = countReferences(["scripts"], fixtureDir);
@@ -151,12 +169,9 @@ describe("real-repo ratchet", () => {
     }
   });
 
-  test("scan roots exclude packages/agent and packages/nlp-engine", () => {
+  test("scan roots include packages/agent and packages/nlp-engine", () => {
     const counts = countReferences();
-    const allFiles = [...counts.issueNumberFiles, ...counts.docPathFiles];
-    for (const f of allFiles) {
-      expect(f).not.toContain(`${"/"}packages/agent/`);
-      expect(f).not.toContain(`${"/"}packages/nlp-engine/`);
-    }
+    expect(counts.issueNumberReferences).toBe(0);
+    expect(counts.docPathReferences).toBe(0);
   });
 });

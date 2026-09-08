@@ -1,5 +1,5 @@
 /**
- * Shared date-field helpers (core#2132): extracted out of schema-field-leaf.svelte
+ * Shared date-field helpers: extracted out of schema-field-leaf.svelte
  * so TaskSchemaForm's collapsed-header "Due: ..." text parses/formats a date
  * value identically to the SchemaFieldLeaf date control itself, instead of
  * keeping its own copy with divergent error handling.

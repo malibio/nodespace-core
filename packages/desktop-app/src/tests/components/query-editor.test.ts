@@ -1,5 +1,5 @@
 /**
- * QueryEditor filter-builder model tests (issue #1920)
+ * QueryEditor filter-builder model tests
  *
  * The editor was replaced with a structured filter builder. These tests exercise
  * the actual pure logic the component delegates to

@@ -1697,7 +1697,7 @@ async fn test_node_accessor_get_nodes_batch() -> Result<()> {
 }
 
 // ============================================================================
-// search_ops::search_semantic — "*" / empty query enumerate behavior (#1940)
+// search_ops::search_semantic — "*" / empty query enumerate behavior
 // ============================================================================
 //
 // Before the fix, `search_ops::search_semantic` rejected `query: ""` outright

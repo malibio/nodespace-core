@@ -507,7 +507,7 @@ mod offline_convergence_tests {
     }
 
     /// `NodeService::is_possible_duplicate` is the read-side accessor the
-    /// desktop UI badge relies on (core#2116) to decide whether to render —
+    /// desktop UI badge relies on to decide whether to render —
     /// it must default to `false` for every "nothing to show" shape (a fresh
     /// node with no marker property at all, and a node whose marker was
     /// explicitly written as `false`), and only ever report `true` once

@@ -189,7 +189,7 @@ describe('pane-content daemon-reconnect hydration', () => {
     expect(h.ensureCalls).toEqual([NODE_ID]);
   });
 
-  it('re-fetches a possibly-stale node on reconnect even though it is already hydrated (#1979)', async () => {
+  it('re-fetches a possibly-stale node on reconnect even though it is already hydrated', async () => {
     h.ensureOutcomes.push('success');
 
     render(PaneContent, { props: { pane } });

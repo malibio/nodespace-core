@@ -76,7 +76,7 @@ describe('SchemaFormLoader', () => {
     expect(loader.genericSchema).toBeNull();
   });
 
-  describe('hasTitleTemplate — hardcoded-form types (core#2111)', () => {
+  describe('hasTitleTemplate — hardcoded-form types', () => {
     /**
      * `person` (like `task`) registers a hardcoded form, so it never populates
      * `genericSchema` — the only thing `hasTitleTemplate` used to consult. It's the

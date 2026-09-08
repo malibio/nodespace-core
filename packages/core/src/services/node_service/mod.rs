@@ -1112,7 +1112,7 @@ impl NodeService {
         Ok(())
     }
 
-    /// ADR-037 / core#2388: resolve the seeded local-user PersonNode — the
+    /// ADR-037: resolve the seeded local-user PersonNode — the
     /// person with an outgoing `has_role` edge carrying `role: "owner"` to
     /// the DatabaseSettingsNode singleton (the owner edge
     /// `seed_database_settings_if_needed` seeds). The DatabaseSettingsNode
@@ -1184,11 +1184,11 @@ impl NodeService {
             .next())
     }
 
-    /// ADR-037 / core#2388: write the local user's first/last name and email
+    /// ADR-037: write the local user's first/last name and email
     /// into the SEEDED PersonNode resolved by [`Self::get_local_person`] —
     /// never a newly created one. Display identity is composed by the
     /// person schema's `title_template`, so `content` is left untouched here
-    /// (unlike the pre-#2111 single-`name` version, which synced it). Trims
+    /// (unlike the single-`name` version this replaced, which synced it). Trims
     /// whitespace; an empty value clears the corresponding field rather than
     /// erroring, so any subset of fields may be filled and the rest left
     /// blank — this mirrors the wizard's skippable, non-blocking design (a
@@ -2600,7 +2600,7 @@ mod tests {
         }
     }
 
-    /// The batched edge-sweep primitive (#345) reproduces the sender's sibling order
+    /// The batched edge-sweep primitive reproduces the sender's sibling order
     /// and is idempotent — it never re-parents a child that already has a parent.
     #[tokio::test]
     async fn bulk_create_has_child_edges_reproduces_order_and_is_idempotent() {
@@ -4972,7 +4972,7 @@ mod tests {
         assert_eq!(edge.properties["status"], "active");
     }
 
-    // --- get_local_person / set_local_person_identity (ADR-037, core#2388) ---
+    // --- get_local_person / set_local_person_identity (ADR-037) ---
 
     #[tokio::test]
     async fn test_get_local_person_resolves_the_seeded_owner() {
@@ -5409,7 +5409,7 @@ mod tests {
     async fn test_get_node_relationships_emits_empty_declared_groups() {
         // A declared relationship must surface even with zero edges — on BOTH
         // sides — so the viewer can add the first edge and the visibility gate
-        // (#2007) can tell "declared but unlinked" from "no relationship at all".
+        // can tell "declared but unlinked" from "no relationship at all".
         // Regression for the inbound branch, which previously skipped empties
         // while the outbound branch emitted them.
         let (service, _temp) = create_test_service().await;
@@ -5503,7 +5503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_node_relationships_inbound_multiple_sources_not_duplicated() {
-        // Regression (#1918): the inbound query keys only on relationship_type,
+        // Regression: the inbound query keys only on relationship_type,
         // so two schemas declaring the SAME relationship name targeting the same
         // type must land in SEPARATE groups, each restricted to its own source
         // type — never doubled or cross-attributed.
@@ -6781,8 +6781,8 @@ mod tests {
         assert!(err.to_string().contains("must be a string"), "got: {err}");
     }
 
-    /// End-to-end coverage for the person→task `assignee` relationship
-    /// (core#2112): assignment and clearing both work through the generic
+    /// End-to-end coverage for the person→task `assignee` relationship:
+    /// assignment and clearing both work through the generic
     /// relationship API, with no task-specific or assignee-specific code path.
     /// Person declares `tasks` (Out/Many); task's `assignee` (reverse, One) is
     /// derived, never declared directly — mirrors project's `tasks`/`project`

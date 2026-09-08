@@ -894,7 +894,7 @@ const GROUPS: MatrixScenario[][] = [
       // if the model happened to invent that field — and a type with nowhere
       // to put the value means the model folds it into the node's text,
       // degrades honestly, and scores red for the fixture's omission rather
-      // than its own behavior (#1846). The sibling chain already got this
+      // than its own behavior. The sibling chain already got this
       // right; this one inherited the gap from the scenario it replaced.
       prompt:
         "Start keeping the calls we make on how the system is built, and who made each one",
@@ -1168,7 +1168,7 @@ const GROUPS: MatrixScenario[][] = [
       // model was rejected for following its instructions exactly. (That
       // description has since been corrected to name `mentions`, and a
       // regression guard now keys the wording off the validator's own
-      // built-in list — see core#2234.) That combination made
+      // built-in list.) That combination made
       // the scenario unwinnable by construction: no wording of "link these"
       // could have succeeded for an ad-hoc relation between these two types.
       //
@@ -1178,7 +1178,7 @@ const GROUPS: MatrixScenario[][] = [
       // the minimum bar for a scenario to measure anything.
       //
       // The underlying affordance gap (a documented generic label the
-      // validator refuses) is a product bug tracked on core#2234; it is not
+      // validator refuses) is a known product bug; it is not
       // this fixture's job to encode a workaround for it beyond staying
       // winnable. If that lands, revisit whether this prompt should go back to
       // asking for a link in the user's own words.
@@ -1409,7 +1409,7 @@ const GROUPS: MatrixScenario[][] = [
       // and the sign-off it writes. Same reason scenario 3 names its downstream
       // fields — a type with nowhere to put a value makes every later turn in
       // this group unwinnable, and the model degrades honestly and scores red
-      // for the fixture's omission (#1846).
+      // for the fixture's omission.
       //
       // The sign-off half was missing until a DeepSeek run made the cost
       // visible: 12d failed while the model reasoned correctly, ranking the
@@ -1607,15 +1607,15 @@ const GROUPS: MatrixScenario[][] = [
   //
   // This is also the only scenario where A READ is genuinely forced, which is
   // why `toolSequence` lives here: with the referent absent from history, no
-  // direct write can reach the right id. That is the assertion kind #2242 left
-  // dead and neither prior attempt could honestly revive.
+  // direct write can reach the right id. That is the assertion kind a prior
+  // attempt left dead and neither subsequent attempt could honestly revive.
   //
   // WHICH read is not forced, and saying otherwise would repeat the overclaim
   // that sank both prior attempts: `resolve_query` reaches the same node. The
   // subsequence names `search_nodes` because that is the route the winnability
   // test proves; a model resolving otherwise shows as a trajectory mismatch
   // against a passing outcome. That is acceptable only because `expect` is a
-  // diagnostic rather than the score (#2243).
+  // diagnostic rather than the score.
   [
     {
       id: "13",
@@ -1625,7 +1625,7 @@ const GROUPS: MatrixScenario[][] = [
       // against, so a lookup is the only route to the id.
       //
       // WINNABILITY: the seeded type carries `on_call`, so the value the prompt
-      // names is one the schema can actually hold and filter on (#1846). The
+      // names is one the schema can actually hold and filter on. The
       // ideal `search_nodes` + `update_node` pair is proved acceptable against a
       // live backend by
       // `scenario_13_ideal_lookup_then_write_is_accepted` in

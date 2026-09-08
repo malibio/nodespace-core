@@ -229,7 +229,7 @@ describe('pending-operations module', () => {
       expect(executionOrder[2]).toBe('op2-complete');
     });
 
-    it('should handle the Enter+Tab+Shift+Tab scenario (Issue #662)', async () => {
+    it('should handle the Enter+Tab+Shift+Tab scenario without interleaving indent/outdent operations', async () => {
       vi.useRealTimers();
       const nodeId = uniqueNodeId('issue-662-node');
       const operationLog: string[] = [];

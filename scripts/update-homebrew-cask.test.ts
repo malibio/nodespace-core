@@ -106,7 +106,7 @@ describe("renderCask", () => {
   # Explicit github_latest strategy: without this, brew's default livecheck
   # falls back to scanning ALL repo tags, which picks up unrelated
   # \`review-*\` tooling tags (e.g. review-20260813-095222) instead of the
-  # actual latest published release -- see NodeSpaceAI/nodespace-core#2114.
+  # actual latest published release.
   livecheck do
     url :url
     strategy :github_latest

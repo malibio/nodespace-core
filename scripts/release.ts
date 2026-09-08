@@ -38,8 +38,8 @@ function getCurrentVersion(): string {
  * Update version in tauri.conf.json, Cargo.toml, and both package.json files.
  *
  * tauri.conf.json, packages/desktop-app/package.json, and src-tauri/Cargo.toml
- * are the three files scripts/check-version-sync.ts enforces as canonical
- * (nodespace-core#1686) -- the pre-push gate fails the release commit itself
+ * are the three files scripts/check-version-sync.ts enforces as canonical --
+ * the pre-push gate fails the release commit itself
  * if any of them drift. This function used to update the ROOT package.json
  * instead of packages/desktop-app/package.json, which isn't one of the three
  * check-version-sync.ts actually compares -- every release silently left the

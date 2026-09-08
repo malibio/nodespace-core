@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
-// App-version single-source-of-truth guard (nodespace-core#1686, deliverable 2).
+// App-version single-source-of-truth guard.
 //
 // The desktop app's version is stamped into three files that must agree, or the
-// running .app reports a version that doesn't match the build — the exact failure
-// mode #1686 was filed for (a stale bundle silently under test). There is no build
+// running .app reports a version that doesn't match the build — a stale bundle
+// silently under test. There is no build
 // step that derives one field from another (Cargo, npm, and Tauri each read their
 // own file), so the source of truth is enforced by CHECK, not by generation:
 // `tauri.conf.json` is canonical (it stamps the bundle version the OS and the user

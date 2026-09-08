@@ -62,7 +62,7 @@
     schema: SchemaNode | null;
     /**
      * The group-by field for this board, sourced from the query node's
-     * `viewConfig.kanban.groupBy` (issue #1919). `undefined` means "not chosen
+     * `viewConfig.kanban.groupBy`. `undefined` means "not chosen
      * yet — fall back to the first eligible enum field".
      */
     groupBy: string | undefined;

@@ -129,13 +129,13 @@ describe('aiChatsData', () => {
       expect(aiChatsData.state.chats.map((c) => c.id)).toEqual(['a']);
     });
 
-    // core#2220: unlike every other cross-switch read in the codebase
+    // Unlike every other cross-switch read in the codebase
     // (loadChildrenForParent, doLoadChildrenTree, refreshDatabaseSettings,
     // createChat, createCollection), loadAiChats committed its fetched array
     // into state without re-checking the store generation after the await — a
     // response issued against the previous database could land after a switch
     // and get committed as if it belonged to the new one.
-    describe('stale-response guard across a database switch (core#2220)', () => {
+    describe('stale-response guard across a database switch', () => {
       it('discards a load that resolves after invalidateForDatabaseSwitch, without writing into the list', async () => {
         let resolveLoad: (nodes: Node[]) => void = () => {};
         mockQueryNodes.mockReturnValue(
@@ -374,7 +374,7 @@ describe('aiChatsData', () => {
       expect(aiChatsData.createError).toBe('');
     });
 
-    // Follow-up from core#2220 code review: reset() bumps #generation the
+    // reset() bumps #generation the
     // same way collectionsData.reset() does, so an in-flight load/create
     // discovered stale by a reset() (not just invalidateForDatabaseSwitch())
     // cannot write into the state the reset just established.

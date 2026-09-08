@@ -62,7 +62,7 @@ async function goHealthy() {
   daemonStatusHandler?.({ payload: 'healthy' });
 }
 
-describe('daemon-reconnect retry wiring (#1470)', () => {
+describe('daemon-reconnect retry wiring', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
@@ -91,7 +91,7 @@ describe('daemon-reconnect retry wiring (#1470)', () => {
     expect(mockGetAllCollections).toHaveBeenCalledTimes(1);
   });
 
-  it('databaseStore retries load once the daemon reconnects when nothing is loaded yet (#1674)', async () => {
+  it('databaseStore retries load once the daemon reconnects when nothing is loaded yet', async () => {
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     try {
       await import('$lib/stores/database.svelte');

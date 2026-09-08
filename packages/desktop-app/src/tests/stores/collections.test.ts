@@ -451,7 +451,7 @@ describe('Collections Store', () => {
     });
   });
 
-  describe('selectedCollectionMembers title-vs-content (issue #2012)', () => {
+  describe('selectedCollectionMembers title-vs-content', () => {
     afterEach(() => {
       pluginRegistry.unregister('widget-entity');
     });
@@ -635,8 +635,8 @@ describe('Collections Store', () => {
     });
   });
 
-  describe('buildCollectionsTree dynamic bound-root filtering (#1967)', () => {
-    // A per-install workspace root (sync#297): a random uuid minted per install,
+  describe('buildCollectionsTree dynamic bound-root filtering', () => {
+    // A per-install workspace root: a random uuid minted per install,
     // NOT the well-known legacy id. Its member_of edge must be hidden the same
     // way the legacy root's is, or the user's top-level collections wrongly nest
     // under it in the sidebar.

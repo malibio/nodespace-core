@@ -1,8 +1,7 @@
 <!--
   QueryNodeViewer - Page-level viewer for a type's default view and saved queries
 
-  Serves two shapes from one component, branching on the node it was handed
-  (issue #1919):
+  Serves two shapes from one component, branching on the node it was handed:
 
   - schema node → the DEFAULT type view: all nodes of the type, unfiltered,
     nothing persisted. The first divergence — a filter edit, a view/group-by
@@ -206,7 +205,7 @@
 
     try {
       // Load the raw node and branch on what it actually is — the tab's
-      // decorative `nodeType: 'query'` is not trusted (issue #1919).
+      // decorative `nodeType: 'query'` is not trusted.
       //
       // Prefer an already-hydrated copy from sharedNodeStore over a fresh
       // network round-trip: this is the remount path immediately after

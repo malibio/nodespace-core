@@ -271,7 +271,7 @@
 
       scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
 
-      // Cross-node copy (#278): a text selection spanning more than one node
+      // Cross-node copy: a text selection spanning more than one node
       // copies the underlying source markdown (clipped to the selection, nesting
       // preserved as indentation) instead of the browser default (stripped,
       // boundary-less rendered text). Single-node selections fall through to

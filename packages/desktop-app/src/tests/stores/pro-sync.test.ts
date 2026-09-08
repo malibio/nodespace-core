@@ -150,7 +150,7 @@ describe('ProSync store — authRequiredEpisode transition counter', () => {
 });
 
 
-describe('ProSync store — signedInEpisode transition counter (#1566)', () => {
+describe('ProSync store — signedInEpisode transition counter', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue('pro');
@@ -190,7 +190,7 @@ describe('ProSync store — signedInEpisode transition counter (#1566)', () => {
   });
 });
 
-describe('ProSync store — onProConfirmed (#1566)', () => {
+describe('ProSync store — onProConfirmed', () => {
   // proSync is a module-level singleton and proConfirmed is a one-way latch, so once
   // any prior test has confirmed Pro tier it stays confirmed. These assertions are
   // therefore written to be order-independent: they exercise the "already pro" path,
@@ -226,7 +226,7 @@ describe('ProSync store — onProConfirmed (#1566)', () => {
   });
 });
 
-describe('ProSync store — reload re-hydration (#1647)', () => {
+describe('ProSync store — reload re-hydration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset the idempotent-start latch so start() re-runs its hydration, as it

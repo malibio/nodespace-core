@@ -11,7 +11,7 @@
     green      — CONNECTED
     red        — ERROR
 
-  Exception (#1674): CONNECTED/SYNCING only prove the daemon's realtime session
+  Exception: CONNECTED/SYNCING only prove the daemon's realtime session
   is live — i.e. signed in. When the active database has not opted into sync
   (`sync_enabled: false` on its DatabaseSettingsNode, via isProSyncActive), the
   pill shows a neutral "Signed in — sync off" instead, never "Synced".
@@ -92,7 +92,7 @@
   let signedIn = $derived(proSync.userEmail !== '');
   let clickable = $derived(SIGN_IN_STATES.includes(proSync.state) || signedIn);
 
-  // Axis-2 cross-check (#1674): the realtime state reads 'connected' whenever
+  // Axis-2 cross-check: the realtime state reads 'connected' whenever
   // the daemon's session is live — that only proves sign-in, not sync. Whether
   // data actually leaves the device is the settings node's `sync_enabled`
   // (surfaced via isProSyncActive, which fails safe to false while the node is

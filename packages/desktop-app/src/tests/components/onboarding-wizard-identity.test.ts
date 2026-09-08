@@ -1,5 +1,5 @@
 /**
- * OnboardingWizard identity step (core#2388).
+ * OnboardingWizard identity step.
  *
  * The setup wizard never asked who the local user is, leaving the seeded
  * local person node permanently blank. These tests cover:
@@ -56,7 +56,7 @@ const FILLED_IDENTITY = {
   isBlank: false
 };
 
-describe('OnboardingWizard identity step (core#2388)', () => {
+describe('OnboardingWizard identity step', () => {
   let onClose: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {

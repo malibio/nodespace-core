@@ -2,11 +2,11 @@
 //! correctly resolves "the 2400 one", the follow-on `update_node` call must
 //! carry the requested state change in `field_values` — not just the `id`.
 //!
-//! The observed failure (issue #1927) was `update_node({"id": "..."})` with no
+//! The observed failure was `update_node({"id": "..."})` with no
 //! `field_values`, so the requested change silently no-ops. The node is right
 //! and the tool is right; only the payload is empty.
 //!
-//! The write parameter is named `field_values`, not `properties`, per #2123: a
+//! The write parameter is named `field_values`, not `properties`: a
 //! tool parameter literally named `properties` collides with JSON Schema's own
 //! `properties` keyword and is silently dropped by the Gemma-4 chat template
 //! before the model ever sees it.

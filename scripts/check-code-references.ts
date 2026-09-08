@@ -3,44 +3,29 @@
 // numbers or nodespace-docs/ paths in code comments ("describe the
 // behavior/constraint directly, and reference decisions by ADR").
 //
-// This does NOT enforce zero. A prior audit found 336 issue-number
-// references and 23 doc-path references across the whole repo; 13 of the
-// doc-path references (all outside packages/agent/nlp-engine) were fixed in
-// that same pass, and this check's own scan of SCAN_ROOTS below — which
-// deliberately excludes packages/agent and packages/nlp-engine, outside its
-// scope — counted 282 issue-number references and 0 doc-path references at
-// that point. Since then: +2 from a concurrent PR that landed while this
-// check's baseline was in flight (packages/daemon/src/main.rs, "(see
-// core#2357)" on a still-open tracking issue, added at 5 call sites total —
-// paid back down by dropping the bare reference from all 5, since the
-// constraint each one guards was already fully spelled out in the same
-// sentence); then +1 from another concurrent PR (a "(core#2451)" citation in
-// a new regression test in
-// packages/desktop-app/src/tests/components/onboarding-wizard-identity.test.ts
-// — paid back down by dropping the bare reference, since the constraint was
-// already fully spelled out in the same comment). Current count: 279.
-// Retroactively triaging all remaining issue-number references is a
-// separate, much larger undertaking — each one needs individual judgment (is
-// this constraint-bearing, provenance-only, or a doc-pointer?) — not
-// attempted here. What this DOES do: ratchet the count down-only, so the
-// backlog can shrink over time but can never silently grow again without a
-// deliberate, reviewed bump to the baseline below.
+// The full-repo retroactive triage this check used to merely ratchet against
+// is now complete: every issue-number and doc-path reference across the
+// whole repo (SCAN_ROOTS below, now including packages/agent and
+// packages/nlp-engine, previously excluded as out of scope) was triaged —
+// constraint-bearing comments had their constraint inlined before the
+// reference was dropped, provenance-only citations were deleted outright,
+// and doc-path references either had their essential fact inlined or were
+// replaced with an ADR citation. Both baselines are now 0.
 //
-// Lower BASELINES whenever a change pays down part of the backlog. Never
-// raise a baseline to accommodate a new reference — inline the constraint or
-// cite an ADR instead, per the rule this check exists to hold the line on.
+// Lower BASELINES whenever a change pays down part of the backlog (should
+// stay at 0 now). Never raise a baseline to accommodate a new reference —
+// inline the constraint or cite an ADR instead, per the rule this check
+// exists to hold the line on.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const REPO = join(dirname(new URL(import.meta.url).pathname), "..");
 
-// packages/agent and packages/nlp-engine are outside this check's scope —
-// see the file-level comment. Every other package is in scope; list them
-// explicitly (rather than deriving from `packages/*`) so a newly added
-// package fails closed — it stays unscanned until someone notices and adds
-// it here, rather than silently entering the ratchet with whatever count it
-// happens to start with.
+// Every package is in scope. List them explicitly (rather than deriving from
+// `packages/*`) so a newly added package fails closed — it stays unscanned
+// until someone notices and adds it here, rather than silently entering the
+// ratchet with whatever count it happens to start with.
 const SCAN_ROOTS = [
   "scripts",
   "packages/desktop-app",
@@ -51,20 +36,40 @@ const SCAN_ROOTS = [
   "packages/proto",
   "packages/dev-tools",
   "packages/skill",
+  "packages/agent",
+  "packages/nlp-engine",
 ];
 const EXTENSIONS = new Set([".rs", ".ts", ".svelte", ".js"]);
 const EXCLUDE_DIR_NAMES = new Set(["node_modules", "target", ".git", "dist", "build"]);
 
 // This checker's own source and test necessarily describe the patterns they
 // scan for in comments/messages/fixtures, which would otherwise self-match.
-const EXCLUDE_FILE_NAMES = new Set(["check-code-references.ts", "check-code-references.test.ts"]);
+//
+// search_skills_latency.rs computes a real `nodespace-docs` sibling-directory
+// path at runtime to write a benchmark report — functional filesystem logic,
+// gracefully skipped when the directory is absent, not a stale documentation
+// citation. That's a different thing from the rule this check enforces (a
+// comment pointing a human at a doc for context), so it's excluded rather
+// than rewritten to hide a real dependency.
+const EXCLUDE_FILE_NAMES = new Set([
+  "check-code-references.ts",
+  "check-code-references.test.ts",
+  "search_skills_latency.rs",
+]);
 
-const ISSUE_NUMBER_PATTERNS: RegExp[] = [/core#\d+/, /\(#\d+\)/, /\b[Ii]ssue #\d+\b/];
+const ISSUE_NUMBER_PATTERNS: RegExp[] = [
+  /core#\d+/,
+  /\(#\d+\)/,
+  /\b[Ii]ssue #\d+\b/,
+  /\bPR#\d+\b/,
+  /\b(?:pre|post)-#\d+\b/,
+  /\b(?:pre|post)-issue-\d+\b/,
+];
 const DOC_PATH_PATTERN = /nodespace-docs\//;
 
 // Ratchet baselines. See the file-level comment: lower on paydown, never raise.
 export const BASELINES = {
-  issueNumberReferences: 279,
+  issueNumberReferences: 0,
   docPathReferences: 0,
 };
 

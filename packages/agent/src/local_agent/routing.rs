@@ -109,7 +109,7 @@ pub enum RouteDecision {
         /// the failure mode to avoid.
         options: Vec<String>,
     },
-    /// The request bundles multiple distinct, unambiguous intents (#1909) —
+    /// The request bundles multiple distinct, unambiguous intents —
     /// one query per intent, each re-entering retrieval independently the
     /// same way a single `Query` does. Not for a single intent expressed
     /// verbosely, and not a substitute for `Clarify` when the request is
@@ -420,8 +420,7 @@ pub fn render_candidates_for_prompt(candidates: &[SkillCandidate]) -> Option<Str
             // per-candidate rendering is a second, independent site that
             // shows the same schema metadata; a fix applied only to the
             // resident copy left this one to reinforce the exact
-            // contamination the resident copy was changed to guard against
-            // (#1846).
+            // contamination the resident copy was changed to guard against.
             out.push_str(&format!("\n{EXISTING_SCHEMAS_HEADER}\n{meta}\n"));
         }
     }
@@ -707,7 +706,10 @@ pub fn destructive_tools_withheld(candidates: &[SkillCandidate]) -> Vec<&str> {
 /// corpus exercises a genuine two-different-tools compound turn, so there is
 /// no measured guidance on how to tell it apart mechanically from the
 /// distractor case using only candidate score and tool whitelist — doing so
-/// well likely needs the same per-skill retrieval scoping core#2148 tracks.
+/// well likely needs per-skill retrieval scoping (ranking each tool's
+/// candidates independently rather than by one global score) to distinguish
+/// "beaten by a better candidate for the same tool" from "a different tool
+/// entirely, just scored lower."
 /// Pinned by `declare_write_tool_fields_does_not_declare_a_non_top_scoring_but_uncontested_tool`
 /// below so this is a documented, deliberate trade-off rather than a latent
 /// surprise.
@@ -1303,8 +1305,11 @@ mod tests {
     /// (see the doc comment for why the distractor case requires it), but
     /// it means a genuinely compound turn — both tools legitimately wanted
     /// — only gets one of them declared. Falls back to the bare-object
-    /// shape for the other, not a regression relative to pre-#2120
-    /// production, just an unrealized improvement flagged for core#2148.
+    /// shape for the other, not a regression relative to production before
+    /// per-candidate field declaration existed, just an unrealized
+    /// improvement: per-skill retrieval scoping (see the doc comment above)
+    /// would let both tools' top candidates get their fields declared
+    /// independently instead of only the turn's single global top scorer.
     #[test]
     fn declare_write_tool_fields_does_not_declare_a_non_top_scoring_but_uncontested_tool() {
         let mut top = candidate("Relationship Management", 0.9, &["create_relationship"]);

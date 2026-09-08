@@ -15,7 +15,7 @@
   suggest-don't-block by design: the field save above is never gated on the
   lookup, and create-anyway always remains possible.
 
-  Convergence duplicate indicator (ADR-065 §4, core#2116): a duplicate that
+  Convergence duplicate indicator (ADR-065 §4): a duplicate that
   slips past the creation-time suggestion above (offline write, sync
   convergence) gets detected out-of-band and stamped onto BOTH colliding
   nodes as `properties.person._possible_duplicate`. When that marker is set,
@@ -42,14 +42,14 @@
 
   const log = createLogger('PersonSchemaForm');
 
-  // Relationships viewer entry point (issue #1918) — inbound relationships (e.g.
+  // Relationships viewer entry point — inbound relationships (e.g.
   // tasks assigned to this person) surface here.
   let showRelationships = $state(false);
 
   let { nodeId }: { nodeId: string } = $props();
 
   // Gate the Relationships trigger the same way TypedFormShell now gates it for
-  // TaskSchemaForm/GenericSchemaForm (core#2132) — shown only when this node's
+  // TaskSchemaForm/GenericSchemaForm — shown only when this node's
   // type actually has a typed relationship (outbound declared on its schema, or
   // inbound declared by another schema targeting it), resolved once per nodeId.
   // Default hidden; fail-open on a query error so a transient failure never
@@ -83,13 +83,13 @@
   const lastName = $derived((personProps['last_name'] as string | undefined) ?? '');
   const email = $derived((personProps['email'] as string | undefined) ?? '');
 
-  // Adopt-existing suggestion state (core#1734 / ADR-065). `duplicateMatch` is
+  // Adopt-existing suggestion state (ADR-065). `duplicateMatch` is
   // the existing person the current email collides with, or null when there is
   // none / the suggestion was dismissed. `checkedForEmail` skips re-issuing a
   // lookup for a value already checked (e.g. tabbing through an unchanged
   // field). Staleness itself — whether an in-flight lookup's result is still
   // allowed to land — is decided by `checkGeneration`, NOT by comparing values:
-  // two different triggers (a blur check and a badge re-check, core#2116) can
+  // two different triggers (a blur check and a badge re-check) can
   // race for the SAME or DIFFERENT email, and a monotonic generation is the
   // only thing that correctly says "only the most recently STARTED lookup may
   // ever write `duplicateMatch`" regardless of which resolves first or what
@@ -98,7 +98,7 @@
   let checkedForEmail: string | null = null;
   let checkGeneration = 0;
 
-  // Convergence duplicate indicator (ADR-065 §4, core#2116): true once
+  // Convergence duplicate indicator (ADR-065 §4): true once
   // out-of-band detection (offline write, sync convergence) has stamped
   // `properties.person._possible_duplicate` on this node — independent of
   // (and typically set well after) the blur-triggered check above.
@@ -190,7 +190,7 @@
     try {
       const match = await backendAdapter.findDuplicateFor('person', 'email', value, nodeId);
       // Ignore a superseded response — from either a newer blur check for a
-      // different value, or a badge-triggered recheck (core#2116) that
+      // different value, or a badge-triggered recheck that
       // started after this one. The backend already excludes this node via
       // excludeId above — the `match.id !== nodeId` check is a defensive
       // backstop, not the primary exclusion mechanism (an earlier version
@@ -210,7 +210,7 @@
   }
 
   /**
-   * Entry point for the convergence duplicate indicator badge (core#2116):
+   * Entry point for the convergence duplicate indicator badge:
    * re-runs the exact same lookup `checkForDuplicate` performs on blur,
    * reusing the exact same suggestion UI (`duplicateMatch` +
    * adoptExisting/dismissDuplicateSuggestion below) rather than a parallel
@@ -294,7 +294,7 @@
   </div>
 
   {#if isFlaggedDuplicate && !duplicateMatch}
-    <!-- Convergence duplicate indicator (ADR-065 §4, core#2116): informational,
+    <!-- Convergence duplicate indicator (ADR-065 §4): informational,
          non-modal — never blocks editing this node. Clicking re-runs the same
          lookup as the blur check and reuses the Alert below, rather than
          showing a second, different suggestion UI. -->
@@ -337,7 +337,7 @@
     </Alert>
   {/if}
 
-  <!-- Relationships entry point (issue #1918), gated on the type actually having
+  <!-- Relationships entry point, gated on the type actually having
        typed relationships (outbound declared or inbound) — see hasRelationships above. -->
   {#if hasRelationships}
     <button

@@ -401,7 +401,7 @@ fn quote_bare_date_literals(text: &str) -> Cow<'_, str> {
 /// value. SQLite's `json_extract` preserves the stored value's real type, so
 /// a type-mismatched equality filter compares unequal — silently
 /// indistinguishable from "no such node" to the caller. This is the
-/// "cheaper to try first" fix from issue #1915: state the expected encoding
+/// "cheaper to try first" fix: state the expected encoding
 /// directly in the prompt rather than adding another
 /// `coerce_filter_value_to_field_type` arm each time a new type is caught
 /// live.
@@ -409,10 +409,9 @@ fn quote_bare_date_literals(text: &str) -> Cow<'_, str> {
 /// Deliberately local to `exec_resolve_query` rather than added to
 /// `render_shape()` itself: that method also renders the `RELEVANT ENTITY
 /// TYPES` block shown to the primary agent for `create_node`/`search_nodes`
-/// guidance, which is out of this issue's scope and validated by its own
+/// guidance, which is out of scope here and validated by its own
 /// tests — widening it without measuring those call sites risks the same
-/// bystander-regression pattern this project has hit before (see #1912,
-/// #1926).
+/// bystander-regression pattern this project has hit before.
 fn render_resolve_query_field_line(
     field: &nodespace_core::ops::entity_types_block::EntityFieldDescriptor,
 ) -> String {
@@ -1205,7 +1204,7 @@ fn def_create_schema() -> ToolDefinition {
                     // to adopt. This parameter names the thing being CREATED,
                     // which is what made its example answerable.
                     //
-                    // MEASURED, not just predicted (core#2190,
+                    // MEASURED, not just predicted (see
                     // goldens/ablation/must-exist-id-{baseline,armA,armB}.toml):
                     // the three survivors are inert in BOTH directions — the
                     // literal token "adr" never appeared in 27/27 tool calls
@@ -1475,7 +1474,7 @@ fn def_update_task_status() -> ToolDefinition {
 /// Stage-2-callable counterpart to Stage 1's `route_clarify` (see
 /// `routing::stage1_tool_definitions`) — same tool NAME
 /// (`routing::ROUTE_CLARIFY_TOOL`), a deliberately different ARGUMENT shape.
-/// core#2149 measured that calling a clarify tool is more reliable than
+/// Measured that calling a clarify tool is more reliable than
 /// answering in prose, but Stage 1 only ever asks "which capability" (no
 /// natural id — a query phrase is the whole candidate), while Stage 2's
 /// clarification is almost always "which of these SPECIFIC RECORDS a prior
@@ -1487,7 +1486,7 @@ fn def_update_task_status() -> ToolDefinition {
 /// `dev-ambiguous-clarify.toml` measured. Reusing Stage 1's flat
 /// `Vec<String>` here would drop that id on the floor for no reason: the
 /// two clarify tools solve different-shaped problems, so "reuse if
-/// structurally sound" (core#2149) comes out as "don't" for the argument
+/// structurally sound" comes out as "don't" for the argument
 /// shape, even though the tool NAME and the surface-then-end-turn handling
 /// in `agent_loop.rs` are shared.
 ///
@@ -3701,8 +3700,8 @@ mod tests {
     #[test]
     fn only_resolve_query_requires_routed_guidance() {
         // resolve_query's node_type is a required parameter whose description
-        // depends on the EXISTING SCHEMAS block Stage-2 routing injects
-        // (#1840). Every other registered tool's required parameters must
+        // depends on the EXISTING SCHEMAS block Stage-2 routing injects.
+        // Every other registered tool's required parameters must
         // stand on their own regardless of routing outcome.
         for t in Tool::ALL {
             let expected = matches!(t, Tool::ResolveQuery);
@@ -4131,7 +4130,7 @@ mod tests {
     /// relationship names before generic labels, and must not offer a name the
     /// validator rejects.
     ///
-    /// The second half is the one that shipped broken (#2234): this test used
+    /// The second half is the one that shipped broken: this test used
     /// to assert only the literal phrase "relevant schema", which the old
     /// description satisfied while also recommending `related_to` — a name
     /// `NodeService::create_relationship` refuses unless the source node's own
@@ -4177,7 +4176,7 @@ mod tests {
         assert!(
             !desc.contains("related_to"),
             "relationship_type description offers 'related_to', which the validator \
-             rejects unless the source node's schema declares it (#2234), got: {desc:?}"
+             rejects unless the source node's schema declares it, got: {desc:?}"
         );
     }
 
@@ -4997,7 +4996,7 @@ mod tests {
             assert_eq!(result.result["resolved"], json!(true));
         }
 
-        /// Regression test for issue #1908: the decomposition model is not
+        /// Regression test: the decomposition model is not
         /// constrained to emit a numeric field's value as a JSON number, and
         /// readily emits it as a JSON string when reading digits out of prose
         /// (e.g. "the 2400 one"). SQLite's `json_extract` preserves the
@@ -5280,7 +5279,7 @@ mod tests {
             }
         }
 
-        /// Live-model coverage for issue #1908: drives `exec_resolve_query`'s
+        /// Live-model coverage: drives `exec_resolve_query`'s
         /// real decomposition prompt against the locked native model
         /// (ADR-056), closing the gap this suite's own doc comment
         /// acknowledges — every other test here stubs the engine, so the
@@ -6425,7 +6424,7 @@ mod tests {
         assert_eq!(core_values.len(), 2);
     }
 
-    /// core#2104: `friendlyName`, newly declared on `create_schema`'s field
+    /// `friendlyName`, newly declared on `create_schema`'s field
     /// items, must reach `handle_create_schema` unmangled through the real
     /// `GraphToolExecutor` dispatch path — not just verified against the
     /// core handler directly (see `schema::schema_test`'s own coverage).
@@ -6514,7 +6513,7 @@ mod tests {
         );
     }
 
-    /// core#2104: the new display-only relabel path (`rename_fields` with
+    /// The new display-only relabel path (`rename_fields` with
     /// `from == to` and `friendlyName` set) must work through the real
     /// `update_schema` dispatch, not just `handle_update_schema` directly.
     #[tokio::test]

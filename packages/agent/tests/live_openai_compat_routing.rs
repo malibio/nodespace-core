@@ -1,7 +1,6 @@
 //! Live routing-reliability matrix for the OpenAI-compatible path.
 //!
-//! [ADR-056](../../../../nodespace-docs/decisions/056-gemma-4-e4b-locked-native-model.md)
-//! locks only the *native* in-process GGUF path to one model. The
+//! ADR-056 locks only the *native* in-process GGUF path to one model. The
 //! OpenAI-compatible path stays open to any user-configured server by design,
 //! which means ADR-038's two-stage routing runs against models nobody has
 //! characterised.
@@ -40,7 +39,7 @@
 //! `baseline` — and would invalidate the routed arms, which pay the same
 //! Stage-1 cost. It is a guard on the harness, not a measurement of routing.
 //!
-//! Widened from one served model to three (issue #1830), measured against a
+//! Widened from one served model to three, measured against a
 //! local Ollama, reproduced identically across two full runs:
 //!
 //! ```text
@@ -67,7 +66,7 @@
 //!    measured served models route cleanly; only `mistral:7b` fails. "All
 //!    served models are at risk" is not supported by this data. The runtime
 //!    mitigation (`nodespace_agent::local_agent::routing_probe`, Option C from
-//!    #1830's decision) is keyed on this per-model finding: it probes each
+//!    ADR-038) is keyed on this per-model finding: it probes each
 //!    served model independently at load time rather than assuming a
 //!    blanket native-vs-served rule.
 //!
@@ -595,7 +594,7 @@ mod tests {
         );
     }
 
-    /// `nodespace_agent::local_agent::routing_probe` (issue #1830, Option C)
+    /// `nodespace_agent::local_agent::routing_probe` (Option C from ADR-038)
     /// runs one synthetic turn per served model at load time and caches
     /// whether Stage-2 injection is safe, instead of paying this matrix's full
     /// four-arm cost on every model load. It measures the conservative

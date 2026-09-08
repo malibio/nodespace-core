@@ -984,7 +984,7 @@ describe('TextareaController', () => {
     });
   });
 
-  describe('Config getter pattern (Issue #695)', () => {
+  describe('Config getter pattern', () => {
     it('should read config through getter on-demand', () => {
       // Destroy default controller
       if (controller) {

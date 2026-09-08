@@ -402,7 +402,7 @@ pub async fn get_node(
     }
 }
 
-/// Suggest-don't-block uniqueness lookup (ADR-065, core#1734): returns the
+/// Suggest-don't-block uniqueness lookup (ADR-065): returns the
 /// existing active node whose `field` matches `value` for `node_type`, or
 /// `None` when the field isn't flagged `unique` on the schema, `value` is
 /// empty, or there is simply no conflict. This never errors on "no match" —
@@ -932,7 +932,7 @@ pub async fn update_task_node(
     node_to_typed_value(node)
 }
 
-/// List a node's schema-declared typed relationships (issue #1918, read-only).
+/// List a node's schema-declared typed relationships (read-only).
 ///
 /// Returns the aggregate assembled by `rel_ops::get_node_relationships`: the
 /// node's typed relationships grouped by (name, direction) across BOTH
@@ -962,7 +962,7 @@ pub async fn get_node_relationships(
     })
 }
 
-/// Create a schema-declared typed relationship edge between two nodes (issue #1918).
+/// Create a schema-declared typed relationship edge between two nodes.
 ///
 /// Wraps `rel_ops::create_relationship`: the daemon validates the relationship
 /// against the source node's schema (target type, cardinality) before writing.
@@ -998,7 +998,7 @@ pub async fn create_relationship(
     Ok(())
 }
 
-/// Delete a schema-declared typed relationship edge (issue #1918).
+/// Delete a schema-declared typed relationship edge.
 ///
 /// Wraps `rel_ops::delete_relationship`. Idempotent — deleting a nonexistent
 /// edge succeeds. The daemon rejects removing the last edge of a `required`
@@ -1021,7 +1021,7 @@ pub async fn delete_relationship(
     Ok(())
 }
 
-/// Replace the edge attributes on an existing typed relationship edge (issue #1918).
+/// Replace the edge attributes on an existing typed relationship edge.
 ///
 /// Wraps `rel_ops::update_relationship_properties`: overwrites the edge's stored
 /// `properties` (its `edge_fields` values) wholesale with `properties`. The edge

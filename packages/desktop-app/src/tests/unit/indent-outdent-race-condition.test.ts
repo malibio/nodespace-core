@@ -21,7 +21,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // NOTE: This test file intentionally reimplements the tracking logic locally
 // to test the PATTERN without depending on global module state.
 // See pending-operations.test.ts for tests of the actual module exports.
-describe('Indent/Outdent Race Condition Prevention (Issue #662)', () => {
+describe('Indent/Outdent Race Condition Prevention', () => {
   let pendingMoveOperations: Map<string, Promise<void>>;
 
   async function waitForPendingMoveOperations(): Promise<void> {
@@ -252,7 +252,7 @@ describe('Indent/Outdent Race Condition Prevention (Issue #662)', () => {
       ]);
     });
 
-    it('should handle rapid Enter+Tab+Shift+Tab sequence (Issue #662 scenario)', async () => {
+    it('should handle rapid Enter+Tab+Shift+Tab sequence without interleaving indent/outdent operations', async () => {
       vi.useRealTimers();
       const operationLog: string[] = [];
       let indentResolve: () => void;
