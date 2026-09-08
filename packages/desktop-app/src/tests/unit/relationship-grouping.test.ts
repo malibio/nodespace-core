@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildRelationshipsView,
+  filterUnlinkedTargets,
   groupDisplayLabel,
   groupEdgeColumns,
   findGroupByKey,
   findRowByKey,
   groupSupportsEdgeEditing,
+  isTargetLinked,
+  linkedTargetIds,
   partitionGroups,
   humanizeName,
   type RawNodeRelationships,
@@ -641,5 +644,65 @@ describe('relationship-grouping: row keys are reproducible, so stale keys must b
     expect(populated[0].key).toBe(empty[0].key);
     expect(partitionGroups(empty).addable).toHaveLength(1);
     expect(partitionGroups(populated).populated).toHaveLength(1);
+  });
+});
+
+describe('relationship-grouping: linkedTargetIds / isTargetLinked / filterUnlinkedTargets', () => {
+  const relatedNode = (id: string) => ({
+    id,
+    nodeType: 'person',
+    title: id,
+    contentPreview: '',
+    edgeProperties: {}
+  });
+
+  function groupWithRows(ids: string[]) {
+    return buildRelationshipsView({
+      nodeId: 'task-1',
+      nodeType: 'task',
+      groups: [makeGroup({ related: ids.map(relatedNode), count: ids.length })]
+    }).groups[0];
+  }
+
+  it('collects the ids of every row currently linked into the group', () => {
+    const group = groupWithRows(['p1', 'p2']);
+    expect(linkedTargetIds(group)).toEqual(new Set(['p1', 'p2']));
+  });
+
+  it('is empty for a group with no rows yet', () => {
+    const group = groupWithRows([]);
+    expect(linkedTargetIds(group)).toEqual(new Set());
+  });
+
+  it('isTargetLinked is true only for an id already among the group rows', () => {
+    const group = groupWithRows(['p1']);
+    expect(isTargetLinked(group, 'p1')).toBe(true);
+    expect(isTargetLinked(group, 'p2')).toBe(false);
+  });
+
+  it('filterUnlinkedTargets drops candidates already linked, keeping the rest in order', () => {
+    const group = groupWithRows(['p1', 'p2']);
+    const candidates = [{ id: 'p1' }, { id: 'p3' }, { id: 'p2' }];
+    expect(filterUnlinkedTargets(group, candidates)).toEqual([{ id: 'p3' }]);
+  });
+
+  it('filterUnlinkedTargets is a no-op when no candidate overlaps the linked set', () => {
+    const group = groupWithRows(['p1']);
+    const candidates = [{ id: 'p9' }];
+    expect(filterUnlinkedTargets(group, candidates)).toEqual(candidates);
+  });
+
+  it('isTargetLinked recognizes a differently-cased id of an already-linked node', () => {
+    // Comparisons must be case-insensitive: a caller may hold an id in a
+    // different case than the backend's canonical (lowercase) form, and that
+    // must still be recognized as the same linked node.
+    const group = groupWithRows(['550e8400-e29b-41d4-a716-446655440000']);
+    expect(isTargetLinked(group, '550E8400-E29B-41D4-A716-446655440000')).toBe(true);
+  });
+
+  it('filterUnlinkedTargets drops a differently-cased duplicate of an already-linked id', () => {
+    const group = groupWithRows(['550e8400-e29b-41d4-a716-446655440000']);
+    const candidates = [{ id: '550E8400-E29B-41D4-A716-446655440000' }, { id: 'p9' }];
+    expect(filterUnlinkedTargets(group, candidates)).toEqual([{ id: 'p9' }]);
   });
 });

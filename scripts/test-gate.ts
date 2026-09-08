@@ -19,6 +19,7 @@
  */
 
 import { $ } from "bun";
+import { reportBranchBehind } from "./check-branch-behind";
 
 async function run(label: string, cmd: () => Promise<unknown>) {
   console.log(`\n▶ ${label}`);
@@ -30,6 +31,22 @@ async function run(label: string, cmd: () => Promise<unknown>) {
     console.error("  bypass with: git push --no-verify\n");
     process.exit(1);
   }
+}
+
+// Staleness check, not a fix for the merge race — see check-branch-behind.ts.
+// Runs first so the warning (if any) is visible before the several-minutes
+// pyramid below, and never blocks: checkBranchBehind() already swallows every
+// documented failure mode (fetch/rev-list) into a "skipped" result without
+// throwing. This try/catch is defensive-only, guarding the one call in this
+// entry sequence that isn't wrapped by run() — a future edit to
+// check-branch-behind.ts that adds a throwing statement outside those
+// try/catches must not be able to crash the push it's supposed to only warn
+// about.
+try {
+  await reportBranchBehind();
+} catch (err) {
+  console.warn("\n⚠ origin/main staleness check crashed unexpectedly — skipping it.");
+  console.warn(`  ${err instanceof Error ? err.message : String(err)}\n`);
 }
 
 // Stages two of the things nodespace-app's build.rs (tauri_build::build())
