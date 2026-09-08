@@ -124,6 +124,71 @@ pub async fn ensure_sqlite_vec_registered() {
         .await;
 }
 
+/// **Why this crate's tests run at `--test-threads=1`** (`rust:test:core` in
+/// `package.json`, and `rust:test:lib`/`rust:test:long`): the bundled SQLite
+/// fork this crate links (`libsql-ffi`'s vendored `SQLite3MultipleCiphers`
+/// amalgamation) has a real, unsynchronized data race in its WAL-manager
+/// singleton, verified by reading the vendored C source directly:
+///
+/// ```c
+/// RefCountedWalManager *make_sqlite3_wal_manager_rc() {
+///     static int initialized = 0;
+///     static RefCountedWalManager manager = { 0 };
+///     if (!initialized) { manager.is_static = 1; manager.ref = ...; manager.n = 1; initialized = 1; }
+///     return &manager;
+/// }
+/// ```
+///
+/// `make_sqlite3_wal_manager_rc` is called from `sqlite3_open_v2` (via
+/// `openDatabase`) on every connection open, and `clone_wal_manager`'s
+/// refcount bump (`p->n += 1`, also unguarded) fires on every pager attach —
+/// open time, and again on any later WAL-mode switch. None of this is
+/// covered by SQLite's own `SQLITE_CONFIG_SERIALIZED` mutexes: it runs
+/// before `sqlite3_open_v2` reaches SQLite's internal locking at all. Two
+/// connections opening at genuinely the same instant on separate OS threads
+/// can race that check-then-act, or torn-write the shared refcount,
+/// corrupting a struct every connection in the process then shares —
+/// including connections that opened cleanly and never personally raced
+/// anything. The corrupted state is a process-global struct that ordinary
+/// SQLite operations (not just opens) read, which matches every symptom
+/// observed: `SQLITE_MISUSE` ("bad parameter or other API misuse") on a
+/// `PRAGMA`, a query, or a transaction rollback, at `SqliteStore::new()`/
+/// `create_test_service()` setup time and against already-established
+/// connections mid-test, with no code change between a failing and passing
+/// run of the identical test. No crash was ever captured under a debugger,
+/// so this is the strongest available explanation given the vendored source
+/// and the observed failure shapes, not a confirmed-by-backtrace mechanism.
+///
+/// This is vendored C we cannot patch. This crate is the only workspace
+/// member with a DIRECT `libsql`/`libsql-ffi` dependency, but `libsql-ffi`
+/// is also linked TRANSITIVELY into `nodespace-agent`, `nodespace-daemon`,
+/// and `nodespace-cli` (`cargo tree -i libsql-ffi`), and each of those
+/// crates has its own non-`#[ignore]`d integration tests that call
+/// `SqliteStore::new()` directly and still run at `--test-threads=2` under
+/// `rust:test:workspace`. The same race is reachable there in principle;
+/// it just hasn't been observed to trigger — plausibly because those
+/// suites are far smaller (tens of tests, not 1000+), so two connections
+/// opening at literally the same instant is far less likely. That gap is
+/// a deliberate, tracked deferral, not an oversight — do NOT read "no
+/// other crate's tests carry this hazard" into this comment; they can, at
+/// lower observed odds, and a similar fix may be warranted there if that
+/// changes.
+///
+/// In production there is exactly one `SqliteStore` per daemon lifetime, so
+/// the race needs genuine test-suite concurrency (many independent stores
+/// opening across real OS threads) to trigger — confirmed empirically:
+/// `--test-threads=1` was 100% clean across 50+ consecutive runs, while
+/// `--test-threads=16` reproduced the failure in roughly 5-15% of runs. A
+/// prior attempt at a narrower fix (a mutex around just the connection-open
+/// call, in `connections.rs`) did not hold up: one clean 40-run verification
+/// still failed twice, including once on an ordinary query against an
+/// already-open connection nowhere near an open call — evidence the
+/// corruption isn't bounded to the instant of opening, so there is no
+/// principled guarded region narrower than "every operation on every
+/// connection, for the life of the process" — which is `--test-threads=1`
+/// implemented as a hand-rolled lock, with strictly more surface for a
+/// missed call site. Serializing the whole binary is the direct fix, not a
+/// workaround: see `rust:test:core` in `package.json`.
 pub struct SqliteStore {
     /// The store's SQLite connections. Reachable only through
     /// [`SqliteStore::write`] / [`SqliteStore::read`] — the raw handles live in
