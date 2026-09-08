@@ -78,6 +78,13 @@
   let identityEmail = $state('');
   let identityPrefilled = $state(false);
   let identityDone = $state(false);
+  // Set when the main wizard's identity step was shown and the user
+  // explicitly clicked Skip (never set for identityOnly mode, which has its
+  // own dismiss path — see skipIdentity below). Threaded through to
+  // `complete_onboarding` so declining here also suppresses the separate
+  // backfill nudge on the next launch, instead of re-asking the very next
+  // thing the user just said no to.
+  let identitySkipped = $state(false);
 
   // The dialog content element — the focus-trap target and the focus anchor for
   // step transitions (see the $effect below).
@@ -216,6 +223,7 @@
       onClose();
       return;
     }
+    identitySkipped = true;
     nextStep();
   }
 
@@ -274,8 +282,9 @@
       await invoke('complete_onboarding', {
         pathConfigured: pathDone,
         skillConfigured: skillDone,
+        identitySkipped,
       });
-      log.info('Onboarding completed', { pathDone, skillDone });
+      log.info('Onboarding completed', { pathDone, skillDone, identitySkipped });
     } catch (err) {
       log.warn('Could not persist onboarding completion', err);
     }

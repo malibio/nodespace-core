@@ -1113,19 +1113,47 @@ impl NodeService {
     }
 
     /// ADR-037 / core#2388: resolve the seeded local-user PersonNode — the
-    /// person with an outgoing `has_role` edge to the DatabaseSettingsNode
-    /// singleton (the owner edge `seed_database_settings_if_needed` seeds).
-    /// Falls back to the first `person` node when that edge is missing — a
-    /// database whose data predates ADR-037 seeding still resolves to *a*
+    /// person with an outgoing `has_role` edge carrying `role: "owner"` to
+    /// the DatabaseSettingsNode singleton (the owner edge
+    /// `seed_database_settings_if_needed` seeds). The DatabaseSettingsNode
+    /// is documented to hold tenant *roles* (plural) for upcoming RBAC work,
+    /// so this filters on `role == "owner"` rather than taking the first
+    /// `has_role` edge — once a second, non-owner role edge lands there,
+    /// an unfiltered `.next()` would silently resolve the wrong person.
+    /// If more than one edge is found with `role == "owner"` — which
+    /// today's seeding path cannot produce — the first is used and a
+    /// `tracing::warn!` is emitted, so a future regression surfaces instead
+    /// of resolving silently to whichever edge SQL returns first.
+    /// Falls back to the first `person` node when no owner edge is found —
+    /// a database whose data predates ADR-037 seeding still resolves to *a*
     /// local person rather than surfacing "no identity" on an otherwise
     /// healthy install. Returns `None` only when there is no person node at
     /// all (should not happen post-seed, but this must not panic on data
     /// that predates it).
     pub async fn get_local_person(&self) -> Result<Option<Node>, NodeServiceError> {
         let owners = self
-            .get_related_nodes(DATABASE_SETTINGS_NODE_ID, "has_role", "in")
+            .get_related_nodes_with_edges(DATABASE_SETTINGS_NODE_ID, "has_role", "in")
             .await?;
-        if let Some(owner) = owners.into_iter().next() {
+        let mut owner_edges = owners.into_iter().filter(|(_, edge_properties)| {
+            edge_properties
+                .get("role")
+                .and_then(|v| v.as_str())
+                .map(|role| role == "owner")
+                .unwrap_or(false)
+        });
+        let owner = owner_edges.next().map(|(node, _)| node);
+        if owner_edges.next().is_some() {
+            // Data-integrity anomaly: today's seeding path creates exactly one
+            // owner-role edge, so this should be unreachable. Once multi-role
+            // RBAC lands, a bug there could produce two — warn rather than
+            // silently resolving to whichever edge SQL happened to return first.
+            tracing::warn!(
+                settings_node_id = DATABASE_SETTINGS_NODE_ID,
+                "multiple has_role edges with role \"owner\" found on DatabaseSettingsNode; \
+                 resolving to the first one returned"
+            );
+        }
+        if let Some(owner) = owner {
             return Ok(Some(owner));
         }
         Ok(self
@@ -4943,6 +4971,50 @@ mod tests {
             local.id, new_owner_id,
             "must resolve whoever currently holds the has_role owner edge, \
              not just the first person node"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_local_person_ignores_non_owner_has_role_edges() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        assert_eq!(people.len(), 1);
+        let seeded_owner_id = people[0].id.clone();
+
+        // Add a SECOND has_role edge to the DatabaseSettingsNode singleton,
+        // from a different person, carrying a non-owner role (the shape the
+        // doc comment on `seed_database_settings_if_needed` describes for
+        // upcoming RBAC work: multiple tenant roles on one node). A naive
+        // "first has_role edge" resolution could silently return this person
+        // instead of the actual owner, depending on traversal order.
+        let member_id = service
+            .create_node(Node::new(
+                "person".to_string(),
+                "Some Member".to_string(),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        service
+            .create_relationship(
+                &member_id,
+                "has_role",
+                DATABASE_SETTINGS_NODE_ID,
+                serde_json::json!({"role": "member", "status": "active"}),
+            )
+            .await
+            .unwrap();
+
+        let local = service
+            .get_local_person()
+            .await
+            .unwrap()
+            .expect("a local person must resolve when an owner edge exists");
+        assert_eq!(
+            local.id, seeded_owner_id,
+            "must resolve the person holding the owner-role edge, not a \
+             differently-roled has_role edge on the same node"
         );
     }
 

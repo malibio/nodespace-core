@@ -198,6 +198,76 @@ describe('OnboardingWizard identity step (core#2388)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('Skip during the main wizard sets identityPromptDismissed via complete_onboarding', async () => {
+    // Regression test (core#2451): a user who declines identity during the
+    // main onboarding wizard must not be hit with the separate backfill
+    // nudge on their very next launch for the exact thing they just said no
+    // to. Skipping here has no direct dismiss command like identityOnly mode
+    // does — instead the skip must be threaded through to `complete_onboarding`
+    // so the backend can set `identity_prompt_dismissed` itself.
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') return Promise.resolve(BLANK_STATUS);
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') return Promise.resolve({ name: null, email: null });
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+    await tick();
+
+    // identity -> path (already configured, "Next" shows immediately)
+    await fireEvent.click(buttonByText(container, 'Skip'));
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Next')); // path -> summary
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Open NodeSpace')); // -> finishWizard
+    await tick();
+    await tick();
+
+    expect(mockInvoke).toHaveBeenCalledWith('complete_onboarding', {
+      pathConfigured: false,
+      skillConfigured: false,
+      identitySkipped: true
+    });
+  });
+
+  it('Save during the main wizard leaves identitySkipped false on complete_onboarding', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') return Promise.resolve(BLANK_STATUS);
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') return Promise.resolve({ name: null, email: null });
+      if (cmd === 'set_local_identity') return Promise.resolve(FILLED_IDENTITY);
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Save'));
+    await tick();
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Next')); // identity -> path
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Next')); // path -> summary
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Open NodeSpace'));
+    await tick();
+    await tick();
+
+    expect(mockInvoke).toHaveBeenCalledWith('complete_onboarding', {
+      pathConfigured: false,
+      skillConfigured: false,
+      identitySkipped: false
+    });
+  });
+
   it('identityOnly mode dismisses and closes on Skip too', async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
