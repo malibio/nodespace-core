@@ -290,7 +290,7 @@ fn main() -> Result<()> {
             timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
             "Graceful shutdown did not complete in time -- forcing exit. \
              If you see this, please report it: something in daemon \
-             teardown is hanging (see core#2357)."
+             teardown is hanging."
         );
         std::process::exit(0);
     });
@@ -435,9 +435,9 @@ mod shutdown_watchdog_tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    /// The bug this exists to prevent (core#2357): if graceful shutdown
-    /// never completes, `on_timeout` must still fire so the process doesn't
-    /// hang forever.
+    /// The bug this exists to prevent: if graceful shutdown never
+    /// completes, `on_timeout` must still fire so the process doesn't hang
+    /// forever.
     ///
     /// Uses a channel rather than a fixed sleep-then-check margin: this test
     /// waits exactly as long as it takes for `on_timeout` to actually fire
@@ -571,7 +571,7 @@ async fn drain_and_release_gpu(
         tracing::error!(
             timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
             "shutdown_all/release_shared_gpu did not complete in time -- forcing exit. If you \
-             see this, please report it: something in daemon teardown is hanging (see core#2357)."
+             see this, please report it: something in daemon teardown is hanging."
         );
         std::process::exit(0);
     });
@@ -906,8 +906,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
                 timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
                 "serve_with_incoming_shutdown did not finish draining connections/streams in \
                  time -- forcing exit. If you see this, please report it: a client (e.g. an \
-                 open WatchNodes stream) is likely stalling tonic's own graceful shutdown \
-                 (see core#2357)."
+                 open WatchNodes stream) is likely stalling tonic's own graceful shutdown."
             );
             std::process::exit(0);
         },
@@ -1111,8 +1110,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
                 timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
                 "serve_with_incoming_shutdown did not finish draining connections/streams in \
                  time -- forcing exit. If you see this, please report it: a client (e.g. an \
-                 open WatchNodes stream) is likely stalling tonic's own graceful shutdown \
-                 (see core#2357)."
+                 open WatchNodes stream) is likely stalling tonic's own graceful shutdown."
             );
             std::process::exit(0);
         },
