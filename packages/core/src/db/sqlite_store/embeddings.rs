@@ -500,27 +500,7 @@ impl SqliteStore {
         //      their own post-filters, so hydrating pre-truncation fetched node data
         //      that was then immediately discarded.
         let score_start = std::time::Instant::now();
-        let mut scored: Vec<(String, f64, f64, i64)> = node_scores
-            .into_iter()
-            .filter_map(
-                |(node_id, (max_similarity, matching_chunks, total_chunks))| {
-                    let density = if total_chunks > 0 {
-                        matching_chunks as f64 / total_chunks as f64
-                    } else {
-                        1.0
-                    };
-                    let composite_score = max_similarity * (1.0 + 0.3 * density);
-                    (composite_score > min_score).then_some((
-                        node_id,
-                        composite_score,
-                        max_similarity,
-                        matching_chunks,
-                    ))
-                },
-            )
-            .collect();
-
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut scored = rank_candidates(node_scores, min_score);
         scored.truncate(limit as usize);
         let score_time = score_start.elapsed();
 
@@ -607,27 +587,7 @@ impl SqliteStore {
         // Rank and truncate before hydrating, then fetch the surviving nodes in one
         // batched query — see `search_embeddings` for why a per-result `get_node` loop
         // is the expensive shape.
-        let mut scored: Vec<(String, f64, f64, i64)> = node_scores
-            .into_iter()
-            .filter_map(
-                |(node_id, (max_similarity, matching_chunks, total_chunks))| {
-                    let density = if total_chunks > 0 {
-                        matching_chunks as f64 / total_chunks as f64
-                    } else {
-                        1.0
-                    };
-                    let composite_score = max_similarity * (1.0 + 0.3 * density);
-                    (composite_score > min_score).then_some((
-                        node_id,
-                        composite_score,
-                        max_similarity,
-                        matching_chunks,
-                    ))
-                },
-            )
-            .collect();
-
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut scored = rank_candidates(node_scores, min_score);
 
         // The node_type filter runs after the global top-k, so a type that is rare
         // relative to the corpus can be crowded out of the KNN window — surfacing as
@@ -878,4 +838,41 @@ impl SqliteStore {
 
         Ok(node_ids.len())
     }
+}
+
+/// Score, threshold and rank embedding candidates.
+///
+/// Both `search_embeddings` and `search_embeddings_by_node_type` reduce their KNN
+/// candidates the same way: a composite of peak chunk similarity and the share of
+/// a node's chunks that matched, thresholded, then ranked best-first. They diverge
+/// only in what they do next — the typed variant counts survivors before
+/// truncating — so ranking is shared and truncation is not.
+///
+/// Returns `(node_id, composite_score, max_similarity, matching_chunks)`.
+fn rank_candidates(
+    node_scores: std::collections::HashMap<String, (f64, i64, i64)>,
+    min_score: f64,
+) -> Vec<(String, f64, f64, i64)> {
+    let mut scored: Vec<(String, f64, f64, i64)> = node_scores
+        .into_iter()
+        .filter_map(
+            |(node_id, (max_similarity, matching_chunks, total_chunks))| {
+                let density = if total_chunks > 0 {
+                    matching_chunks as f64 / total_chunks as f64
+                } else {
+                    1.0
+                };
+                let composite_score = max_similarity * (1.0 + 0.3 * density);
+                (composite_score > min_score).then_some((
+                    node_id,
+                    composite_score,
+                    max_similarity,
+                    matching_chunks,
+                ))
+            },
+        )
+        .collect();
+
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored
 }

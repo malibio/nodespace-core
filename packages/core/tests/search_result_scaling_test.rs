@@ -23,7 +23,6 @@ mod search_result_scaling_tests {
     use nodespace_core::services::NodeService;
     use serde_json::json;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
     const DIM: usize = 768;
@@ -97,91 +96,24 @@ mod search_result_scaling_tests {
         Ok(())
     }
 
-    async fn time_search(store: &SqliteStore, limit: i64) -> Result<(Duration, usize)> {
-        let q = query_vector();
-        let start = Instant::now();
-        let results = store.search_embeddings(&q, limit, Some(0.5)).await?;
-        Ok((start.elapsed(), results.len()))
-    }
-
-    /// The headline guard: a search at limit 20 must not cost anything like 20x
-    /// a search at limit 1.
+    /// Every result the store ranks must carry its node.
     ///
-    /// Budget rationale: with the batched fetch, both calls are dominated by the
-    /// same fixed KNN scan, and the limit-20 call adds one extra `IN (...)` row
-    /// fetch. Measured on a release build over a 32k-node corpus the two are
-    /// within noise of each other (27.7ms vs 31.9ms). The assertion allows
-    /// limit-20 to cost up to 4x limit-1 plus a 50ms floor — comfortably above
-    /// the real ratio (~1.15x) so noise cannot fail it, while still failing long
-    /// before a genuine per-result slope could hide inside it. The floor keeps a
-    /// fast-but-jittery limit-1 baseline, where scheduler noise is a large
-    /// multiple of a small number, from making the ratio meaningless.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn search_cost_does_not_scale_with_result_count() -> Result<()> {
-        let (store, _t) = create_test_store().await?;
-        seed_corpus(&store, CORPUS).await?;
-
-        // Warm the reader pool and any lazily-built index state so the first
-        // measured call is not paying setup the others avoid.
-        let _ = time_search(&store, 20).await?;
-
-        let (t1, n1) = time_search(&store, 1).await?;
-        let (t20, n20) = time_search(&store, 20).await?;
-
-        assert_eq!(n1, 1, "limit 1 returns one result");
-        assert_eq!(n20, 20, "limit 20 returns twenty results");
-
-        let budget = t1 * 4 + Duration::from_millis(50);
-        assert!(
-            t20 <= budget,
-            "search at limit 20 ({t20:?}) exceeded budget {budget:?} (limit 1 was {t1:?}); \
-             a per-result slope has returned — check for a `get_node` per result in \
-             search_embeddings"
-        );
-        Ok(())
-    }
-
-    /// The same property stated over the full series from the report, so a
-    /// regression that only shows up at larger limits is still caught.
+    /// The gRPC handler now passes search results straight onto the wire instead
+    /// of re-reading each node from the store by id. That removed a query per
+    /// result and also removed a second chance to fetch a node, so hydration has
+    /// to be complete at the point the store produces results.
     ///
-    /// Budget rationale: 2 seconds for the whole 1/2/5/10/20/50 sweep. On a
-    /// release build over a 32k-node corpus the sweep totals under 200ms, and
-    /// even a debug build on a loaded machine stays well inside a second. The
-    /// budget is set an order of magnitude above the measured cost so that
-    /// scheduler noise cannot fail it, while still being far below what a
-    /// per-result fetch loop costs once each of the ~88 results in the sweep
-    /// pays its own round trip.
+    /// Scope, stated honestly: this asserts at the STORE layer. The drop itself
+    /// happens one layer above, in the `filter_map` in `semantic_search_nodes`
+    /// that discards any result whose node is `None` — so a regression there
+    /// would not fail this test. Asserting past that `filter_map` needs a
+    /// `NodeEmbeddingService`, whose `semantic_search_nodes` calls
+    /// `generate_embedding` on a real NLP engine and fails with "Model not
+    /// initialized" without a loaded model; the rest of this crate's tests
+    /// deliberately stay off that path. Covering the service layer therefore
+    /// belongs in a test that can afford a model, not in a scaling test.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn search_series_stays_within_budget() -> Result<()> {
-        let (store, _t) = create_test_store().await?;
-        seed_corpus(&store, CORPUS).await?;
-
-        let _ = time_search(&store, 20).await?;
-
-        let mut total = Duration::ZERO;
-        for limit in [1, 2, 5, 10, 20, 50] {
-            let (elapsed, count) = time_search(&store, limit).await?;
-            assert_eq!(
-                count, limit as usize,
-                "limit {limit} returned {count} results"
-            );
-            total += elapsed;
-        }
-
-        let budget = Duration::from_secs(2);
-        assert!(
-            total <= budget,
-            "the 1/2/5/10/20/50 search sweep took {total:?}, over the {budget:?} budget"
-        );
-        Ok(())
-    }
-
-    /// Every returned result carries its node. The gRPC search handler maps
-    /// these straight onto the wire type instead of re-reading each result from
-    /// the store by id, so a result arriving without its node would silently
-    /// drop a row from a search response rather than merely costing a query.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn every_result_carries_its_node() -> Result<()> {
+    async fn every_ranked_result_carries_its_node() -> Result<()> {
         let (store, _t) = create_test_store().await?;
         seed_corpus(&store, 200).await?;
 

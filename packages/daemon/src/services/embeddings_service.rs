@@ -164,12 +164,22 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("Vector search failed: {}", e)))?;
 
-        let mut nodes = Vec::with_capacity(search_results.len());
-        for result in search_results {
-            if let Ok(Some(node)) = store.get_node(&result.node_id).await {
-                nodes.push(node_to_proto(node));
-            }
-        }
+        // `search_embeddings` hydrates each result it returns, so re-reading the
+        // nodes by id here would be a query per result for rows already in hand.
+        // A result without its node is a hydration bug rather than a missing row,
+        // so it surfaces as an error instead of being dropped from the response —
+        // the previous `if let Ok(Some(..))` silently shortened the result set.
+        let nodes = search_results
+            .into_iter()
+            .map(|result| {
+                result.node.map(node_to_proto).ok_or_else(|| {
+                    Status::internal(format!(
+                        "search result {} arrived without its node",
+                        result.node_id
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, Status>>()?;
 
         Ok(Response::new(SearchSemanticResponse { nodes }))
     }
