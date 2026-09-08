@@ -13,7 +13,7 @@
 // stays behind `import.meta.main` so this module is safely importable for
 // unit tests (of `extractResourceRoot`) without triggering the CLI's own
 // argv parsing and `process.exit` calls as a side effect of the import.
-import { install, uninstall } from './installer.js';
+import { install, uninstall, checkInstalled } from './installer.js';
 import type { AgentName, InstallResult } from './types.js';
 import { AGENTS } from './agents.js';
 
@@ -74,6 +74,9 @@ function main(): void {
 Commands:
   install [agent]    Install NodeSpace skill for detected (or specified) agents
   uninstall [agent]  Remove NodeSpace skill from detected (or specified) agents
+  status [agent]     Report which (of the specified, or every configured) agents
+                      actually have SKILL.md on disk right now -- a pure
+                      filesystem check, no install/uninstall side effects
 
 Agents: ${validAgents.join(', ')}
 
@@ -163,6 +166,20 @@ Examples:
         console.log(`✓ ${result.agent}: removed ${result.removed.length} file(s)`);
       } else {
         console.log(`  ${result.agent}: nothing to remove`);
+      }
+    }
+  } else if (command === 'status') {
+    // "✓ agent: present" reuses the exact marker/format the desktop app's
+    // parse_installer_output already parses for the install command's
+    // installed-agent lines, so skill_setup.rs's revalidation can share that
+    // same parser instead of needing a second one for this command.
+    const present = new Set(checkInstalled(targetAgents));
+    const checked = targetAgents ?? validAgents;
+    for (const name of checked) {
+      if (present.has(name)) {
+        console.log(`✓ ${name}: present`);
+      } else {
+        console.log(`  ${name}: not present`);
       }
     }
   } else {

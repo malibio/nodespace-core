@@ -138,6 +138,25 @@ function installedName(shim: string): string {
   return shim.startsWith('references/') ? shim : basename(shim);
 }
 
+/**
+ * Which of `targetAgents` (or every configured agent, if omitted) actually
+ * have `SKILL.md` sitting at their `installDir` right now -- a pure
+ * filesystem check, no mutation. Used to revalidate a persisted
+ * `agents_installed` list against reality: the list is only ever written by
+ * a successful install, so it goes stale the moment a user manually deletes
+ * a harness's skill directory (or the harness itself) by hand.
+ *
+ * Checks for `SKILL.md` specifically, not just `existsSync(installDir)` --
+ * an empty or partially-cleaned directory must not read as "installed".
+ */
+export function checkInstalled(targetAgents?: AgentName[]): AgentName[] {
+  const agents = targetAgents ?? AGENTS.map(a => a.name);
+  return agents.filter(agentName => {
+    const config = AGENTS.find(a => a.name === agentName);
+    return config !== undefined && existsSync(join(config.installDir, 'SKILL.md'));
+  });
+}
+
 export function uninstall(targetAgents?: AgentName[]): UninstallResult[] {
   const agents = targetAgents ?? AGENTS.map(a => a.name);
   const results: UninstallResult[] = [];

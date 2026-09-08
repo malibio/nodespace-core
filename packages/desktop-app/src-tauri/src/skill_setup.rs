@@ -268,6 +268,119 @@ fn path_helper_output() -> Option<OsString> {
 /// result (a stale `skill_install_failed`/`skill_installed` value).
 static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Revalidate a persisted `agents_installed` list against the filesystem, by
+/// running `install.ts`'s `status` subcommand for exactly those agents and
+/// keeping only the ones it reports as still present.
+///
+/// `agents_installed` is only ever written by a successful install and never
+/// otherwise checked on read — so it goes stale the moment a user deletes a
+/// harness's skill directory (or the harness itself) by hand outside
+/// NodeSpace, and every later read (the Settings page, a re-shown wizard)
+/// would otherwise keep claiming e.g. "Installed into: Gemini CLI" long
+/// after that stopped being true.
+///
+/// Best-effort: on any resolution/execution failure this returns the
+/// original list unchanged rather than erroring the caller — a transient
+/// installer-resolution problem must not make an otherwise-successful status
+/// read fail, and falling back to the last-known list is a strictly better
+/// answer than blocking or silently emptying it.
+pub async fn revalidate_agents_installed(
+    agents_installed: Vec<String>,
+    app: &AppHandle,
+) -> Vec<String> {
+    if agents_installed.is_empty() {
+        return agents_installed;
+    }
+    revalidate_agents_installed_inner(agents_installed, app).await
+}
+
+/// Same as [`revalidate_agents_installed`], but also takes [`INSTALL_LOCK`]
+/// first. For the standalone status-read call site
+/// (`get_skill_setup_status`), which -- unlike [`install_skill`] and
+/// [`uninstall_skill`] -- has no reason to already hold the lock itself.
+/// Without this, a status read landing concurrently with an in-flight
+/// [`uninstall_skill`] (deleting files, then resetting `setup.json`) could
+/// observe a transient intermediate filesystem state, e.g. a harness's
+/// directory mid-removal.
+///
+/// [`install_skill`] does NOT call this variant: it already holds
+/// `INSTALL_LOCK` for its own critical section before revalidating, and
+/// `tokio::sync::Mutex` is not reentrant -- taking the lock again on the same
+/// task would deadlock.
+pub async fn revalidate_agents_installed_locked(
+    agents_installed: Vec<String>,
+    app: &AppHandle,
+) -> Vec<String> {
+    if agents_installed.is_empty() {
+        return agents_installed;
+    }
+    let _guard = INSTALL_LOCK.lock().await;
+    revalidate_agents_installed_inner(agents_installed, app).await
+}
+
+async fn revalidate_agents_installed_inner(
+    agents_installed: Vec<String>,
+    app: &AppHandle,
+) -> Vec<String> {
+    let installer = match resolve_installer(app) {
+        Ok(installer) => installer,
+        Err(e) => {
+            tracing::debug!("Skipping agents_installed revalidation: {e}");
+            return agents_installed;
+        }
+    };
+
+    let result =
+        tokio::task::spawn_blocking(move || run_skill_installer_subcommand(&installer, "status"))
+            .await;
+
+    match result {
+        Ok(Ok(outcome)) => {
+            let present: std::collections::HashSet<String> =
+                outcome.installed.into_iter().collect();
+            agents_installed
+                .into_iter()
+                .filter(|agent| present.contains(agent))
+                .collect()
+        }
+        Ok(Err(e)) => {
+            tracing::debug!("agents_installed status check failed, keeping last-known list: {e}");
+            agents_installed
+        }
+        Err(join_err) => {
+            tracing::debug!("agents_installed status check panicked: {join_err}");
+            agents_installed
+        }
+    }
+}
+
+/// Remove the NodeSpace skill from every detected harness (not just Claude
+/// Code) by delegating to `install.ts`'s own `uninstall` command — the same
+/// `AGENTS`-driven logic `install`/`status` already use, so this can never
+/// drift out of sync with which harnesses the installer actually supports.
+/// Resets `~/.nodespace/setup.json` on success so the next read reflects
+/// nothing being installed.
+pub async fn uninstall_skill(app: &AppHandle) -> Result<(), String> {
+    let _guard = INSTALL_LOCK.lock().await;
+
+    let installer = resolve_installer(app)?;
+    let result = tokio::task::spawn_blocking(move || {
+        run_skill_installer_subcommand(&installer, "uninstall")
+    })
+    .await;
+
+    match result {
+        Ok(Ok(_outcome)) => {
+            reset_skill_state()
+                .await
+                .map_err(|e: anyhow::Error| e.to_string())?;
+            Ok(())
+        }
+        Ok(Err(e)) => Err(e),
+        Err(join_err) => Err(format!("Uninstaller task panicked: {join_err}")),
+    }
+}
+
 /// Run the skill installer. If `force` is false, this is a no-op when
 /// `~/.nodespace/setup.json` already marks skill_installed = true.
 pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
@@ -279,9 +392,11 @@ pub async fn install_skill(force: bool, app: &AppHandle) -> SkillSetupResult {
         match read_setup_state().await {
             Ok(state) if state.skill_installed => {
                 let cli_on_path = check_cli_on_path();
+                let agents_installed =
+                    revalidate_agents_installed(state.agents_installed, app).await;
                 return SkillSetupResult {
                     success: true,
-                    agents_installed: state.agents_installed,
+                    agents_installed,
                     agents_skipped: vec![],
                     cli_on_path,
                     cli_warning: cli_warning(cli_on_path),
@@ -505,42 +620,62 @@ fn resolve_installer_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathB
 /// does the failure surface to the user.
 const INSTALLER_RUNTIMES: [&str; 2] = ["bun", "node"];
 
-/// Build the `<runtime> <installer_path> install` invocation — the single
-/// place that decides how the installer is launched, so both production and
-/// tests exercise the exact same command construction. Never `npx`/`npm` —
-/// this repo is Bun-only, and `@nodespaceai/skill` isn't published anyway.
-fn installer_command(installer_path: &Path, runtime: &str) -> Command {
+/// Build the `<runtime> <installer_path> <subcommand>` invocation — the
+/// single place that decides how the installer is launched, so both
+/// production and tests exercise the exact same command construction. Never
+/// `npx`/`npm` — this repo is Bun-only, and `@nodespaceai/skill` isn't
+/// published anyway. `subcommand` is one of `install.ts`'s `install`,
+/// `uninstall`, or `status`.
+fn installer_command(installer_path: &Path, runtime: &str, subcommand: &str) -> Command {
     let mut cmd = Command::new(runtime);
-    cmd.arg(installer_path).arg("install");
+    cmd.arg(installer_path).arg(subcommand);
     cmd
 }
 
-/// Build the `<binary> install --resource-root <resource_root>` invocation
-/// for the compiled standalone installer — the zero-runtime path. Mirrors
-/// `installer_command`'s separation of command construction from execution
-/// so both are independently testable.
-fn compiled_installer_command(binary: &Path, resource_root: &Path) -> Command {
+/// Build the `<binary> <subcommand> --resource-root <resource_root>`
+/// invocation for the compiled standalone installer — the zero-runtime path.
+/// Mirrors `installer_command`'s separation of command construction from
+/// execution so both are independently testable.
+fn compiled_installer_command(binary: &Path, resource_root: &Path, subcommand: &str) -> Command {
     let mut cmd = Command::new(binary);
-    cmd.arg("install").arg("--resource-root").arg(resource_root);
+    cmd.arg(subcommand)
+        .arg("--resource-root")
+        .arg(resource_root);
     cmd
 }
 
-/// Run the installer and collect installed agent names from stdout. Returns
-/// an error string on non-zero exit. Dispatches on [`Installer`]: the
-/// compiled binary needs no runtime fallthrough at all, the script needs
-/// [`run_installer_with_runtimes`]'s `bun`-then-`node` logic.
+/// Run the installer's `install` subcommand and collect installed agent
+/// names from stdout. Returns an error string on non-zero exit. Dispatches
+/// on [`Installer`]: the compiled binary needs no runtime fallthrough at
+/// all, the script needs [`run_installer_with_runtimes`]'s `bun`-then-`node`
+/// logic.
 fn run_skill_installer(installer: &Installer) -> Result<InstallOutcome, String> {
+    run_skill_installer_subcommand(installer, "install")
+}
+
+/// Same as [`run_skill_installer`] but for an arbitrary `install.ts`
+/// subcommand (`install`, `uninstall`, or `status`) — all three share the
+/// exact same "✓ agent: ..." / plain-line stdout shape
+/// [`parse_installer_output`] already parses, so one dispatch function
+/// covers all three call sites ([`uninstall_skill`],
+/// [`revalidate_agents_installed`], and this module's own `install_skill`).
+fn run_skill_installer_subcommand(
+    installer: &Installer,
+    subcommand: &str,
+) -> Result<InstallOutcome, String> {
     match installer {
         Installer::Compiled {
             binary,
             resource_root,
         } => {
-            let output = compiled_installer_command(binary, resource_root)
+            let output = compiled_installer_command(binary, resource_root, subcommand)
                 .output()
                 .map_err(|e| format!("Failed to launch the compiled skill installer: {e}"))?;
             parse_installer_output(output)
         }
-        Installer::Script { path } => run_installer_with_runtimes(path, &INSTALLER_RUNTIMES),
+        Installer::Script { path } => {
+            run_installer_with_runtimes(path, subcommand, &INSTALLER_RUNTIMES)
+        }
     }
 }
 
@@ -561,11 +696,12 @@ fn run_skill_installer(installer: &Installer) -> Result<InstallOutcome, String> 
 /// under parallel execution.
 fn run_installer_with_runtimes(
     installer_path: &Path,
+    subcommand: &str,
     runtimes: &[&str],
 ) -> Result<InstallOutcome, String> {
     let mut output = None;
     for runtime in runtimes {
-        match installer_command(installer_path, runtime).output() {
+        match installer_command(installer_path, runtime, subcommand).output() {
             Ok(out) => {
                 output = Some(out);
                 break;
@@ -843,6 +979,7 @@ mod tests {
         let cmd = compiled_installer_command(
             Path::new("/opt/nodespace/nodespace-skill-installer"),
             Path::new("/opt/nodespace/resources/skill"),
+            "install",
         );
         let debug_repr = format!("{cmd:?}");
 
@@ -923,7 +1060,7 @@ mod tests {
         // own environment, so this stays safe under parallel test execution.
         // PATH is scrubbed to bare OS binaries to prove zero runtime
         // dependency, not just that it happens to work with bun on PATH.
-        let output = compiled_installer_command(&binary_path, &resource_root)
+        let output = compiled_installer_command(&binary_path, &resource_root, "install")
             .env("HOME", fake_home.path())
             .env("PATH", "/usr/bin:/bin")
             .output()
@@ -957,7 +1094,7 @@ mod tests {
     /// published).
     #[test]
     fn installer_command_invokes_bun_directly_not_npx_or_npm() {
-        let cmd = installer_command(Path::new("/tmp/fake/install.js"), "bun");
+        let cmd = installer_command(Path::new("/tmp/fake/install.js"), "bun", "install");
         let debug_repr = format!("{cmd:?}");
 
         assert!(
@@ -998,6 +1135,7 @@ mod tests {
 
         let result = run_installer_with_runtimes(
             Path::new("/tmp/fake/install.js"),
+            "install",
             &[
                 missing_runtime.to_str().unwrap(),
                 working_runtime.to_str().unwrap(),
@@ -1090,6 +1228,7 @@ mod tests {
 
         let result = run_installer_with_runtimes(
             Path::new("/tmp/fake/install.js"),
+            "install",
             &[missing_a.to_str().unwrap(), missing_b.to_str().unwrap()],
         );
 
@@ -1119,7 +1258,7 @@ mod tests {
         // .env() only affects this child process, not the test binary's own
         // environment — safe under parallel test execution (no risk to any
         // other test that resolves the real $HOME).
-        let output = installer_command(&installer_path, "bun")
+        let output = installer_command(&installer_path, "bun", "install")
             .env("HOME", fake_home.path())
             .output()
             .expect("bun must be on $PATH to run this test");
@@ -1143,6 +1282,209 @@ mod tests {
         assert!(
             installed_shim.exists(),
             "claude-code shim was not installed"
+        );
+    }
+
+    /// End-to-end proof of the detected-but-skipped path, using a genuinely
+    /// incomplete package rather than synthetic stdout: copies the real
+    /// `packages/skill` resource root into a scratch dir, then deletes every
+    /// shim source file (`SKILL.md`, `references/`, `shims/`) from it before
+    /// running the real installer binary against it -- so the agent's
+    /// detection dir genuinely exists AND the package genuinely has nothing
+    /// to install for it, the same way a truncated/corrupted app bundle
+    /// would. Asserts the resulting outcome (the same `Vec<SkippedAgent>`
+    /// shape that flows unchanged into `SkillSetupResult.agents_skipped` at
+    /// this module's `install_skill`, via `parse_installer_output` exactly as
+    /// `skill_setup.rs` parses a real subprocess run) carries claude-code
+    /// with the expected reason -- closing the gap where only
+    /// `fake_output`'s synthetic stdout and a hand-trace covered this exact
+    /// line format.
+    #[test]
+    fn run_skill_installer_reports_agents_skipped_for_a_genuinely_incomplete_package() {
+        let app = tauri::test::mock_app();
+        let real_resource_root = resolve_installer_path(&app.handle().clone())
+            .expect("dist/install.js must exist — run `bun run build:skill` first")
+            .parent()
+            .and_then(Path::parent)
+            .expect("dist/install.js is two levels under the skill package root")
+            .to_path_buf();
+
+        let scratch = tempfile::tempdir().expect("create scratch dir for the incomplete package");
+        let incomplete_root = scratch.path().join("incomplete-pkg");
+        copy_dir_recursive(&real_resource_root, &incomplete_root)
+            .expect("copy the real skill package root into scratch");
+
+        // `install()` skips a shim per-file (existsSync(src)), not per-agent
+        // -- so a package missing only SKILL.md still installs its other
+        // shims and does NOT hit the "detected but no files to install"
+        // path. Removing every shim source file (SKILL.md, references/,
+        // shims/) is what genuinely makes claude-code have zero files to
+        // install, reproducing a truncated/corrupted package rather than
+        // asserting against a fixture built to already agree with the parser.
+        std::fs::remove_file(incomplete_root.join("SKILL.md"))
+            .expect("remove SKILL.md to construct a genuinely incomplete package");
+        std::fs::remove_dir_all(incomplete_root.join("references"))
+            .expect("remove references/ to construct a genuinely incomplete package");
+        std::fs::remove_dir_all(incomplete_root.join("shims"))
+            .expect("remove shims/ to construct a genuinely incomplete package");
+
+        let installer_path = incomplete_root.join("dist").join("install.js");
+        assert!(
+            installer_path.exists(),
+            "dist/install.js must survive the copy at {}",
+            installer_path.display()
+        );
+
+        let fake_home = tempfile::tempdir().expect("create isolated fake $HOME");
+        std::fs::create_dir_all(fake_home.path().join(".claude"))
+            .expect("create fake .claude dir so the installer detects claude-code");
+
+        let output = installer_command(&installer_path, "bun", "install")
+            .env("HOME", fake_home.path())
+            .output()
+            .expect("bun must be on $PATH to run this test");
+        let outcome = parse_installer_output(output)
+            .expect("a skipped agent is not a failure -- the installer still exits 0");
+
+        assert!(
+            outcome.installed.is_empty(),
+            "nothing should have been installed from a package with no SKILL.md"
+        );
+        assert_eq!(outcome.skipped.len(), 1);
+        assert_eq!(outcome.skipped[0].agent, "claude-code");
+        assert_eq!(
+            outcome.skipped[0].reason,
+            "detected but no files to install (package may be incomplete)"
+        );
+        assert!(
+            !fake_home
+                .path()
+                .join(".claude/skills/nodespace/SKILL.md")
+                .exists(),
+            "no SKILL.md should exist anywhere -- there was none to install"
+        );
+    }
+
+    /// Recursive directory copy for
+    /// `run_skill_installer_reports_agents_skipped_for_a_genuinely_incomplete_package`
+    /// -- `std::fs` has no built-in recursive copy, and this needs the whole
+    /// real skill package root (SKILL.md, shims/, references/, dist/)
+    /// duplicated into scratch so a file can be deleted from the copy
+    /// without touching the checked-in package.
+    fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let dest_path = dst.join(entry.file_name());
+            if file_type.is_dir() {
+                copy_dir_recursive(&entry.path(), &dest_path)?;
+            } else {
+                std::fs::copy(entry.path(), &dest_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// End-to-end proof of the staleness fix: installs for real into an
+    /// isolated `$HOME` (so `agents_installed` genuinely reflects an
+    /// on-disk install, not a hand-built fixture), then deletes the
+    /// harness's skill directory by hand -- exactly what a user does when
+    /// they `rm -rf ~/.gemini` outside NodeSpace entirely -- and asserts the
+    /// real `status` subcommand, run the same way `revalidate_agents_installed`
+    /// runs it, no longer reports that agent as present. This is the genuine
+    /// "persisted list says installed, filesystem says otherwise" scenario;
+    /// closes the gap where only synthetic fixtures exercised this shape.
+    #[test]
+    fn status_subcommand_stops_reporting_an_agent_whose_skill_dir_was_deleted_by_hand() {
+        let app = tauri::test::mock_app();
+        let installer_path = resolve_installer_path(&app.handle().clone())
+            .expect("dist/install.js must exist — run `bun run build:skill` first");
+
+        let fake_home = tempfile::tempdir().expect("create isolated fake $HOME");
+        std::fs::create_dir_all(fake_home.path().join(".claude"))
+            .expect("create fake .claude dir so the installer detects claude-code");
+        std::fs::create_dir_all(fake_home.path().join(".gemini"))
+            .expect("create fake .gemini dir so the installer detects gemini");
+
+        let install_output = installer_command(&installer_path, "bun", "install")
+            .env("HOME", fake_home.path())
+            .output()
+            .expect("bun must be on $PATH to run this test");
+        let install_outcome =
+            parse_installer_output(install_output).expect("install succeeds for both agents");
+        assert_eq!(
+            install_outcome.installed,
+            vec!["claude-code".to_string(), "gemini".to_string()],
+            "both agents must actually be installed before this test deletes one by hand"
+        );
+
+        // The user (or some other tool) deletes ONLY the gemini skill
+        // directory -- claude-code's install must be unaffected.
+        std::fs::remove_dir_all(fake_home.path().join(".gemini/skills/nodespace"))
+            .expect("delete gemini's skill directory to simulate manual removal");
+
+        let status_output = installer_command(&installer_path, "bun", "status")
+            .env("HOME", fake_home.path())
+            .output()
+            .expect("bun must be on $PATH to run this test");
+        let status_outcome = parse_installer_output(status_output).expect("status succeeds");
+
+        assert_eq!(
+            status_outcome.installed,
+            vec!["claude-code".to_string()],
+            "gemini was deleted by hand and must no longer be reported as installed"
+        );
+    }
+
+    /// End-to-end proof that `remove_skill`'s fix actually removes the skill
+    /// from every harness it was installed into, not just Claude Code:
+    /// installs for real into an isolated `$HOME` for two agents, then runs
+    /// the real `uninstall` subcommand the same way `uninstall_skill` runs
+    /// it, and asserts BOTH agents' skill directories are gone -- the exact
+    /// gap `remove_skill`'s old hand-rolled `~/.claude/skills/nodespace`-only
+    /// deletion left behind for every non-Claude-Code harness.
+    #[test]
+    fn uninstall_subcommand_removes_the_skill_from_every_installed_agent() {
+        let app = tauri::test::mock_app();
+        let installer_path = resolve_installer_path(&app.handle().clone())
+            .expect("dist/install.js must exist — run `bun run build:skill` first");
+
+        let fake_home = tempfile::tempdir().expect("create isolated fake $HOME");
+        std::fs::create_dir_all(fake_home.path().join(".claude"))
+            .expect("create fake .claude dir so the installer detects claude-code");
+        std::fs::create_dir_all(fake_home.path().join(".gemini"))
+            .expect("create fake .gemini dir so the installer detects gemini");
+
+        let install_output = installer_command(&installer_path, "bun", "install")
+            .env("HOME", fake_home.path())
+            .output()
+            .expect("bun must be on $PATH to run this test");
+        parse_installer_output(install_output).expect("install succeeds for both agents");
+
+        let claude_skill = fake_home.path().join(".claude/skills/nodespace/SKILL.md");
+        let gemini_skill = fake_home.path().join(".gemini/skills/nodespace/SKILL.md");
+        assert!(claude_skill.exists(), "precondition: claude-code installed");
+        assert!(gemini_skill.exists(), "precondition: gemini installed");
+
+        let uninstall_output = installer_command(&installer_path, "bun", "uninstall")
+            .env("HOME", fake_home.path())
+            .output()
+            .expect("bun must be on $PATH to run this test");
+        assert!(
+            uninstall_output.status.success(),
+            "uninstall failed — stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&uninstall_output.stdout),
+            String::from_utf8_lossy(&uninstall_output.stderr)
+        );
+
+        assert!(
+            !claude_skill.exists(),
+            "claude-code's skill must be removed by a full uninstall"
+        );
+        assert!(
+            !gemini_skill.exists(),
+            "gemini's skill must be removed too -- not just claude-code"
         );
     }
 }
