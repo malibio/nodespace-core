@@ -890,14 +890,16 @@ pub async fn handle_create_schema(
             let relationships = relationships_for_tx.clone();
             let description_text = description_text_for_tx.clone();
             Box::pin(async move {
+                // create_node_with_parent_in_tx already returns
+                // NodeServiceError directly — propagate it as-is rather than
+                // flattening to transaction_failed, so a genuine validation
+                // failure (InvalidUpdate, UnknownNodeType, ...) stays
+                // distinguishable from the transaction machinery itself
+                // breaking (ADR-069 §2a). The outer map_err below
+                // discriminates on this.
                 let created_schema_id = node_service
                     .create_node_with_parent_in_tx(tx, schema_node_params)
-                    .await
-                    .map_err(|e| {
-                        NodeServiceError::transaction_failed(format!(
-                            "Failed to create schema node: {e}"
-                        ))
-                    })?;
+                    .await?;
 
                 if !relationships.is_empty() {
                     node_service
@@ -912,18 +914,21 @@ pub async fn handle_create_schema(
                     &description_text,
                 )
                 .await
-                .map_err(|e| {
-                    NodeServiceError::transaction_failed(format!(
-                        "Failed to create description subtree: {e}"
-                    ))
+                .map_err(|e| match e {
+                    MarkdownError::InvalidParams(msg) => NodeServiceError::invalid_update(msg),
+                    other => NodeServiceError::transaction_failed(other.to_string()),
                 })?;
 
                 Ok(created_schema_id)
             })
         })
         .await
-        .map_err(|e| {
-            MarkdownError::internal_error(format!("Failed to create schema '{}': {}", schema_id, e))
+        .map_err(|e| match e {
+            NodeServiceError::InvalidUpdate(_) => MarkdownError::invalid_params(e.to_string()),
+            other => MarkdownError::internal_error(format!(
+                "Failed to create schema '{}': {}",
+                schema_id, other
+            )),
         })?;
 
     let output = CreateSchemaOutput {
@@ -1510,9 +1515,20 @@ pub async fn handle_update_schema(
                     )
                     .await
                     .map_err(|e| {
-                        NodeServiceError::transaction_failed(format!(
-                            "Failed to create description subtree for schema '{schema_id}': {e}"
-                        ))
+                        // Preserve InvalidParams as InvalidUpdate rather than
+                        // flattening to transaction_failed: the outer match
+                        // below discriminates InvalidUpdate -> invalid_params
+                        // (a client mistake) from everything else ->
+                        // internal_error, and TransactionFailed is reserved
+                        // for the commit/rollback machinery itself breaking
+                        // (ADR-069 §2a), not a validation failure surfaced
+                        // through a different error type at this boundary.
+                        match e {
+                            MarkdownError::InvalidParams(msg) => {
+                                NodeServiceError::invalid_update(msg)
+                            }
+                            other => NodeServiceError::transaction_failed(other.to_string()),
+                        }
                     })?;
                 }
 
@@ -1618,10 +1634,21 @@ async fn create_description_subtree_in_tx(
         .bulk_create_hierarchy_in_tx(tx, bulk_nodes)
         .await
         .map_err(|e| {
-            MarkdownError::internal_error(format!(
-                "Failed to create description subtree for schema '{}': {}",
-                schema_id, e
-            ))
+            // Preserve the InvalidUpdate/other distinction rather than
+            // flattening everything to `internal_error`: a genuinely
+            // invalid description (e.g. content failing schema field
+            // validation) is a client mistake, not a server fault, and
+            // callers one layer up (`handle_update_schema`) discriminate
+            // on this to decide invalid_params vs. internal_error.
+            match e {
+                NodeServiceError::InvalidUpdate(msg) => MarkdownError::invalid_params(format!(
+                    "Failed to create description subtree for schema '{schema_id}': {msg}"
+                )),
+                other => MarkdownError::internal_error(format!(
+                    "Failed to create description subtree for schema '{}': {}",
+                    schema_id, other
+                )),
+            }
         })?;
 
     Ok(())

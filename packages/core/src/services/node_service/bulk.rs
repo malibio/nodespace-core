@@ -100,8 +100,67 @@ impl NodeService {
             serde_json::Value,
         )>,
     ) -> Result<Vec<String>, NodeServiceError> {
-        if nodes.is_empty() {
+        let Some(nodes_normalized) = self.prepare_bulk_hierarchy_nodes(nodes).await? else {
             return Ok(Vec::new());
+        };
+
+        // Find the root ID once - all nodes in a bulk import share the same root
+        // Performance optimization: Single DB query instead of N queries
+        let root_id = if let Some((_, _, _, Some(first_parent), _, _)) = nodes_normalized.first() {
+            self.get_root_id(first_parent).await.ok()
+        } else {
+            None
+        };
+
+        // Delegate to store for atomic batch insert
+        let result = self
+            .store
+            .bulk_create_hierarchy(nodes_normalized)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Queue root for embedding regeneration once
+        // All nodes share the same root, so we only need one queue operation
+        #[cfg(feature = "nlp")]
+        if let Some(root_id) = root_id {
+            self.queue_root_for_embedding(&root_id).await;
+        }
+
+        Ok(result)
+    }
+
+    /// Shared preamble for [`Self::bulk_create_hierarchy`] and
+    /// [`Self::bulk_create_hierarchy_in_tx`]: caches each unique node
+    /// type's schema fields, normalizes flat properties to namespaced
+    /// format, and validates every node against behaviors and (where
+    /// applicable) its cached schema. Returns `Ok(None)` for an empty
+    /// input (both callers treat that as "nothing to do"), otherwise the
+    /// normalized, validated node tuples ready for insertion.
+    async fn prepare_bulk_hierarchy_nodes(
+        &self,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
+    ) -> Result<
+        Option<
+            Vec<(
+                String,
+                String,
+                String,
+                Option<String>,
+                f64,
+                serde_json::Value,
+            )>,
+        >,
+        NodeServiceError,
+    > {
+        if nodes.is_empty() {
+            return Ok(None);
         }
 
         // Performance optimization: Cache schema lookups by node_type
@@ -169,33 +228,12 @@ impl NodeService {
             }
         }
 
-        // Find the root ID once - all nodes in a bulk import share the same root
-        // Performance optimization: Single DB query instead of N queries
-        let root_id = if let Some((_, _, _, Some(first_parent), _, _)) = nodes_normalized.first() {
-            self.get_root_id(first_parent).await.ok()
-        } else {
-            None
-        };
-
-        // Delegate to store for atomic batch insert
-        let result = self
-            .store
-            .bulk_create_hierarchy(nodes_normalized)
-            .await
-            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
-
-        // Queue root for embedding regeneration once
-        // All nodes share the same root, so we only need one queue operation
-        #[cfg(feature = "nlp")]
-        if let Some(root_id) = root_id {
-            self.queue_root_for_embedding(&root_id).await;
-        }
-
-        Ok(result)
+        Ok(Some(nodes_normalized))
     }
 
     /// `_in_tx` twin of [`Self::bulk_create_hierarchy`] (ADR-069 §1b/S3).
-    /// Identical schema-cache/validation preamble; the insert lands on
+    /// Shares the same schema-cache/validation preamble via
+    /// [`Self::prepare_bulk_hierarchy_nodes`]; the insert lands on
     /// `tx.store_tx()` via the store's own `bulk_create_hierarchy_in_tx`
     /// instead of opening a new transaction — this is what lets
     /// `create_description_subtree` compose into `handle_create_schema`'s
@@ -219,64 +257,9 @@ impl NodeService {
             serde_json::Value,
         )>,
     ) -> Result<Vec<String>, NodeServiceError> {
-        if nodes.is_empty() {
+        let Some(nodes_normalized) = self.prepare_bulk_hierarchy_nodes(nodes).await? else {
             return Ok(Vec::new());
-        }
-
-        let unique_types: std::collections::HashSet<&str> = nodes
-            .iter()
-            .map(|(_, node_type, _, _, _, _)| node_type.as_str())
-            .collect();
-
-        let mut schema_cache: std::collections::HashMap<
-            String,
-            Option<Vec<crate::models::SchemaField>>,
-        > = std::collections::HashMap::new();
-        for node_type in unique_types {
-            if node_type != "schema" {
-                let fields = match self.get_schema_for_type(node_type).await? {
-                    Some(schema_json) => match schema_json.get("fields") {
-                        Some(fields_json) => serde_json::from_value(fields_json.clone()).ok(),
-                        None => None,
-                    },
-                    None => None,
-                };
-                schema_cache.insert(node_type.to_string(), fields);
-            }
-        }
-
-        let nodes_normalized: Vec<_> = nodes
-            .into_iter()
-            .map(|(id, node_type, content, parent_id, order, properties)| {
-                let normalized_props =
-                    Self::normalize_flat_properties_to_namespace(&node_type, &properties);
-                (id, node_type, content, parent_id, order, normalized_props)
-            })
-            .collect();
-
-        for (id, node_type, content, _, _, properties) in &nodes_normalized {
-            let temp_node = Node {
-                id: id.clone(),
-                node_type: node_type.clone(),
-                content: content.clone(),
-                version: 1,
-                properties: properties.clone(),
-                mentions: vec![],
-                mentioned_in: vec![],
-                created_at: chrono::Utc::now(),
-                modified_at: chrono::Utc::now(),
-                title: None,
-                lifecycle_status: "active".to_string(),
-            };
-
-            self.behaviors.validate_node(&temp_node)?;
-
-            if node_type != "schema" {
-                if let Some(Some(fields)) = schema_cache.get(node_type) {
-                    self.validate_node_with_fields(&temp_node, fields)?;
-                }
-            }
-        }
+        };
 
         let node_types: Vec<String> = nodes_normalized
             .iter()

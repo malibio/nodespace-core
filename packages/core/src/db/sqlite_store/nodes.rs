@@ -813,12 +813,18 @@ impl SqliteStore {
     /// collection-name collisions; the caller buffers the equivalent event
     /// and handles the marker post-commit, same posture as
     /// `create_node_in_tx`.
+    /// `Ok(Ok(node))` on success, `Ok(Err(actual_version))` on an OCC
+    /// mismatch — the real persisted version at the time of the check, not
+    /// a guess, so a caller building `NodeServiceError::VersionConflict` can
+    /// report a genuine value instead of fabricating one (e.g.
+    /// `expected_version + 1`, which is wrong the instant more than one
+    /// concurrent writer has landed since `expected_version`).
     pub(crate) async fn update_node_with_version_check_in_tx(
         tx: &Tx<'_>,
         id: &str,
         expected_version: i64,
         update: NodeUpdate,
-    ) -> Result<Option<Node>> {
+    ) -> Result<std::result::Result<Node, i64>> {
         if let Some(ref status) = update.lifecycle_status {
             Self::validate_lifecycle_status(status)?;
         }
@@ -835,6 +841,10 @@ impl SqliteStore {
             Some(row) => Self::row_to_node(&row)?,
             None => return Err(anyhow::anyhow!("Node not found: {}", id)),
         };
+
+        if current.version != expected_version {
+            return Ok(Err(current.version));
+        }
 
         let new_version = expected_version + 1;
         let updated_content = update.content.unwrap_or(current.content);
@@ -859,7 +869,12 @@ impl SqliteStore {
         ).await.context("Failed to update node with version check")?;
 
         if rows_affected == 0 {
-            return Ok(None);
+            // Lost a race between the read above and this UPDATE, inside the
+            // same transaction — vanishingly unlikely (nothing else can
+            // observe or mutate this row mid-transaction) but report the
+            // pre-write snapshot's version rather than fabricate one, since
+            // it is at least a real value this call observed.
+            return Ok(Err(current.version));
         }
 
         let mut rows = tx
@@ -875,7 +890,7 @@ impl SqliteStore {
             None => return Err(anyhow::anyhow!("Node not found after update")),
         };
 
-        Ok(Some(node))
+        Ok(Ok(node))
     }
 
     pub async fn update_lifecycle_status(&self, id: &str, status: &str) -> Result<()> {

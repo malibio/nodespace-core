@@ -1643,8 +1643,8 @@ impl NodeService {
         .await
         .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        let updated_node = result.ok_or_else(|| {
-            NodeServiceError::version_conflict(node_id, expected_version, expected_version + 1)
+        let updated_node = result.map_err(|actual_version| {
+            NodeServiceError::version_conflict(node_id, expected_version, actual_version)
         })?;
 
         self.emit_event(DomainEvent::NodeUpdated {
