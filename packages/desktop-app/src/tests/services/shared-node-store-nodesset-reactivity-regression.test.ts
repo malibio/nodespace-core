@@ -103,7 +103,12 @@ describe('SharedNodeStore.nodesSet() — reference-identity reactivity regressio
     store.updateTaskNode(nodeId, { status: 'in_progress' }, viewerSource);
     const refBeforeConfirm = store.getNode(nodeId);
 
-    await new Promise((r) => setTimeout(r, 20));
+    // Poll for the actual condition (the confirmed version landing) rather
+    // than a fixed delay — deterministic regardless of how long the mocked
+    // RPC's microtask chain takes to resolve.
+    await vi.waitFor(() => {
+      expect(store.getNode(nodeId)?.version).toBe(2);
+    });
     const refAfterConfirm = store.getNode(nodeId);
 
     // The store's data must be correct...
@@ -117,29 +122,58 @@ describe('SharedNodeStore.nodesSet() — reference-identity reactivity regressio
   });
 
   it('produces a fresh reference on every generic updateNode() confirm, not just the optimistic apply', async () => {
+    // Uses a `text` node (no registered type-specific updater), and a
+    // `properties` change — `task`'s `status` would route through the
+    // type-specific `updateTaskNode` path instead (see the other test in
+    // this file), never reaching `backendAdapter.updateNode` at all.
     const nodeId = 'reactivity-2';
-    store.setNode(makeTaskNode(nodeId, 'open', 1), { type: 'database', reason: 'seed' });
+    store.setNode(
+      {
+        id: nodeId,
+        nodeType: 'text',
+        content: 'hello',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        modifiedAt: '2024-01-01T00:00:00.000Z',
+        version: 1,
+        properties: {},
+        mentions: []
+      } as unknown as Node,
+      { type: 'database', reason: 'seed' }
+    );
 
     vi.spyOn(backendAdapter, 'updateNode').mockImplementation(
       async (id: string, version: number, update: UpdateNodeInput) => {
         return {
           id,
-          nodeType: 'task',
-          content: '- [ ] seed task',
+          nodeType: 'text',
+          content: 'hello',
           createdAt: '2024-01-01T00:00:00.000Z',
           modifiedAt: new Date().toISOString(),
-          version: version + 1,
-          ...update
+          // `...update` first: `UpdateNodeInput` echoes back whatever the
+          // caller sent (here, `{ properties: {...} }`), which does NOT
+          // include a version — but if it ever did, `version` below must
+          // win, not be silently overwritten by an echoed field.
+          ...update,
+          version: version + 1
         } as unknown as Node;
       }
     );
 
     const beforeWrite = store.getNode(nodeId);
-    store.updateNode(nodeId, { status: 'in_progress' } as Partial<Node>, viewerSource, {});
+    store.updateNode(
+      nodeId,
+      { properties: { color: 'red' } } as Partial<Node>,
+      viewerSource,
+      {}
+    );
     const afterOptimistic = store.getNode(nodeId);
     expect(afterOptimistic).not.toBe(beforeWrite);
 
-    await new Promise((r) => setTimeout(r, 20));
+    // Poll for the confirmed version rather than a fixed delay — see the
+    // matching comment in the `updateTaskNode()` test above.
+    await vi.waitFor(() => {
+      expect(store.getNode(nodeId)?.version).toBe(2);
+    });
     const afterConfirm = store.getNode(nodeId);
     // The confirm step re-sets the node too (to apply the backend's
     // authoritative version) — it must also be a new reference so a

@@ -1614,6 +1614,19 @@ export class SharedNodeStore {
                       // change it OR the local node's current value for that
                       // field still matches the pre-RPC snapshot (nothing
                       // else moved it on in the meantime).
+                      //
+                      // The `changedFields.includes(key)` branch always
+                      // applies THIS write's own response value for a field
+                      // it changed, even if something else has since moved
+                      // that field on further. That's safe only because
+                      // `PersistenceCoordinator` (`persist()` above) executes
+                      // at most one real RPC per node at a time — a second
+                      // write for the same node while this one is executing
+                      // collapses into a single queued slot and only starts
+                      // once this write's response has already been applied.
+                      // A future change that let two RPCs for the same node
+                      // race concurrently would need this branch to also
+                      // check the snapshot, not just field ownership.
                       const scopedFields: Record<string, unknown> = {};
                       const localRec = localNode as unknown as Record<string, unknown>;
                       const currentRec = currentNode as unknown as Record<string, unknown>;

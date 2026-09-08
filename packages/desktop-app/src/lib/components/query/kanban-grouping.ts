@@ -111,6 +111,16 @@ export function readGroupValue(node: Node, field: string): string | null {
  * `TaskStatus::User("")` rather than clearing the field, so callers moving a
  * card to Unassigned must pass `null` here, not `''`.
  *
+ * Not every field this can be called for actually HAS clear semantics on the
+ * backend, though: task's `status` is a required, non-nullable `TaskStatus`
+ * with no "cleared" state at all (unlike its siblings `priority`/`dueDate`/
+ * `assignee`, which are genuinely optional). A `null` write to such a field
+ * round-trips as an HTTP success while silently changing nothing server-side
+ * — the caller is responsible for never offering Unassigned as a target for
+ * a `required: true` schema field in the first place (kanban-view.svelte's
+ * `displayColumns` and `moveCard` both guard on `activeField?.required`).
+ *
+
  * Both shapes this produces persist through the store's viewer-write rule: a
  * user-defined schema field — the common Kanban case — is written under
  * `properties[field]` (property changes always persist, matching

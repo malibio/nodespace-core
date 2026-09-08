@@ -47,6 +47,10 @@ function taskSchema(): SchemaNode {
         type: 'enum',
         protection: 'core',
         indexed: false,
+        // Mirrors the real task schema (packages/core/src/models/core_schemas.rs):
+        // `status` is required — a task's `TaskStatus` is non-nullable on the
+        // backend, with no clear semantics (unlike priority/dueDate/assignee).
+        required: true,
         coreValues: [
           { value: 'open', label: 'Open' },
           { value: 'in_progress', label: 'In Progress' },
@@ -226,5 +230,42 @@ describe('KanbanView — consecutive status moves on a task node (browser mode)'
 
     expect(versionsSent).toEqual([1, 2]);
     expect(conflictNotifications.notifications).toEqual([]);
+  });
+
+  it('does not offer Unassigned as a column or a move-to target when grouped by a required field (task status)', async () => {
+    seed(task('t1', 'open', 'Ship it', 1));
+
+    const updateSpy = vi.spyOn(backendAdapter, 'updateTaskNode');
+
+    const { container, getByRole } = render(KanbanView, {
+      props: {
+        nodeIds: ['t1'],
+        schema: taskSchema(),
+        groupBy: 'status',
+        onGroupByChange: () => {},
+        onRowClick: () => {}
+      }
+    });
+
+    // No Unassigned column at all — `status` can never be cleared, so there
+    // is nothing to bucket into it.
+    expect(
+      Array.from(container.querySelectorAll('.kanban-column-title')).map(
+        (el) => el.textContent?.trim()
+      )
+    ).toEqual(['Open', 'In Progress', 'Done']);
+
+    // The per-card "Move to" select offers the same three columns, no
+    // Unassigned option a user could pick to trigger a silent no-op write.
+    const moveSelect = getByRole('combobox', {
+      name: 'Move Ship it to another column'
+    }) as HTMLSelectElement;
+    const optionValues = Array.from(moveSelect.options).map((o) => o.value);
+    expect(optionValues).toEqual(['open', 'in_progress', 'done']);
+
+    // Defense-in-depth: even a direct write attempt (bypassing the select)
+    // must not silently clear status — moveCard's own guard rejects it
+    // before ever reaching the backend.
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 });
