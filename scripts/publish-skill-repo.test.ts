@@ -78,7 +78,7 @@ describe("sharedShimPaths", () => {
     const shared = new Set(sharedShimPaths());
     expect(shared.has("shims/claude-code/nodespace-hook.ts")).toBe(false);
     expect(shared.has("shims/codex/nodespace-plugin.ts")).toBe(false);
-    expect(shared.has("shims/antigravity/nodespace-mcp-server.ts")).toBe(false);
+    expect(shared.has("shims/antigravity/nodespace-mcp-config.json")).toBe(false);
     expect(shared.has("shims/opencode/nodespace-plugin.ts")).toBe(false);
   });
 });

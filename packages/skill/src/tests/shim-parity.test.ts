@@ -2,16 +2,20 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// The four per-agent ACP shims in `packages/skill/shims/` hand-author the same
-// tool definitions. The duplication is deliberate — each shim is copied into an
+// The per-agent ACP shims in `packages/skill/shims/` hand-author the same tool
+// definitions. The duplication is deliberate — each shim is copied into an
 // agent session's temp directory as a standalone script with no shared module
 // resolution at runtime, so they cannot import a single source. This test is the
 // automated guard that they never drift out of agreement: any rename or
 // description edit in one shim (without the others) fails here.
 //
-// What each shim declares:
-//  - antigravity (`nodespace-mcp-server.ts`): `name` + `description` per tool object — the reference.
-//  - codex / opencode (`nodespace-plugin.ts`): `name` + `description` per tool object.
+// Antigravity CLI carries no shim here — its native tool-registration path is
+// MCP, and it points at the already-existing `nodespace mcp` stdio server
+// (packages/cli/src/commands/mcp.rs) instead of a hand-authored tool list, so
+// there is nothing in packages/skill/shims/ for it to drift against.
+//
+// What each remaining shim declares:
+//  - codex / opencode (`nodespace-plugin.ts`): `name` + `description` per tool object — codex is the reference.
 //  - claude-code (`nodespace-hook.ts`): registers by NAME via `hook('name', …)`;
 //    it carries no per-tool description, so only its tool NAMES are comparable.
 
@@ -50,18 +54,14 @@ function claudeCodeToolNames(): string[] {
 }
 
 describe("ACP shim tool parity", () => {
-  const antigravity = tsPluginToolMap("antigravity/nodespace-mcp-server.ts");
+  const codex = tsPluginToolMap("codex/nodespace-plugin.ts");
 
-  it("antigravity declares exactly the expected tool set", () => {
-    expect(Object.keys(antigravity).sort()).toEqual(EXPECTED_TOOLS);
+  it("codex declares exactly the expected tool set", () => {
+    expect(Object.keys(codex).sort()).toEqual(EXPECTED_TOOLS);
   });
 
-  it("codex tool names + descriptions match antigravity", () => {
-    expect(tsPluginToolMap("codex/nodespace-plugin.ts")).toEqual(antigravity);
-  });
-
-  it("opencode tool names + descriptions match antigravity", () => {
-    expect(tsPluginToolMap("opencode/nodespace-plugin.ts")).toEqual(antigravity);
+  it("opencode tool names + descriptions match codex", () => {
+    expect(tsPluginToolMap("opencode/nodespace-plugin.ts")).toEqual(codex);
   });
 
   it("claude-code registers exactly the expected tool names", () => {

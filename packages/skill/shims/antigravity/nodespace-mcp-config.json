@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "nodespace": {
-      "command": "node",
-      "args": ["./nodespace-mcp-server.ts"]
+      "command": "nodespace",
+      "args": ["mcp"]
     }
   }
 }
