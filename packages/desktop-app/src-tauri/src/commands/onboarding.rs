@@ -275,19 +275,27 @@ pub async fn remove_skill() -> Result<(), String> {
 }
 
 /// Persist the onboarding completion state to `~/.nodespace/config.json`.
+/// `identity_skipped` is true when the main wizard's identity step was shown
+/// and the user explicitly skipped it (never asked, or saved, both leave it
+/// false). Setting `identity_prompt_dismissed` here mirrors
+/// `dismiss_identity_backfill_prompt`: a user who just said no to the exact
+/// same prompt during first-run setup should not be hit with the standalone
+/// backfill nudge on their very next launch.
 #[tauri::command]
 pub async fn complete_onboarding(
     path_configured: bool,
     skill_configured: bool,
+    identity_skipped: bool,
 ) -> Result<(), String> {
-    let cfg = NodespaceConfig {
-        onboarding_completed: true,
-        integrations: IntegrationsConfig {
-            path_configured,
-            skill_configured,
-        },
-        ..Default::default()
+    let mut cfg = read_config().await?;
+    cfg.onboarding_completed = true;
+    cfg.integrations = IntegrationsConfig {
+        path_configured,
+        skill_configured,
     };
+    if identity_skipped {
+        cfg.identity_prompt_dismissed = true;
+    }
     write_config(&cfg).await
 }
 
