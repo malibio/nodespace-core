@@ -243,7 +243,8 @@ impl GrpcNodeService for NodeServiceImpl {
             parent_id: req.parent_id,
             position,
             properties,
-            collection: req.collection,
+            collections: req.collections,
+            collection_ids: req.collection_ids,
             lifecycle_status: req.lifecycle_status,
         };
 
@@ -335,8 +336,9 @@ impl GrpcNodeService for NodeServiceImpl {
             node_type: req.node_type,
             content: req.content,
             properties,
-            add_to_collection: req.add_to_collection,
-            remove_from_collection: req.remove_from_collection,
+            add_to_collections: req.add_to_collections,
+            add_to_collection_ids: req.add_to_collection_ids,
+            remove_from_collection_ids: req.remove_from_collection_ids,
             lifecycle_status: req.lifecycle_status,
         };
 
@@ -2235,7 +2237,8 @@ mod tests {
                 node_type: "person".to_string(),
                 content: "Alice".to_string(),
                 parent_id: None,
-                collection: None,
+                collections: Vec::new(),
+                collection_ids: Vec::new(),
                 lifecycle_status: None,
                 properties: r#"{"person":{"name":"Alice","email":"alice@example.com"}}"#
                     .to_string(),
@@ -2306,7 +2309,8 @@ mod tests {
                 node_type: "person".to_string(),
                 content: "Bob".to_string(),
                 parent_id: None,
-                collection: None,
+                collections: Vec::new(),
+                collection_ids: Vec::new(),
                 lifecycle_status: None,
                 properties: r#"{"person":{"name":"Bob","email":"alice@example.com"}}"#.to_string(),
                 position: None,
@@ -2455,7 +2459,8 @@ mod tests {
             node_type: "text".into(),
             content: "in-db2".into(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: "{}".into(),
             position: None,
@@ -2543,7 +2548,8 @@ mod tests {
             node_type: "text".to_string(),
             content: "parity-test".to_string(),
             parent_id: None,
-            collection: Some("test-collection".to_string()),
+            collections: vec!["test-collection".to_string()],
+            collection_ids: Vec::new(),
             lifecycle_status: Some("archived".to_string()),
             properties: "{}".to_string(),
             position: None,
@@ -2574,19 +2580,20 @@ mod tests {
             parent_id: None,
             position: nodespace_core::services::InsertPositionOwned::End,
             properties: serde_json::json!({}),
-            collection: Some("test-collection".to_string()),
+            collections: vec!["test-collection".to_string()],
+            collection_ids: Vec::new(),
             lifecycle_status: Some("archived".to_string()),
         };
         let ops_output = node_ops::create_node(&svc.node_service, ops_input)
             .await
             .unwrap();
 
-        // ops-layer output struct carries collection_id directly (not the wire response,
+        // ops-layer output struct carries collection_ids directly (not the wire response,
         // which no longer exposes per-node collection_id; see NodeData proto).
         // This assertion tests the ops layer's own return contract, not the wire format.
         assert!(
-            ops_output.collection_id.is_some(),
-            "ops must populate collection_id"
+            !ops_output.collection_ids.is_empty(),
+            "ops must populate collection_ids"
         );
         let ops_node = svc
             .node_service
@@ -2611,7 +2618,8 @@ mod tests {
             node_type: "text".to_string(),
             content: "original".to_string(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: "{}".to_string(),
             position: None,
@@ -2626,8 +2634,9 @@ mod tests {
             node_type: None,
             properties: None,
             version: None, // omit version — triggers auto-fetch path
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: Vec::new(),
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         });
         let updated = svc.update_node(update_req).await.unwrap().into_inner();
@@ -2645,7 +2654,8 @@ mod tests {
             node_type: "text".to_string(),
             content: "membership-test".to_string(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: "{}".to_string(),
             position: None,
@@ -2660,8 +2670,9 @@ mod tests {
             node_type: None,
             properties: None,
             version: None,
-            add_to_collection: Some("membership-coll".to_string()),
-            remove_from_collection: None,
+            add_to_collections: vec!["membership-coll".to_string()],
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         });
         svc.update_node(add_req).await.unwrap();
@@ -2683,8 +2694,9 @@ mod tests {
             node_type: None,
             properties: None,
             version: None,
-            add_to_collection: None,
-            remove_from_collection: Some(collection_id.clone()),
+            add_to_collections: Vec::new(),
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: vec![collection_id.clone()],
             lifecycle_status: None,
         });
         svc.update_node(remove_req).await.unwrap();
@@ -2781,7 +2793,8 @@ mod tests {
             node_type: "task".to_string(),
             content: "Initial task".to_string(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: "{}".to_string(),
             position: None,
@@ -2882,7 +2895,8 @@ mod tests {
             node_type: "ai-chat".to_string(),
             content: String::new(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: serde_json::json!({
                 "ai-chat": { "status": "processing", "messages": [] }
@@ -2922,8 +2936,9 @@ mod tests {
             properties: Some(
                 serde_json::json!({ "ai-chat": { "status": "processing" } }).to_string(),
             ),
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: Vec::new(),
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         });
         let err = svc
@@ -3186,7 +3201,8 @@ mod tests {
             node_type: "text".into(),
             content: "alice's node".into(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: "{}".into(),
             position: None,
@@ -3222,7 +3238,8 @@ mod tests {
             node_type: "text".into(),
             content: "untagged write".into(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: "{}".into(),
             position: None,
@@ -3255,7 +3272,8 @@ mod tests {
             node_type: "text".into(),
             content: "anonymous write".into(),
             parent_id: None,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: "{}".into(),
             position: None,

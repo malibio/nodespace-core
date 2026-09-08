@@ -78,7 +78,8 @@ async fn create_venue(svc: &Arc<NodeService>) -> Result<String> {
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: json!({ "address": ADDRESS(), "capacity": 1500 }),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )
@@ -225,8 +226,9 @@ async fn object_property_survives_an_update() -> Result<()> {
             node_type: None,
             content: None,
             properties: Some(json!({ "address": moved })),
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: Vec::new(),
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )

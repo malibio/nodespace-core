@@ -24,8 +24,12 @@ pub struct CreateNodeInput {
     pub parent_id: Option<String>,
     pub position: InsertPositionOwned,
     pub properties: Value,
-    /// Optional collection path (e.g. "hr:policy:vacation")
-    pub collection: Option<String>,
+    /// Collection paths to add the node to (e.g. "hr:policy:vacation").
+    /// Missing path segments are created. Empty = no collection assignment.
+    pub collections: Vec<String>,
+    /// Collection IDs to add the node to. The ID-based counterpart of
+    /// [`Self::collections`]; callers pass one form or the other, never both.
+    pub collection_ids: Vec<String>,
     /// Optional lifecycle status. Only `"active"` and `"archived"` are supported;
     /// any other value is rejected at the storage boundary.
     pub lifecycle_status: Option<String>,
@@ -36,7 +40,8 @@ pub struct CreateNodeOutput {
     pub node_id: String,
     pub node_type: String,
     pub parent_id: Option<String>,
-    pub collection_id: Option<String>,
+    /// Leaf collection IDs the node was added to, in request order.
+    pub collection_ids: Vec<String>,
     pub node_data: Value,
 }
 
@@ -55,8 +60,15 @@ pub struct UpdateNodeInput {
     pub node_type: Option<String>,
     pub content: Option<String>,
     pub properties: Option<Value>,
-    pub add_to_collection: Option<String>,
-    pub remove_from_collection: Option<String>,
+    /// Collection paths to add the node to. Missing segments are created.
+    pub add_to_collections: Vec<String>,
+    /// Collection IDs to add the node to. The ID-based counterpart of
+    /// [`Self::add_to_collections`]; callers pass one form or the other.
+    pub add_to_collection_ids: Vec<String>,
+    /// Collection IDs to remove the node from. IDs, not paths: removal detaches
+    /// an existing `member_of` edge, so a path passed here would resolve to
+    /// nothing and silently remove no membership.
+    pub remove_from_collection_ids: Vec<String>,
     pub lifecycle_status: Option<String>,
 }
 
@@ -65,8 +77,10 @@ pub struct UpdateNodeOutput {
     pub node_id: String,
     pub version: i64,
     pub node_data: Value,
-    pub collection_added: Option<String>,
-    pub collection_removed: Option<String>,
+    /// Leaf collection IDs added, in request order.
+    pub collections_added: Vec<String>,
+    /// Collection IDs removed, in request order.
+    pub collections_removed: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -145,8 +159,15 @@ pub async fn create_node(
     input: CreateNodeInput,
 ) -> Result<CreateNodeOutput, OpsError> {
     let parent_id = input.parent_id.clone();
-    let collection_path = input.collection.clone();
+    let collection_paths = input.collections.clone();
+    let collection_ids_requested = input.collection_ids.clone();
     let node_type = input.node_type.clone();
+
+    if !collection_paths.is_empty() && !collection_ids_requested.is_empty() {
+        return Err(OpsError::InvalidParams(
+            "Pass collection paths or collection IDs, not both".to_string(),
+        ));
+    }
 
     let node_id = node_service
         .create_node_with_parent(crate::services::CreateNodeParams {
@@ -159,16 +180,27 @@ pub async fn create_node(
         })
         .await?;
 
-    // Add to collection if specified
-    let collection_id = if let Some(path) = &collection_path {
+    // Add to every requested collection. A failure propagates rather than
+    // returning a success that hid an unfiled node — but it is not atomic with
+    // the node write above: the node stays persisted, as do any collections
+    // already joined before the failing one. The caller sees the error and can
+    // retry the join; it does not get a silent partial success.
+    let mut collection_ids = Vec::with_capacity(collection_paths.len());
+    if !collection_paths.is_empty() || !collection_ids_requested.is_empty() {
         let collection_service = CollectionService::new(node_service.store(), node_service);
-        let resolved = collection_service
-            .add_to_collection_by_path(&node_id, path)
-            .await?;
-        Some(resolved.leaf_id().to_string())
-    } else {
-        None
-    };
+        for path in &collection_paths {
+            let resolved = collection_service
+                .add_to_collection_by_path(&node_id, path)
+                .await?;
+            collection_ids.push(resolved.leaf_id().to_string());
+        }
+        for collection_id in &collection_ids_requested {
+            collection_service
+                .add_to_collection(&node_id, collection_id)
+                .await?;
+            collection_ids.push(collection_id.clone());
+        }
+    }
 
     // Apply non-default lifecycle status
     if let Some(ref lifecycle_status) = input.lifecycle_status {
@@ -203,7 +235,7 @@ pub async fn create_node(
         node_id,
         node_type,
         parent_id,
-        collection_id,
+        collection_ids,
         node_data,
     })
 }
@@ -230,6 +262,12 @@ pub async fn update_node(
     node_service: &Arc<NodeService>,
     input: UpdateNodeInput,
 ) -> Result<UpdateNodeOutput, OpsError> {
+    if !input.add_to_collections.is_empty() && !input.add_to_collection_ids.is_empty() {
+        return Err(OpsError::InvalidParams(
+            "Pass collection paths or collection IDs, not both".to_string(),
+        ));
+    }
+
     let update = NodeUpdate {
         content: input.content,
         node_type: input.node_type,
@@ -301,26 +339,33 @@ pub async fn update_node(
 
     // Handle collection operations
     let collection_service = CollectionService::new(node_service.store(), node_service);
-    let mut collection_added = None;
-    let mut collection_removed = None;
+    let mut collections_added =
+        Vec::with_capacity(input.add_to_collections.len() + input.add_to_collection_ids.len());
+    let mut collections_removed = Vec::with_capacity(input.remove_from_collection_ids.len());
 
-    if let Some(path) = &input.add_to_collection {
+    for path in &input.add_to_collections {
         let resolved = collection_service
             .add_to_collection_by_path(&input.node_id, path)
             .await?;
-        collection_added = Some(resolved.leaf_id().to_string());
+        collections_added.push(resolved.leaf_id().to_string());
     }
 
-    if let Some(collection_id) = &input.remove_from_collection {
+    for collection_id in &input.add_to_collection_ids {
+        collection_service
+            .add_to_collection(&input.node_id, collection_id)
+            .await?;
+        collections_added.push(collection_id.clone());
+    }
+
+    for collection_id in &input.remove_from_collection_ids {
         collection_service
             .remove_from_collection(&input.node_id, collection_id)
             .await?;
-        collection_removed = Some(collection_id.clone());
+        collections_removed.push(collection_id.clone());
     }
 
     // Re-fetch if collection membership changed
-    let final_node = if input.add_to_collection.is_some() || input.remove_from_collection.is_some()
-    {
+    let final_node = if !collections_added.is_empty() || !collections_removed.is_empty() {
         node_service
             .get_node(&input.node_id)
             .await
@@ -340,8 +385,8 @@ pub async fn update_node(
         node_id: input.node_id,
         version,
         node_data,
-        collection_added,
-        collection_removed,
+        collections_added,
+        collections_removed,
     })
 }
 
@@ -619,7 +664,8 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: serde_json::json!({}),
-                collection: None,
+                collections: Vec::new(),
+                collection_ids: Vec::new(),
                 lifecycle_status: None,
             },
         )

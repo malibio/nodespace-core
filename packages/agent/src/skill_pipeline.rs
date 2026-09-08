@@ -18,10 +18,10 @@
 //! handler key, typed parameter schema, description, and `source` provenance.
 
 use crate::skill_rules::{
-    AMBIGUITY_CLARIFY, BULK_IMPORT_NO_FOLLOWUP_SEARCH, DELETE_A_SCHEMA, EDIT_DONT_RECREATE,
-    FIND_THEN_ACT, ONE_SCHEMA_PER_REQUEST, ORG_NEEDS_EXISTING_COLLECTION, RELATIONSHIP_VS_FIELD,
-    RENAME_VS_RELABEL, SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY, SINGLE_ITEM_PER_CALL,
-    SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
+    AMBIGUITY_CLARIFY, BULK_IMPORT_NO_FOLLOWUP_SEARCH, COLLECTION_AT_CREATE_TIME, DELETE_A_SCHEMA,
+    EDIT_DONT_RECREATE, FIND_THEN_ACT, GROUPING_IS_COLLECTIONS, ONE_SCHEMA_PER_REQUEST,
+    RELATIONSHIP_VS_FIELD, RENAME_VS_RELABEL, SCHEMA_ALREADY_EXISTS, SCHEMA_VALIDATION_ERROR_RETRY,
+    SINGLE_ITEM_PER_CALL, SUCCESS_NO_REVERIFY, TARGET_TYPE_MUST_EXIST, TASK_STATUS_DEDICATED_VERB,
     TITLE_TEMPLATE_PLACEHOLDERS, UNIQUE_FIELD_FLAGS,
 };
 use nodespace_core::markdown::{NodeTemplate, SeedTier};
@@ -69,6 +69,8 @@ CALL create_schema NOW: your next action is the tool call, not planning text.
 
 {relationship_vs_field} {target_type_must_exist}
 
+{grouping_is_collections}
+
 {title_template_placeholders}
 
 {unique_field_flags}"#,
@@ -76,6 +78,7 @@ CALL create_schema NOW: your next action is the tool call, not planning text.
         schema_already_exists = SCHEMA_ALREADY_EXISTS.imperative,
         schema_validation_error_retry = SCHEMA_VALIDATION_ERROR_RETRY.imperative,
         edit_dont_recreate = EDIT_DONT_RECREATE.imperative,
+        grouping_is_collections = GROUPING_IS_COLLECTIONS.imperative,
         rename_vs_relabel = RENAME_VS_RELABEL.imperative,
         delete_a_schema = DELETE_A_SCHEMA.imperative,
         relationship_vs_field = RELATIONSHIP_VS_FIELD.imperative,
@@ -203,20 +206,22 @@ SUCCESS: {bulk_import_no_followup_search}"#,
 }
 
 /// Builds the Organization skill's markdown_content, interpolating the shared
-/// find-then-act, collection-must-preexist, and success-means-stop rules.
+/// find-then-act, collection-at-create-time, and success-means-stop rules.
 fn organization_guidance() -> String {
     format!(
         r#"# Organization Guidance
 
 When organizing nodes into collections or categories:
 
-FIND THE NODE: {find_then_act}
+{collection_at_create_time}
 
-ADD TO COLLECTION: Call create_relationship with the node ID as source, the collection node ID as target, and relationship_type="member_of". {org_needs_existing_collection}
+FIND THE NODE: {find_then_act} This applies only to filing a node that already exists — a node you are about to create takes its collection as a create_node argument instead, with no lookup at all.
 
-SUCCESS: After create_relationship returns, confirm to the user that the node has been organized into the collection."#,
+ADD AN EXISTING NODE: Call update_node with the node ID and the collection path. Fall back to create_relationship with relationship_type="member_of" only when you hold a collection ID rather than a path.
+
+SUCCESS: Once the call returns, confirm to the user that the node has been organized into the collection."#,
+        collection_at_create_time = COLLECTION_AT_CREATE_TIME.imperative,
         find_then_act = FIND_THEN_ACT.imperative,
-        org_needs_existing_collection = ORG_NEEDS_EXISTING_COLLECTION.imperative,
     )
 }
 
@@ -1271,6 +1276,62 @@ mod tests {
             md.to_lowercase().contains("advisory only"),
             "Schema Creation guidance must state the unique flag is advisory only, \
              not an enforced constraint"
+        );
+    }
+
+    /// `GROUPING_IS_COLLECTIONS` and `COLLECTION_AT_CREATE_TIME` are
+    /// interpolated through format-string placeholders, which a future edit
+    /// can drop without any compiler error — the value is a valid `String`
+    /// either way, so an unwired rule becomes text the local agent never
+    /// sees. Registration in `SCHEMA_RULES`/`INTERACTION_RULES` does not
+    /// imply the rule reached the seeded markdown; these pin that it did.
+    ///
+    /// Both claims are load-bearing rather than decorative. An agent that
+    /// still prices a collection as a lookup-create-link sequence picks a
+    /// `tags` array over the built-in grouping mechanism, which is the exact
+    /// failure the guidance exists to prevent.
+    #[test]
+    fn schema_creation_guidance_steers_grouping_to_collections() {
+        let seeds = seed_skill_nodes();
+        let schema_skill = seeds
+            .iter()
+            .find(|s| s.title == "Schema Creation")
+            .expect("Schema Creation skill must exist");
+        let md = &schema_skill.markdown_content;
+
+        assert!(
+            md.contains("tags"),
+            "Schema Creation guidance must name the tags-field false friend"
+        );
+        assert!(
+            md.contains("--collection"),
+            "Schema Creation guidance must show the one-call collection form,              not merely assert that collections are preferable"
+        );
+        assert!(
+            md.contains("not more expensive to write than an array element"),
+            "Schema Creation guidance must state the cost comparison — an agent              that thinks a collection costs more still reaches for an array"
+        );
+    }
+
+    /// The Organization skill must teach collection assignment at create time
+    /// rather than the lookup-then-link sequence, and must not tell the model
+    /// to have the user pre-create a collection the path resolver creates.
+    #[test]
+    fn organization_guidance_leads_with_the_one_call_form() {
+        let seeds = seed_skill_nodes();
+        let org_skill = seeds
+            .iter()
+            .find(|s| s.title == "Organization")
+            .expect("Organization skill must exist");
+        let md = &org_skill.markdown_content;
+
+        assert!(
+            md.contains("create_node takes a collection path directly"),
+            "Organization guidance must lead with collection-at-create-time"
+        );
+        assert!(
+            !md.contains("ask the user to create it first"),
+            "Organization guidance must not ask the user to pre-create a              collection that resolve_path creates automatically"
         );
     }
 

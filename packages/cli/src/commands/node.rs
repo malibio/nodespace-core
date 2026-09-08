@@ -56,6 +56,20 @@ pub struct CreateArgs {
     /// Parent node ID (omit to create a root node).
     #[arg(long)]
     pub parent: Option<String>,
+    /// Collection path to file the node under, `:`-delimited for hierarchy
+    /// (e.g. `docs:rust`) — the same syntax `import` and `search` take.
+    /// Missing segments are created. Repeatable to join several collections
+    /// in one call. Mutually exclusive with --collection-id.
+    #[arg(
+        long = "collection",
+        value_name = "PATH",
+        conflicts_with = "collection_ids"
+    )]
+    pub collections: Vec<String>,
+    /// Collection ID to file the node under (repeatable). Prefer
+    /// --collection, which takes a readable path and needs no lookup.
+    #[arg(long = "collection-id", value_name = "ID")]
+    pub collection_ids: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -72,6 +86,21 @@ pub struct UpdateArgs {
     /// NOT use this to change a task's status; use `node set-status` instead.
     #[arg(long = "property", value_parser = parse_property)]
     pub properties: Vec<(String, serde_json::Value)>,
+    /// Collection path to add the node to, `:`-delimited for hierarchy
+    /// (e.g. `docs:rust`). Missing segments are created. Repeatable.
+    /// Mutually exclusive with --collection-id.
+    #[arg(
+        long = "collection",
+        value_name = "PATH",
+        conflicts_with = "collection_ids"
+    )]
+    pub collections: Vec<String>,
+    /// Collection ID to add the node to (repeatable). Prefer --collection.
+    #[arg(long = "collection-id", value_name = "ID")]
+    pub collection_ids: Vec<String>,
+    /// Collection ID to remove the node from (repeatable).
+    #[arg(long = "remove-collection-id", value_name = "ID")]
+    pub remove_collection_ids: Vec<String>,
 }
 
 /// Parses a `key=value` CLI arg into (key, JSON value). `value` is parsed as
@@ -197,7 +226,8 @@ async fn create(client: &mut NodeClient, args: CreateArgs, json: bool) -> Result
             content: args.content,
             parent_id: args.parent,
             properties: String::new(),
-            collection: None,
+            collections: args.collections,
+            collection_ids: args.collection_ids,
             lifecycle_status: None,
             id: None,
             position: None, // CLI create defaults to End
@@ -211,8 +241,15 @@ async fn create(client: &mut NodeClient, args: CreateArgs, json: bool) -> Result
 }
 
 async fn update(client: &mut NodeClient, args: UpdateArgs, json: bool) -> Result<()> {
-    if args.content.is_none() && args.properties.is_empty() {
-        anyhow::bail!("update requires --content and/or at least one --property");
+    if args.content.is_none()
+        && args.properties.is_empty()
+        && args.collections.is_empty()
+        && args.collection_ids.is_empty()
+        && args.remove_collection_ids.is_empty()
+    {
+        anyhow::bail!(
+            "update requires --content, --property, --collection, --collection-id, or --remove-collection-id"
+        );
     }
 
     let properties = if args.properties.is_empty() {
@@ -229,8 +266,9 @@ async fn update(client: &mut NodeClient, args: UpdateArgs, json: bool) -> Result
             node_type: None,
             content: args.content,
             properties,
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: args.collections,
+            add_to_collection_ids: args.collection_ids,
+            remove_from_collection_ids: args.remove_collection_ids,
             lifecycle_status: None,
         })
         .await
@@ -260,8 +298,9 @@ async fn set_status(client: &mut NodeClient, args: SetStatusArgs, json: bool) ->
             node_type: None,
             content: None,
             properties: Some(properties),
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: Vec::new(),
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         })
         .await

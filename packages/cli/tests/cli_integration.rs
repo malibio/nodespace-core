@@ -190,6 +190,8 @@ async fn create_get_update_children_delete_round_trip() {
             node_type: "text".into(),
             content: "root via CLI".into(),
             parent: None,
+            collections: vec![],
+            collection_ids: vec![],
         }),
         true,
     )
@@ -206,7 +208,8 @@ async fn create_get_update_children_delete_round_trip() {
             content: "parent".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -222,6 +225,8 @@ async fn create_get_update_children_delete_round_trip() {
             node_type: "text".into(),
             content: "child via CLI".into(),
             parent: Some(parent_id.clone()),
+            collections: vec![],
+            collection_ids: vec![],
         }),
         false,
     )
@@ -244,6 +249,9 @@ async fn create_get_update_children_delete_round_trip() {
             id: parent_id.clone(),
             content: Some("parent updated via CLI".into()),
             properties: vec![],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec![],
         }),
         true,
     )
@@ -396,7 +404,8 @@ async fn diagnostics_collect_reports_counts_and_recency() {
             content: "root".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -414,7 +423,8 @@ async fn diagnostics_collect_reports_counts_and_recency() {
                 content: label.into(),
                 parent_id: Some(root.node_id.clone()),
                 properties: String::new(),
-                collection: None,
+                collections: Vec::new(),
+                collection_ids: Vec::new(),
                 lifecycle_status: None,
                 id: None,
                 position: None,
@@ -492,7 +502,8 @@ async fn node_query_by_type() {
         content: "do the thing".into(),
         parent_id: None,
         properties: String::new(),
-        collection: None,
+        collections: Vec::new(),
+        collection_ids: Vec::new(),
         lifecycle_status: None,
         id: None,
         position: None,
@@ -505,7 +516,8 @@ async fn node_query_by_type() {
         content: "some text".into(),
         parent_id: None,
         properties: String::new(),
-        collection: None,
+        collections: Vec::new(),
+        collection_ids: Vec::new(),
         lifecycle_status: None,
         id: None,
         position: None,
@@ -548,7 +560,8 @@ async fn node_export_markdown() {
             content: "# Root Document".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -562,7 +575,8 @@ async fn node_export_markdown() {
         content: "Child paragraph".into(),
         parent_id: Some(root.node_id.clone()),
         properties: String::new(),
-        collection: None,
+        collections: Vec::new(),
+        collection_ids: Vec::new(),
         lifecycle_status: None,
         id: None,
         position: None,
@@ -602,7 +616,8 @@ async fn node_batch_get_and_update() {
             content: "node-a".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -618,7 +633,8 @@ async fn node_batch_get_and_update() {
             content: "node-b".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -675,7 +691,8 @@ async fn mention_create_query_delete() {
             content: "source node".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -691,7 +708,8 @@ async fn mention_create_query_delete() {
             content: "target node".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -970,7 +988,8 @@ async fn execute_query_filters_by_property() {
         content: "task one".into(),
         parent_id: None,
         properties: serde_json::json!({"status": "open"}).to_string(),
-        collection: None,
+        collections: Vec::new(),
+        collection_ids: Vec::new(),
         lifecycle_status: None,
         id: None,
         position: None,
@@ -983,7 +1002,8 @@ async fn execute_query_filters_by_property() {
         content: "task two".into(),
         parent_id: None,
         properties: serde_json::json!({"status": "done"}).to_string(),
-        collection: None,
+        collections: Vec::new(),
+        collection_ids: Vec::new(),
         lifecycle_status: None,
         id: None,
         position: None,
@@ -1052,7 +1072,8 @@ async fn relationship_create_and_get() {
             content: "source".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1068,7 +1089,8 @@ async fn relationship_create_and_get() {
             content: "target".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1147,7 +1169,8 @@ async fn relationship_get_emits_flat_properties() {
             content: content.into(),
             parent_id: None,
             properties: serde_json::json!({"severity": severity}).to_string(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1222,7 +1245,8 @@ async fn relationship_create_rejects_relationship_undefined_on_source_schema() {
             content: "source".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1238,7 +1262,8 @@ async fn relationship_create_rejects_relationship_undefined_on_source_schema() {
             content: "target".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1316,7 +1341,8 @@ async fn node_update_sets_properties_and_preserves_content() {
             content: "original content".into(),
             parent_id: None,
             properties: serde_json::json!({"existing": "keep-me"}).to_string(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1332,6 +1358,9 @@ async fn node_update_sets_properties_and_preserves_content() {
             id: id.clone(),
             content: None,
             properties: vec![("added".into(), serde_json::json!("value"))],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec![],
         }),
         true,
     )
@@ -1385,7 +1414,8 @@ async fn cli_json_output_is_flat_while_storage_stays_nested() {
             content: "Buy groceries".into(),
             parent_id: None,
             properties: serde_json::json!({"status": "open"}).to_string(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1452,7 +1482,8 @@ async fn cli_json_output_is_flat_while_storage_stays_nested() {
             content: "Grand Hall".into(),
             parent_id: None,
             properties: serde_json::json!({"capacity": 250}).to_string(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1496,6 +1527,9 @@ async fn node_update_rejects_empty_args() {
             id: "irrelevant".into(),
             content: None,
             properties: vec![],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec![],
         }),
         true,
     )
@@ -1522,7 +1556,8 @@ async fn node_set_status_updates_status_property() {
             content: "a task".into(),
             parent_id: None,
             properties: serde_json::json!({"status": "open"}).to_string(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1640,7 +1675,8 @@ async fn database_registry_round_trip() {
             content: "open the second database".into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -1846,6 +1882,8 @@ async fn database_routing_isolates_writes() {
             node_type: "text".into(),
             content: "isolated-to-second".into(),
             parent: None,
+            collections: vec![],
+            collection_ids: vec![],
         }),
         true,
     )
@@ -1945,7 +1983,8 @@ async fn query_nodes_simple_handles_response_over_the_default_grpc_limit() {
             content: filler.clone(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -2004,7 +2043,8 @@ async fn diagnostics_reports_unknown_counts_when_the_node_query_fails() {
             content: label.into(),
             parent_id: None,
             properties: String::new(),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
             id: None,
             position: None,
@@ -2062,4 +2102,372 @@ async fn diagnostics_reports_unknown_counts_when_the_node_query_fails() {
     );
 
     let _ = shutdown.send(());
+}
+
+/// `node create --collection <path>` files the node in one call, auto-creating
+/// every missing path segment, and is repeatable so a node can join several
+/// collections without a follow-up write.
+#[tokio::test]
+async fn node_create_collection_paths_are_repeatable_and_auto_create() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Create(commands::node::CreateArgs {
+            node_type: "text".into(),
+            content: "collected via CLI".into(),
+            parent: None,
+            // Neither path exists yet: `docs:rust` is nested, so `docs` and
+            // `rust` are both created and wired member_of.
+            collections: vec!["docs:rust".into(), "reference".into()],
+            collection_ids: vec![],
+        }),
+        true,
+    )
+    .await
+    .expect("create with collections");
+
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    let found = raw
+        .query_nodes_simple(QueryNodesSimpleRequest {
+            node_type: Some("text".into()),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .expect("query")
+        .into_inner();
+    let node_id = found
+        .nodes
+        .iter()
+        .find(|n| n.content == "collected via CLI")
+        .expect("created node")
+        .id
+        .clone();
+
+    let memberships = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert_eq!(
+        memberships.collection_ids.len(),
+        2,
+        "one create call must produce both memberships: {:?}",
+        memberships.collection_ids
+    );
+
+    // The nested path's intermediate segment exists as its own collection, so
+    // `docs:rust` resolved as a hierarchy rather than as a flat label.
+    let collections = raw
+        .query_nodes_simple(QueryNodesSimpleRequest {
+            node_type: Some("collection".into()),
+            limit: 20,
+            ..Default::default()
+        })
+        .await
+        .expect("query collections")
+        .into_inner();
+    let names: Vec<&str> = collections
+        .nodes
+        .iter()
+        .map(|n| n.content.as_str())
+        .collect();
+    for expected in ["docs", "rust", "reference"] {
+        assert!(
+            names.contains(&expected),
+            "missing auto-created collection '{expected}' in {names:?}"
+        );
+    }
+
+    let _ = shutdown.send(());
+}
+
+/// `node update --collection <path>` adds membership after the fact, and
+/// `--remove-collection-id` takes it away again.
+#[tokio::test]
+async fn node_update_collection_adds_and_removes_membership() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    let created = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "late joiner".into(),
+            parent_id: None,
+            properties: String::new(),
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed node")
+        .into_inner();
+    let node_id = created.node_id;
+
+    // --collection alone is enough to make an update meaningful: no --content
+    // or --property is required.
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: node_id.clone(),
+            content: None,
+            properties: vec![],
+            collections: vec!["archive:2026".into()],
+            collection_ids: vec![],
+            remove_collection_ids: vec![],
+        }),
+        true,
+    )
+    .await
+    .expect("update with collection");
+
+    let after_add = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert_eq!(after_add.collection_ids.len(), 1);
+    let leaf_id = after_add.collection_ids[0].clone();
+
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: node_id.clone(),
+            content: None,
+            properties: vec![],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec![leaf_id.clone()],
+        }),
+        true,
+    )
+    .await
+    .expect("update removing collection");
+
+    let after_remove = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest { node_id })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert!(
+        after_remove.collection_ids.is_empty(),
+        "membership should be gone: {:?}",
+        after_remove.collection_ids
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// Removal takes collection IDs, not paths — the asymmetry with
+/// `add_to_collections` (which takes paths) is why the field is named
+/// `remove_from_collection_ids`.
+///
+/// This pins the consequence, not just the name. Removal detaches an existing
+/// `member_of` edge, so a path passed where an id belongs matches no edge and
+/// `delete_relationship` reports success: the call returns Ok and the
+/// membership survives. That is a silent data-integrity failure rather than an
+/// error, so a rename back to a symmetric `remove_from_collections` — which
+/// would make passing a path look correct — must fail here.
+#[tokio::test]
+async fn removing_by_path_instead_of_id_does_not_silently_drop_membership() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    let created = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "membership survives a bad removal".into(),
+            parent_id: None,
+            properties: String::new(),
+            collections: vec!["ops:oncall".into()],
+            collection_ids: Vec::new(),
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed node")
+        .into_inner();
+    let node_id = created.node_id;
+
+    let before = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert_eq!(before.collection_ids.len(), 1, "fixture must be a member");
+
+    // Pass the PATH where an id belongs — the mistake the old symmetric field
+    // name invited. It removes nothing.
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: node_id.clone(),
+            content: None,
+            properties: vec![],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec!["ops:oncall".into()],
+        }),
+        true,
+    )
+    .await
+    .expect("the call itself succeeds — that is precisely the hazard");
+
+    let after = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert_eq!(
+        after.collection_ids, before.collection_ids,
+        "a path is not an id: nothing should have been removed"
+    );
+
+    // The id form is what actually detaches the edge.
+    let leaf_id = before.collection_ids[0].clone();
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: node_id.clone(),
+            content: None,
+            properties: vec![],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec![leaf_id],
+        }),
+        true,
+    )
+    .await
+    .expect("removal by id");
+
+    let removed = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest { node_id })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert!(
+        removed.collection_ids.is_empty(),
+        "removal by id must actually detach: {:?}",
+        removed.collection_ids
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// A collection that cannot be resolved must fail the command rather than
+/// leaving the caller with a silently uncollected node.
+#[tokio::test]
+async fn node_create_unresolvable_collection_is_an_error() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    let err = commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Create(commands::node::CreateArgs {
+            node_type: "text".into(),
+            content: "should fail".into(),
+            parent: None,
+            // An empty path has no segments to resolve.
+            collections: vec!["".into()],
+            collection_ids: vec![],
+        }),
+        true,
+    )
+    .await
+    .expect_err("an unresolvable collection path must surface as an error");
+    assert!(
+        err.to_string().contains("CreateNode RPC failed"),
+        "unexpected error: {err}"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// `--collection` and `--collection-id` are mutually exclusive at the parser,
+/// matching how `search` already handles the same pair.
+#[test]
+fn collection_path_and_id_flags_are_mutually_exclusive() {
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    struct CreateHarness {
+        #[command(flatten)]
+        args: commands::node::CreateArgs,
+    }
+
+    #[derive(Parser, Debug)]
+    struct UpdateHarness {
+        #[command(flatten)]
+        args: commands::node::UpdateArgs,
+    }
+
+    let err = CreateHarness::try_parse_from([
+        "create",
+        "--type",
+        "text",
+        "--content",
+        "x",
+        "--collection",
+        "docs",
+        "--collection-id",
+        "abc",
+    ])
+    .expect_err("create must reject both collection forms at once");
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+    let err = UpdateHarness::try_parse_from([
+        "update",
+        "node-1",
+        "--collection",
+        "docs",
+        "--collection-id",
+        "abc",
+    ])
+    .expect_err("update must reject both collection forms at once");
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+    // Each form on its own parses, and both are repeatable.
+    let ok = CreateHarness::try_parse_from([
+        "create",
+        "--type",
+        "text",
+        "--content",
+        "x",
+        "--collection",
+        "docs:rust",
+        "--collection",
+        "reference",
+    ])
+    .expect("repeated --collection must parse");
+    assert_eq!(ok.args.collections, vec!["docs:rust", "reference"]);
 }

@@ -57,6 +57,29 @@ pub type SharedChatInferenceEngine = Option<Arc<dyn ChatInferenceEngine>>;
 
 /// Parameters for the agent's create_node tool.
 ///
+/// A parameter a model may send either as one string or as an array of them.
+///
+/// A tool schema saying "one or more collection paths" gets both shapes back
+/// in practice — `"docs:rust"` for a single value and `["docs", "rust"]` for
+/// several — and a struct that accepts only the array form turns the common
+/// single-value case into a deserialization failure the model cannot see the
+/// cause of.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum StringOrList {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl StringOrList {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            StringOrList::One(s) => vec![s],
+            StringOrList::Many(v) => v,
+        }
+    }
+}
+
 /// The model passes `content` as the node text. `node_service` derives the
 /// display title automatically — from `title_template`+`field_values` if the
 /// schema defines one, or from `strip_markdown(content)` for root nodes
@@ -70,7 +93,7 @@ pub type SharedChatInferenceEngine = Option<Arc<dyn ChatInferenceEngine>>;
 /// Deliberately NOT `deny_unknown_fields`: `exec_create_node` tolerates a model
 /// that passes schema fields flat at the top level (instead of nested under
 /// `field_values`) by pre-scanning the raw args for keys outside `content`/
-/// `node_type`/`parent_id`/`field_values` and promoting them into
+/// `node_type`/`parent_id`/`field_values`/`collection` and promoting them into
 /// `field_values` itself. Those same "unknown" keys must still deserialize
 /// cleanly here, or that tolerance would break.
 #[derive(Debug, Deserialize)]
@@ -82,6 +105,10 @@ struct AgentCreateNodeParams {
     pub parent_id: Option<String>,
     #[serde(default)]
     pub field_values: Option<Value>,
+    /// One or more collection paths. Accepts a bare string as well as an
+    /// array — see [`StringOrList`].
+    #[serde(default)]
+    pub collection: Option<StringOrList>,
 }
 
 /// Parameters for the agent's update_node tool.
@@ -834,6 +861,11 @@ fn def_create_node() -> ToolDefinition {
                 "parent_id": {
                     "type": "string",
                     "description": "Optional parent node ID"
+                },
+                "collection": {
+                    "type": ["string", "array"],
+                    "items": {"type": "string"},
+                    "description": "Collection path(s) to file this record under, as a string or an array of them. Use ':' for hierarchy — \"docs:rust\" files it under `rust`, itself inside `docs`. Every missing collection in the path is created for you, so pass the path the user's own words imply; never look one up first, create one first, or ask the user to create one. This is how records are tagged and grouped: prefer it over recording a topic, tag or category as a field_values entry."
                 }
             },
             "required": ["node_type", "content"]
@@ -2663,7 +2695,13 @@ impl GraphToolExecutor {
         // This tolerates models that pass schema fields at the top level rather
         // than nested inside "field_values".
         let flat_extras: serde_json::Map<String, Value> = {
-            const KNOWN: &[&str] = &["content", "node_type", "field_values", "parent_id"];
+            const KNOWN: &[&str] = &[
+                "content",
+                "node_type",
+                "field_values",
+                "parent_id",
+                "collection",
+            ];
             args.as_object()
                 .map(|obj| {
                     obj.iter()
@@ -2705,7 +2743,11 @@ impl GraphToolExecutor {
             parent_id: params.parent_id,
             position: nodespace_core::services::InsertPositionOwned::End,
             properties,
-            collection: None,
+            collections: params
+                .collection
+                .map(StringOrList::into_vec)
+                .unwrap_or_default(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         };
 
@@ -2876,8 +2918,9 @@ impl GraphToolExecutor {
             node_type: None,
             content: params.content,
             properties: new_properties,
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: Vec::new(),
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         };
 
@@ -3150,8 +3193,9 @@ impl GraphToolExecutor {
             node_type: None,
             content: None,
             properties: Some(json!({ "status": params.status })),
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: Vec::new(),
+            add_to_collection_ids: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         };
 
@@ -5446,12 +5490,125 @@ mod tests {
     /// isolation: the reproducing call returned `is_error=false` and
     /// `updated: true`, which is exactly what a real write returns. It has to be
     /// checked against what the store actually holds afterwards.
+    /// Collection assignment on `create_node`, the one-call form the skill
+    /// guidance leads with. These share `update_node_noop_gate`'s fixtures
+    /// (`make_test_service`/`plain_executor`) rather than duplicating a second
+    /// SQLite harness.
+    mod create_node_collections {
+        use super::update_node_noop_gate::{make_test_service, plain_executor};
+        use super::*;
+
+        /// `create_node` files the record in the same call that creates it,
+        /// resolving the path and creating every missing segment — the whole
+        /// point of the parameter. Asserted through the real tool path so it
+        /// covers deserialization of the argument as well as the plumbing.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn create_node_files_into_a_collection_in_one_call() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns.clone());
+
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({
+                        "content": "Pin tokio to 1.40",
+                        "node_type": "text",
+                        "collection": "docs:rust",
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error, "{result:?}");
+
+            // create_node returns a `node:` URI, not a bare id.
+            let node_id = strip_node_uri(result.result["id"].as_str().expect("id")).to_string();
+            let memberships = ns
+                .store()
+                .get_node_memberships(&node_id)
+                .await
+                .expect("get_node_memberships");
+            assert_eq!(
+                memberships.len(),
+                1,
+                "the node should be a member of the leaf collection"
+            );
+        }
+
+        /// A model told "one or more paths" sends a bare string about as often
+        /// as an array, so both shapes must deserialize — an array-only
+        /// parameter would turn the single-value case into an argument error
+        /// the model cannot diagnose.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn create_node_accepts_several_collections_as_an_array() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns.clone());
+
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({
+                        "content": "Retry budget rationale",
+                        "node_type": "text",
+                        "collection": ["docs:rust", "decisions"],
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error, "{result:?}");
+
+            let node_id = strip_node_uri(result.result["id"].as_str().expect("id")).to_string();
+            let memberships = ns
+                .store()
+                .get_node_memberships(&node_id)
+                .await
+                .expect("get_node_memberships");
+            assert_eq!(
+                memberships.len(),
+                2,
+                "both collections should be joined in the one call"
+            );
+        }
+
+        /// `collection` is a first-class parameter, so the flat-extras scan
+        /// that promotes unrecognized top-level keys into `field_values` must
+        /// leave it alone — otherwise the path would be silently stored as a
+        /// property instead of creating a membership.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn collection_is_not_swept_into_field_values() {
+            let (ns, _tmp) = make_test_service().await;
+            let executor = plain_executor(ns.clone());
+
+            let result = executor
+                .execute(
+                    "create_node",
+                    json!({
+                        "content": "Rotate signing keys",
+                        "node_type": "text",
+                        "collection": "ops",
+                    }),
+                )
+                .await
+                .unwrap();
+            let node_id = strip_node_uri(result.result["id"].as_str().expect("id")).to_string();
+
+            let stored = executor
+                .execute("get_node", json!({ "id": node_id }))
+                .await
+                .unwrap();
+            assert!(
+                stored.result["properties"].get("collection").is_none(),
+                "collection must not land in properties: {:?}",
+                stored.result["properties"]
+            );
+        }
+    }
+
     mod update_node_noop_gate {
         use super::*;
         use nodespace_core::db::SqliteStore;
         use tempfile::TempDir;
 
-        async fn make_test_service() -> (Arc<NodeService>, TempDir) {
+        pub(super) async fn make_test_service() -> (Arc<NodeService>, TempDir) {
             let tmp = TempDir::new().unwrap();
             let db_path = tmp.path().join("test.db");
             let mut store: Arc<SqliteStore> = Arc::new(SqliteStore::new(db_path).await.unwrap());
@@ -5459,7 +5616,7 @@ mod tests {
             (svc, tmp)
         }
 
-        fn plain_executor(ns: Arc<NodeService>) -> GraphToolExecutor {
+        pub(super) fn plain_executor(ns: Arc<NodeService>) -> GraphToolExecutor {
             GraphToolExecutor {
                 node_service: Some(ns),
                 embedding_service: Arc::new(RwLock::new(None)),
