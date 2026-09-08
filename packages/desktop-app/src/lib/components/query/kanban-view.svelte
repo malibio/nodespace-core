@@ -246,7 +246,7 @@
     if (from === target) return; // dropping into its own column is a no-op — no write
     const chainKey = `${id}:${field}`;
     if (!chainOrigin.has(chainKey)) chainOrigin.set(chainKey, from);
-    const changes = resolveFieldWrite(node, field, target ?? '');
+    const changes = resolveFieldWrite(node, field, target);
     log.debug('KanbanView: moving card', { id, field, toColumn });
     sharedNodeStore.updateNode(
       id,
@@ -291,7 +291,7 @@
           const revertTo = chainOrigin.has(chainKey) ? chainOrigin.get(chainKey)! : from;
           chainOrigin.delete(chainKey); // this failure settles the chain
           log.debug('KanbanView: reverting failed move', { id, field, revertTo, target });
-          const revertChanges = resolveFieldWrite(currentNode, field, revertTo ?? '');
+          const revertChanges = resolveFieldWrite(currentNode, field, revertTo);
           sharedNodeStore.updateNode(
             id,
             revertChanges,

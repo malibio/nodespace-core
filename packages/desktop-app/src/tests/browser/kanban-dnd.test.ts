@@ -659,6 +659,14 @@ describe('KanbanView — keyboard-accessible move (browser mode)', () => {
       expect(cardsIn(columnFor(container, 'Unassigned'))).toEqual(['Fix the bug']);
     });
     expect(updateSpy).toHaveBeenCalledTimes(1);
+    // Clearing to Unassigned must write `null`, not `''` — an empty string
+    // is a real (if unusual) value some backends persist as a genuine
+    // user-defined enum value rather than treating it as "cleared".
+    expect(updateSpy).toHaveBeenCalledWith(
+      't1',
+      1,
+      expect.objectContaining({ properties: expect.objectContaining({ status: null }) })
+    );
 
     // Re-selecting the column the card is already in is a no-op — no second write.
     const settledSelect = getByRole('combobox', {

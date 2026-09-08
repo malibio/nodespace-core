@@ -993,7 +993,21 @@ export class SharedNodeStore {
   // ========================================================================
 
   private nodesSet(nodeId: string, node: Node): void {
-    this.nodes.set(nodeId, node);
+    // `SvelteMap.set()` only increments a key's reactive signal when the new
+    // value is a DIFFERENT reference than what's already stored (reference
+    // equality, not a deep comparison) — see svelte/src/reactivity/map.js.
+    // Several callers in this file mutate the CURRENT node object in place
+    // (e.g. `Object.assign(localNode, ...)`) and then re-set that same
+    // reference here, intending to "confirm" a value once a write's RPC
+    // resolves. Passed straight through, that re-set is a silent no-op for
+    // reactivity: every `$derived`/`$effect` consumer already holding that
+    // reference (from an earlier read) never re-runs, so a confirmed value
+    // that differs from what an in-between optimistic write showed never
+    // reaches the UI — exactly the "stale until remount" Kanban symptom this
+    // fixes. Always store a shallow-copied object so `set()` sees a genuine
+    // reference change and signals every consumer, regardless of whether the
+    // caller mutated in place or built a fresh object.
+    this.nodes.set(nodeId, { ...node });
     // Any write — database broadcast, optimistic local edit, or a staleness
     // refetch resolving — is fresh-as-of-now evidence for this node, so it no
     // longer needs re-confirming against the current reconnect generation.
@@ -1554,15 +1568,22 @@ export class SharedNodeStore {
                     // reading those top-level fields directly (e.g.
                     // AiChatNodeViewer's `node?.provider`) never saw them
                     // become defined until a later daemon broadcast happened
-                    // to re-hydrate the node via `setNode()`. Spread the full
-                    // response over the local node so every type-specific
-                    // top-level field is corrected immediately, but re-assert
-                    // `content` and `properties` from the local node
-                    // afterward if they've moved on since `currentNode` was
-                    // read for this RPC — a user (or another in-flight write)
-                    // may have changed either while this request was in
-                    // flight, and blindly applying the response for that
-                    // older send would clobber the newer local state.
+                    // to re-hydrate the node via `setNode()`. Spread the
+                    // response's fields over the local node so every
+                    // type-specific top-level field is corrected immediately,
+                    // but skip any field (besides `version`) whose local value
+                    // has already moved on from `currentNode` — the pre-RPC
+                    // snapshot this write's request was actually built from —
+                    // UNLESS this write's own request is what's changing that
+                    // field. A user (or another in-flight write, e.g. a second
+                    // Kanban move on the same node fired before this RPC
+                    // resolved) may have changed a field this write never
+                    // touched while this request was in flight; blindly
+                    // `Object.assign`-ing the full response would stamp that
+                    // field back to this write's own stale pre-request value,
+                    // clobbering the newer one (mirrors the equivalent,
+                    // already-fixed clobber class in `updateTaskNode()`'s
+                    // success handler).
                     const localNode = this.nodes.get(nodeId);
                     if (localNode && updatedNodeFromBackend) {
                       const oldVersion = localNode.version;
@@ -1584,9 +1605,33 @@ export class SharedNodeStore {
                       const titleChanged =
                         updatedNodeFromBackend.title !== undefined &&
                         updatedNodeFromBackend.title !== localNode.title;
-                      Object.assign(localNode, updatedNodeFromBackend, {
+                      // Scope the patch: every field in the response except
+                      // `content`/`properties` (handled above) and `version`
+                      // (always applied — every response's version is the
+                      // latest authoritative one, needed for the NEXT write's
+                      // OCC check regardless of which fields it touches),
+                      // applied only if this write's own request asked to
+                      // change it OR the local node's current value for that
+                      // field still matches the pre-RPC snapshot (nothing
+                      // else moved it on in the meantime).
+                      const scopedFields: Record<string, unknown> = {};
+                      const localRec = localNode as unknown as Record<string, unknown>;
+                      const currentRec = currentNode as unknown as Record<string, unknown>;
+                      for (const [key, value] of Object.entries(updatedNodeFromBackend)) {
+                        if (key === 'content' || key === 'properties' || key === 'version') {
+                          continue;
+                        }
+                        if (
+                          changedFields.includes(key) ||
+                          localRec[key] === currentRec[key]
+                        ) {
+                          scopedFields[key] = value;
+                        }
+                      }
+                      Object.assign(localNode, scopedFields, {
                         content: localContent,
-                        properties: localProperties
+                        properties: localProperties,
+                        version: updatedNodeFromBackend.version
                       });
                       this.nodesSet(nodeId, localNode);
                       // Notify subscribers if title changed (e.g. title_template recomputed)
