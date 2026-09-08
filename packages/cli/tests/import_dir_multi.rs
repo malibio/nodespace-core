@@ -16,7 +16,9 @@ use nodespace_cli::{commands, connect_import, DatabaseIdInterceptor};
 use nodespace_core::models::NodeFilter;
 use nodespace_core::services::CollectionService;
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
-use nodespace_daemon::{ImportServiceImpl, ImportServiceServer, NodeServiceImpl, NodeServiceServer};
+use nodespace_daemon::{
+    ImportServiceImpl, ImportServiceServer, NodeServiceImpl, NodeServiceServer,
+};
 use tempfile::TempDir;
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
@@ -27,12 +29,8 @@ use tonic::transport::Server;
 /// and `ImportService` registered, returning a connected `ImportClient`'s
 /// socket path, the underlying `CoreNodeService` (for out-of-band
 /// verification), and a shutdown handle.
-async fn spawn_import_test_daemon() -> (
-    PathBuf,
-    Arc<CoreNodeService>,
-    oneshot::Sender<()>,
-    TempDir,
-) {
+async fn spawn_import_test_daemon() -> (PathBuf, Arc<CoreNodeService>, oneshot::Sender<()>, TempDir)
+{
     let tempdir = TempDir::new().expect("failed to create tempdir");
     let sock_path = tempdir.path().join("test-daemon.sock");
 
@@ -93,7 +91,10 @@ fn write_md(dir: &std::path::Path, rel_path: &str, content: &str) -> String {
     path.to_str().expect("non-UTF-8 path").to_string()
 }
 
-fn dir_args(directories: Vec<String>, auto_collection_routing: bool) -> commands::import::ImportDirArgs {
+fn dir_args(
+    directories: Vec<String>,
+    auto_collection_routing: bool,
+) -> commands::import::ImportDirArgs {
     commands::import::ImportDirArgs {
         directories,
         collection: None,
@@ -143,8 +144,16 @@ async fn import_dir_accepts_multiple_directories_in_one_call() {
         .await
         .expect("query beta");
 
-    assert_eq!(alpha.len(), 1, "expected the file from the first directory to be imported");
-    assert_eq!(beta.len(), 1, "expected the file from the second directory to be imported");
+    assert_eq!(
+        alpha.len(),
+        1,
+        "expected the file from the first directory to be imported"
+    );
+    assert_eq!(
+        beta.len(),
+        1,
+        "expected the file from the second directory to be imported"
+    );
 
     let _ = shutdown.send(());
 }
@@ -294,7 +303,9 @@ async fn import_dir_multi_directory_failure_does_not_abort_the_rest() {
     .expect("import dir must not hard-error when one of several directories fails to scan");
 
     let survivors = node_service
-        .query_nodes(NodeFilter::new().with_content_contains("Survives a sibling failure".to_string()))
+        .query_nodes(
+            NodeFilter::new().with_content_contains("Survives a sibling failure".to_string()),
+        )
         .await
         .expect("query survivor");
 
