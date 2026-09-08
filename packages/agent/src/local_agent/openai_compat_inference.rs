@@ -189,8 +189,9 @@ struct OpenAiRequestToolCall {
     call_type: String,
     function: OpenAiRequestToolCallFunction,
     /// Provider-opaque fields captured from the original response (e.g.
-    /// Gemini 3's `thought_signature`), echoed back verbatim as siblings of
-    /// `id`/`type`/`function`. `None` when the provider attached nothing.
+    /// Gemini 3's `extra_content.google.thought_signature`), echoed back
+    /// verbatim as siblings of `id`/`type`/`function`. `None` when the
+    /// provider attached nothing.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     provider_extra: Option<serde_json::Value>,
 }
@@ -248,9 +249,10 @@ struct OpenAiToolCall {
     id: Option<String>,
     function: OpenAiToolCallFunction,
     /// Provider-opaque sibling fields beyond the OpenAI schema (`id`/`type`/
-    /// `function`) — e.g. Gemini 3's `thought_signature`, which its
-    /// OpenAI-compat endpoint requires echoed back verbatim on the next turn
-    /// or it 400s the whole conversation. Captured generically via `flatten`
+    /// `function`) — e.g. Gemini 3's `extra_content.google.thought_signature`,
+    /// which its OpenAI-compat endpoint requires echoed back verbatim at the
+    /// same path on the next turn or it 400s the whole conversation.
+    /// Captured generically via `flatten`
     /// so any such field survives the round trip without naming it here.
     #[serde(flatten)]
     provider_extra: serde_json::Map<String, serde_json::Value>,
@@ -827,10 +829,13 @@ mod tests {
 
     #[test]
     fn response_tool_call_captures_thought_signature_as_provider_extra() {
-        // Regression test for issue #2255: Gemini 3 attaches a
-        // `thought_signature` sibling field on each `tool_calls[i]` entry
-        // that its OpenAI-compat endpoint requires echoed back on replay.
-        // Dropping it here is what made every second tool-using turn 400.
+        // Regression test for issue #2255: Gemini 3's OpenAI-compat endpoint
+        // nests thought_signature under a vendor extension --
+        // tool_calls[i].extra_content.google.thought_signature -- not as a
+        // bare sibling field. Its OpenAI-compat endpoint requires this
+        // echoed back verbatim on replay; dropping it is what made every
+        // second tool-using turn 400. `flatten` captures `extra_content`
+        // whole without needing to know its internal shape.
         let json = r#"{
             "choices": [{
                 "message": {
@@ -843,7 +848,11 @@ mod tests {
                                 "name": "search",
                                 "arguments": "{\"query\":\"test\"}"
                             },
-                            "thought_signature": "opaque-token-xyz"
+                            "extra_content": {
+                                "google": {
+                                    "thought_signature": "opaque-token-xyz"
+                                }
+                            }
                         }
                     ]
                 }
@@ -853,8 +862,11 @@ mod tests {
         let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
         let msg = resp.choices[0].message.as_ref().expect("message present");
         let extra = provider_extra_value(&msg.tool_calls[0].provider_extra)
-            .expect("thought_signature must be captured as provider_extra");
-        assert_eq!(extra["thought_signature"], "opaque-token-xyz");
+            .expect("extra_content must be captured as provider_extra");
+        assert_eq!(
+            extra["extra_content"]["google"]["thought_signature"],
+            "opaque-token-xyz"
+        );
         // The known OpenAI fields must not leak into provider_extra --
         // only genuinely unknown sibling fields belong there.
         assert!(extra.get("id").is_none());
@@ -885,9 +897,10 @@ mod tests {
     #[test]
     fn replayed_tool_call_echoes_thought_signature_back_verbatim() {
         // Regression test for issue #2255: a replayed assistant tool-call
-        // turn must carry `thought_signature` back as a sibling field of
-        // `id`/`type`/`function`, or Gemini 3's OpenAI-compat endpoint 400s
-        // the turn with "Function call is missing a thought_signature".
+        // turn must carry `extra_content.google.thought_signature` back at
+        // the exact same path, or Gemini 3's OpenAI-compat endpoint 400s the
+        // turn with "Function call is missing a thought_signature". Google's
+        // own guidance: return it "exactly as it was received".
         let assistant_turn = ChatMessage::assistant_with_tool_calls(
             "",
             vec![ToolCallRaw {
@@ -895,7 +908,11 @@ mod tests {
                 function_name: "search_nodes".to_string(),
                 arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
                 provider_extra: Some(serde_json::json!({
-                    "thought_signature": "opaque-token-xyz"
+                    "extra_content": {
+                        "google": {
+                            "thought_signature": "opaque-token-xyz"
+                        }
+                    }
                 })),
             }],
         );
@@ -908,8 +925,8 @@ mod tests {
         assert_eq!(tool_call["type"], "function");
         assert_eq!(tool_call["function"]["name"], "search_nodes");
         assert_eq!(
-            tool_call["thought_signature"], "opaque-token-xyz",
-            "thought_signature must be echoed back as a sibling field on replay"
+            tool_call["extra_content"]["google"]["thought_signature"], "opaque-token-xyz",
+            "thought_signature must be echoed back at the same nested path on replay"
         );
     }
 
