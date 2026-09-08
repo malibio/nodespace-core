@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "nodespace": {
-      "command": "nodespace",
-      "args": ["mcp"]
-    }
-  }
-}

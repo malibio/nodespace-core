@@ -75,10 +75,12 @@ describe("sharedShimPaths", () => {
   });
 
   test("excludes every harness-specific shim", () => {
+    // Antigravity carries no harness-specific shim at all (see
+    // packages/skill/src/agents.ts) -- it's a shell-capable agent that just
+    // runs `nodespace` directly, so there's nothing of its own to exclude here.
     const shared = new Set(sharedShimPaths());
     expect(shared.has("shims/claude-code/nodespace-hook.ts")).toBe(false);
     expect(shared.has("shims/codex/nodespace-plugin.ts")).toBe(false);
-    expect(shared.has("shims/antigravity/nodespace-mcp-config.json")).toBe(false);
     expect(shared.has("shims/opencode/nodespace-plugin.ts")).toBe(false);
   });
 });

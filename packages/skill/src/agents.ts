@@ -79,14 +79,11 @@ export const AGENTS: AgentConfig[] = [
     // ~/.gemini/antigravity-cli/, not a separate ~/.antigravity.
     detectionDir: join(home, '.gemini', 'antigravity-cli'),
     installDir: join(home, '.gemini', 'antigravity-cli', 'skills', 'nodespace'),
-    // No handler shim: unlike the other three targets, Antigravity CLI's
-    // native tool-registration path is MCP, and `nodespace mcp` (see
-    // packages/cli/src/commands/mcp.rs) is already a complete, tested stdio
-    // MCP server — the same one SKILL.md's Preflight "Branch 2" documents
-    // for any shell-less MCP-capable agent. nodespace-mcp-config.json just
-    // points Antigravity's plugin config at that existing binary; there is
-    // nothing here to reimplement.
-    shims: ['SKILL.md', 'references/cli.md', 'shims/antigravity/nodespace-mcp-config.json'],
+    // No handler shim: Antigravity CLI is a shell-capable coding agent, same
+    // as Claude Code/Codex/OpenCode, so it just runs `nodespace` directly per
+    // SKILL.md's Preflight "Branch 1" — no tool-registration integration
+    // (MCP or otherwise) needed for it to use the CLI.
+    shims: ['SKILL.md', 'references/cli.md'],
     skillFrontmatter: SKILL_FRONTMATTER,
   },
   {
