@@ -109,7 +109,9 @@
       teardownProgress();
       if (phase === 'importing') phase = 'done';
       // Refresh the collections sidebar so newly-routed/mirrored collections
-      // (and their members) show up without a manual reload.
+      // (and their members) show up without a manual reload. Runs on any
+      // completion (including a partial failure with result.failed > 0), not
+      // only full success — files that did import still routed to collections.
       await collectionsData.loadCollections();
     } catch (error) {
       log.error('Folder import failed', error);
