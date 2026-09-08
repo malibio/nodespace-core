@@ -74,6 +74,21 @@ Only include properties the schema actually defines as required, plus any option
 
 **Success semantics:** once `node create` returns an ID, the node exists — confirm what was created to the user and stop. Don't immediately `node get` the same ID to verify; the create response is the confirmation.
 
+**If it has headings, it is a tree, not a node.** NodeSpace is one-node-per-block, with hierarchy as first-class edges — a document with sections (an ADR, a spec, a plan) decomposes into a root node plus one child per section, not one node whose `content` holds the whole document:
+
+```bash
+# Multi-call: root, then one child per section
+nodespace node create --type text --content "# ADR-071: Use collections for tagging"
+# → returns {"id": "root-id", ...}
+nodespace node create --type text --content "## Context\n..." --parent root-id
+nodespace node create --type text --content "## Decision\n..." --parent root-id
+
+# Or write it to a file and import it — see `nodespace import` below. This is
+# the normal path for any multi-section content, not only bulk migration,
+# including a single document you just finished authoring.
+nodespace import file ./adr-071.md
+```
+
 ### Get a node
 
 ```bash
@@ -365,6 +380,14 @@ Two limits worth knowing. Only relationships you declare can carry `edgeFields`:
 <!-- END GENERATED: schema-rules -->
 
 A `description` field is fine when it adds value beyond the title. Field names are alphanumeric-and-underscore only — the CLAUDE.md-documented `custom:` namespace prefix convention applies to natural-language schema authoring in the local agent, not to explicit `fields` arrays passed here; don't prefix field names when calling `schema create`/`update` directly.
+
+**Recognizing a relationship field.** The "relationships vs. fields" rule above presumes you've already noticed a field is a reference — that recognition step is the hard part. A field naming a **person, team, project, or any other entity** is a reference, even when it reads naturally as text: a plain string has no integrity (`"M. Alibio"` and `"m alibio"` are different values to a query engine), no reverse lookup, and no rename path — renaming a person means rewriting every node that names them. Worked examples, from how a request is phrased:
+
+- "who signed off" → a relationship (`decided_by`, `targetType: person`), not a `deciders: array` field
+- "who it's assigned to" → `assignee`, `targetType: person`, not an `assignee: text` field
+- "which project it affects" → `affects_project`, `targetType: project`
+
+False friends — field names that read as plain attributes but are usually references: `deciders`, `assignee`, `owner`, `author`, `reviewer`, `reported_by`, `members`. Before defaulting one of these to a text field, check whether the target type already exists (`nodespace schema list`). Escape hatch: free text is legitimate for a one-off external party who will never be a node in this graph — use a relationship when the party is, or could become, a first-class entity here.
 
 **Output:** Schema nodes as JSON (same shape as regular nodes; `node_type="schema"`)
 
