@@ -640,7 +640,11 @@ async fn search_nodes_oversized_include_markdown_still_caps_at_five() {
         .into_inner();
 
     assert_eq!(response.count, 7, "expected all 7 seeded roots back");
-    let with_markdown = response.nodes.iter().filter(|n| !n.markdown.is_empty()).count();
+    let with_markdown = response
+        .nodes
+        .iter()
+        .filter(|n| !n.markdown.is_empty())
+        .count();
     assert_eq!(
         with_markdown, 5,
         "include_markdown must be capped at 5 regardless of the requested value"
