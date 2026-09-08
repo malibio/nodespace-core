@@ -2,13 +2,17 @@
   PersonNode - Wraps BaseNode for identity nodes (contacts, collaborators, stakeholders)
 
   Display identity is composed by the person schema's title_template
-  ("{first_name} {last_name}"), so this node is read-only inline — same
-  `readonly`/`displayContentIsPlaceholder` treatment node-row.svelte's
-  BaseNode fallback branch gives other title_template-driven types.
+  ("{first_name} {last_name}"), so this node is read-only inline — the same
+  `readonly`/`displayContentIsPlaceholder`/placeholder-template treatment
+  node-row.svelte's BaseNode fallback branch gives other title_template-
+  driven types (see its `nodeHasTitleTemplate`/`nodeTitleDisplay`).
   PersonNode has its own lazy-loaded node component (this file), so it
-  never reaches that fallback branch and must compute the same thing
-  itself. first_name/last_name/email all live in properties.person and are
-  editable via the PersonSchemaForm property panel.
+  never reaches that fallback branch and composes the same primitives
+  directly: `pluginRegistry.getTitleTemplate` for the raw template string,
+  `HAS_RESOLVED_CHARACTER_RE` to decide whether `node.title` has actually
+  resolved to a real name yet. first_name/last_name/email all live in
+  properties.person and are editable via the PersonSchemaForm property
+  panel.
 -->
 
 <script lang="ts">
@@ -38,7 +42,7 @@
   const title = $derived(sharedNodeStore.getNode(nodeId)?.title);
   const titleResolved = $derived(!!title && HAS_RESOLVED_CHARACTER_RE.test(title));
   const displayContent = $derived(
-    titleResolved ? (title as string) : (pluginRegistry.getTitleTemplate('person') ?? '')
+    titleResolved ? (title as string) : (pluginRegistry.getTitleTemplate(nodeType) ?? '')
   );
 </script>
 
