@@ -4,12 +4,13 @@
 //! parse tool calls, execute tools, feed results back, and repeat until
 //! the model produces a final response or hits iteration limits.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use opentelemetry::trace::{Span, TraceContextExt, Tracer};
 use opentelemetry::KeyValue;
+use regex::Regex;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -1104,6 +1105,95 @@ const FIELD_COUNT_REPORTING_WRITES: &[&str] = &["create_schema", "create_node", 
 /// content by definition. Only zero-out-of-something-expected is evidence that
 /// the user's particulars were dropped, and only that may suppress the model's
 /// confirmation.
+/// Matches a `nodespace://<id>` reference, stopping at whitespace, markdown
+/// delimiters, or trailing sentence punctuation that would otherwise be swept
+/// into the id.
+///
+/// Extends the terminator set `response_processing::replace_status_outside_special`
+/// already treats as ending a bare URI (whitespace, `)`, `]`) with sentence
+/// punctuation (`.`, `,`, `!`, `?`, `;`, `:`, backtick) — a guard comparing
+/// extracted ids against tool results by exact string match must not let
+/// "...nodespace://abc." (end of sentence) fail to match the grounded
+/// "nodespace://abc" a tool actually returned. Real ids are alphanumeric plus
+/// `-`/`_`, so none of these characters are ever legitimately part of one.
+fn node_uri_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"nodespace://[^\s)\]`.,!?;:]+").unwrap())
+}
+
+/// Every `nodespace://<id>` reference in `text`, in first-seen order, deduped.
+fn extract_node_uris(text: &str) -> Vec<&str> {
+    let mut seen = HashSet::new();
+    node_uri_re()
+        .find_iter(text)
+        .map(|m| m.as_str())
+        .filter(|uri| seen.insert(*uri))
+        .collect()
+}
+
+/// Recursively collect every `nodespace://<id>` reference appearing anywhere
+/// inside a tool call's JSON (arguments or result).
+///
+/// Ids surface in different shapes across tools — a bare top-level `id`
+/// (`create_node`, `update_node`), an array of results (`search_nodes`), a
+/// `resolved`/`id` pair (`resolve_query`) — and `node_uri()` (tools.rs)
+/// normalizes all of them to the `nodespace://` form before they reach the
+/// model. Walking the whole value rather than picking specific keys means
+/// this stays correct as tools add new result shapes, at the cost of also
+/// grounding ids that appear in unrelated string fields (e.g. a node's title
+/// happening to contain the literal text) — an acceptable direction of error,
+/// since it can only make the guard more permissive, never cause it to flag a
+/// real id as fabricated.
+fn collect_node_uris(value: &serde_json::Value, out: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            for uri in extract_node_uris(s) {
+                out.insert(uri.to_string());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_node_uris(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values() {
+                collect_node_uris(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every `nodespace://` id grounded by this turn's tool activity — the union
+/// of everything appearing in any tool call's arguments or result.
+///
+/// Arguments are included alongside results because an id the user (or a
+/// prior turn) supplied and the model merely passed through — e.g.
+/// `update_node(id: "nodespace://abc")` — is just as real a reference as one a
+/// tool result minted; only an id present in NEITHER is unaccounted for.
+fn grounded_node_uris(executions: &[ToolExecutionRecord]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for exec in executions {
+        collect_node_uris(&exec.args, &mut out);
+        collect_node_uris(&exec.result, &mut out);
+    }
+    out
+}
+
+/// Ids the response text references that no tool call this turn grounds.
+///
+/// Returns them in the order they first appear in `text`, for a stable and
+/// readable log line.
+fn ungrounded_node_uris(text: &str, executions: &[ToolExecutionRecord]) -> Vec<String> {
+    let grounded = grounded_node_uris(executions);
+    extract_node_uris(text)
+        .into_iter()
+        .filter(|uri| !grounded.contains(*uri))
+        .map(str::to_string)
+        .collect()
+}
+
 fn persisted_field_count(tool: &str, result: &serde_json::Value) -> Option<usize> {
     if !FIELD_COUNT_REPORTING_WRITES.contains(&tool) {
         return None;
@@ -1853,6 +1943,37 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                         "Anti-fabrication: model claimed action with zero tool calls — converting to confirmation request"
                     );
                     CONFIRMATION_REQUEST.to_string()
+                } else {
+                    normalized
+                };
+
+                // Fabricated-id guard: a `nodespace://<id>` in the model's text
+                // that no tool call this turn returned or received is invented —
+                // ids are never something the model should originate, they come
+                // from a tool result (or a prior turn's args) or they do not
+                // exist. This catches the shape #2257's zero-tool-call guard
+                // above cannot: the write genuinely succeeded and the model DID
+                // call a tool, but then narrated a different id than the one the
+                // tool actually returned. A fabricated id in `nodespace://` form
+                // is worse than a vague hallucination — it reads as a durable,
+                // pastable reference and resolves to nothing.
+                let normalized = if !normalized.is_empty() {
+                    let bad_ids = ungrounded_node_uris(&normalized, &all_tool_executions);
+                    if bad_ids.is_empty() {
+                        normalized
+                    } else {
+                        let (preview, preview_truncated) = char_preview(&normalized, 120);
+                        tracing::warn!(
+                            session_id = %session.id,
+                            model = %session.model_id.as_deref().unwrap_or("unknown"),
+                            iteration = iteration,
+                            fabricated_ids = %bad_ids.join(", "),
+                            response_preview = %preview,
+                            response_preview_truncated = preview_truncated,
+                            "Fabricated id: model referenced a nodespace:// id no tool call this turn produced — converting to confirmation request"
+                        );
+                        CONFIRMATION_REQUEST.to_string()
+                    }
                 } else {
                     normalized
                 };
@@ -6276,6 +6397,21 @@ mod tests {
         }
     }
 
+    fn exec_record_with(
+        name: &str,
+        args: serde_json::Value,
+        result: serde_json::Value,
+    ) -> ToolExecutionRecord {
+        ToolExecutionRecord {
+            tool_call_id: format!("tc_{name}"),
+            name: name.to_string(),
+            args,
+            result,
+            is_error: false,
+            duration_ms: 1,
+        }
+    }
+
     #[test]
     fn summarize_executions_marks_all_failed_calls_as_failed() {
         // The looping-search case: every call errored → "failed", never
@@ -6476,6 +6612,147 @@ mod tests {
             result.response, "I found 2 invoice nodes in your workspace.",
             "grounded response after real tool call should pass through unchanged"
         );
+    }
+
+    // -- Fabricated-id guard: unit tests -------------------------------------
+
+    #[test]
+    fn extract_node_uris_finds_bare_uri_and_stops_at_whitespace() {
+        let uris = extract_node_uris("See nodespace://abc-123 for details.");
+        assert_eq!(uris, vec!["nodespace://abc-123"]);
+    }
+
+    #[test]
+    fn extract_node_uris_dedupes_repeated_ids() {
+        let uris = extract_node_uris("nodespace://abc and again nodespace://abc later.");
+        assert_eq!(uris, vec!["nodespace://abc"]);
+    }
+
+    #[test]
+    fn extract_node_uris_stops_at_markdown_delimiters() {
+        // A link/backtick form must not sweep the closing delimiter into the id.
+        assert_eq!(
+            extract_node_uris("[Task](nodespace://abc-123)"),
+            vec!["nodespace://abc-123"]
+        );
+        assert_eq!(
+            extract_node_uris("`nodespace://abc-123`"),
+            vec!["nodespace://abc-123"]
+        );
+    }
+
+    #[test]
+    fn extract_node_uris_empty_when_none_present() {
+        assert!(extract_node_uris("No ids mentioned here.").is_empty());
+    }
+
+    #[test]
+    fn grounded_node_uris_collects_from_result_and_args() {
+        let executions = vec![
+            exec_record_with(
+                "create_node",
+                json!({"content": "Rebuild reports page"}),
+                json!({"id": "nodespace://real-1", "property_count": 0}),
+            ),
+            exec_record_with(
+                "update_node",
+                json!({"id": "nodespace://real-1", "content": "..."}),
+                json!({"id": "nodespace://real-1", "property_count": 1}),
+            ),
+        ];
+        let grounded = grounded_node_uris(&executions);
+        assert_eq!(grounded.len(), 1);
+        assert!(grounded.contains("nodespace://real-1"));
+    }
+
+    #[test]
+    fn grounded_node_uris_walks_nested_search_results() {
+        let executions = vec![exec_record_with(
+            "search_nodes",
+            json!({"query": "invoice"}),
+            json!({"count": 2, "results": [
+                {"id": "nodespace://a"},
+                {"id": "nodespace://b"},
+            ]}),
+        )];
+        let grounded = grounded_node_uris(&executions);
+        assert!(grounded.contains("nodespace://a"));
+        assert!(grounded.contains("nodespace://b"));
+    }
+
+    #[test]
+    fn ungrounded_node_uris_flags_id_no_tool_ever_produced() {
+        let executions = vec![exec_record_with(
+            "create_node",
+            json!({"content": "Rebuild reports page"}),
+            json!({"id": "nodespace://real-1", "property_count": 0}),
+        )];
+        let text = "The task was created as nodespace://cbaedefg-abcd-1234-wxyz-deadbeefcafe.";
+        let bad = ungrounded_node_uris(text, &executions);
+        assert_eq!(
+            bad,
+            vec!["nodespace://cbaedefg-abcd-1234-wxyz-deadbeefcafe".to_string()]
+        );
+    }
+
+    #[test]
+    fn ungrounded_node_uris_empty_when_every_id_is_grounded() {
+        let executions = vec![exec_record_with(
+            "create_node",
+            json!({"content": "Rebuild reports page"}),
+            json!({"id": "nodespace://real-1", "property_count": 0}),
+        )];
+        let text = "Created as nodespace://real-1.";
+        assert!(ungrounded_node_uris(text, &executions).is_empty());
+    }
+
+    // -- Fabricated-id guard: loop-level tests -------------------------------
+
+    /// The exact shape observed in #2281: two `create_node` calls actually ran
+    /// and returned a real id, but the model's text names a different,
+    /// invented `nodespace://` id (not a UUID — contains g/w/x/y/z, ends in a
+    /// placeholder literal). This must never reach the user; it must not be
+    /// confused for the real id either.
+    #[tokio::test]
+    async fn fabricated_id_guard_converts_a_response_naming_an_invented_id() {
+        let response = run_guard_turn(
+            "create_node",
+            r#"{"content":"Rebuild reports page functionality","node_type":"task"}"#,
+            json!({"id": "nodespace://d7e3bb35-170a-4865-a6f6-063fbd1e0a09", "property_count": 0}),
+            "The task \"Rebuild reports page functionality to support client-side rendering (CSR) instead of SSR.\" was created as a new record with ID nodespace://cbaedefg-abcd-1234-wxyz-deadbeefcafe in the 'task' schema.",
+        )
+        .await;
+        assert_eq!(
+            response, CONFIRMATION_REQUEST,
+            "a response naming an id no tool call produced must not reach the user"
+        );
+    }
+
+    #[tokio::test]
+    async fn fabricated_id_guard_leaves_a_response_naming_the_real_id_alone() {
+        let response = run_guard_turn(
+            "create_node",
+            r#"{"content":"Rebuild reports page","node_type":"task"}"#,
+            json!({"id": "nodespace://d7e3bb35-170a-4865-a6f6-063fbd1e0a09", "property_count": 0}),
+            "Created the task as nodespace://d7e3bb35-170a-4865-a6f6-063fbd1e0a09.",
+        )
+        .await;
+        assert_eq!(
+            response,
+            "Created the task as nodespace://d7e3bb35-170a-4865-a6f6-063fbd1e0a09."
+        );
+    }
+
+    #[tokio::test]
+    async fn fabricated_id_guard_does_not_fire_when_response_names_no_id() {
+        let response = run_guard_turn(
+            "search_nodes",
+            r#"{"query":"invoice"}"#,
+            json!({"count": 2, "results": [{"id": "nodespace://a"}, {"id": "nodespace://b"}]}),
+            "I found 2 invoice nodes in your workspace.",
+        )
+        .await;
+        assert_eq!(response, "I found 2 invoice nodes in your workspace.");
     }
 
     // -- No-op-success guard: loop-level tests -------------------------------
