@@ -95,7 +95,8 @@ async fn create_req_widget(
             parent_id: None,
             position: InsertPositionOwned::End,
             properties,
-            collection: None,
+            collections: vec![],
+            collection_ids: vec![],
             lifecycle_status: None,
         },
     )
@@ -113,7 +114,8 @@ async fn create_widget(svc: &Arc<NodeService>, properties: serde_json::Value) ->
             parent_id: None,
             position: InsertPositionOwned::End,
             properties,
-            collection: None,
+            collections: vec![],
+            collection_ids: vec![],
             lifecycle_status: None,
         },
     )
@@ -279,8 +281,9 @@ async fn object_field_rejects_a_bad_value_on_update() -> Result<()> {
             node_type: None,
             content: None,
             properties: Some(json!({ "address": "not an object anymore" })),
-            add_to_collection: None,
-            remove_from_collection: None,
+            add_to_collections: vec![],
+            add_to_collection_ids: vec![],
+            remove_from_collection_ids: vec![],
             lifecycle_status: None,
         },
     )
@@ -422,7 +425,8 @@ async fn a_wrongly_typed_default_bricks_creation_for_omitted_fields() -> Result<
             position: InsertPositionOwned::End,
             // Omit `address` entirely so the bad default is what fills it in.
             properties: json!({}),
-            collection: None,
+            collections: vec![],
+            collection_ids: vec![],
             lifecycle_status: None,
         },
     )
