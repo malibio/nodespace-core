@@ -7,7 +7,9 @@
  *
  * The daemon, socket, and database are managed by the CALLER — this harness
  * never starts or seeds anything. It asserts the environment is usable
- * (see preflight.ts) and otherwise assumes it.
+ * (see preflight.ts) and otherwise assumes it. Every variable this harness
+ * reads, its default, and what overrides it, is `ENV_USAGE` below — that is
+ * the full, current contract, not restated here.
  */
 
 import { dirname, join, resolve } from "node:path";

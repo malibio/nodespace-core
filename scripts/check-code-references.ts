@@ -26,7 +26,11 @@ import { dirname, join } from "node:path";
 const REPO = join(dirname(new URL(import.meta.url).pathname), "..");
 
 // packages/agent and packages/nlp-engine are outside this check's scope —
-// see the file-level comment.
+// see the file-level comment. Every other package is in scope; list them
+// explicitly (rather than deriving from `packages/*`) so a newly added
+// package fails closed — it stays unscanned until someone notices and adds
+// it here, rather than silently entering the ratchet with whatever count it
+// happens to start with.
 const SCAN_ROOTS = [
   "scripts",
   "packages/desktop-app",
@@ -35,6 +39,8 @@ const SCAN_ROOTS = [
   "packages/cli",
   "packages/nodespace-types",
   "packages/proto",
+  "packages/dev-tools",
+  "packages/skill",
 ];
 const EXTENSIONS = new Set([".rs", ".ts", ".svelte", ".js"]);
 const EXCLUDE_DIR_NAMES = new Set(["node_modules", "target", ".git", "dist", "build"]);
