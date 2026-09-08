@@ -1634,14 +1634,20 @@ async fn create_description_subtree_in_tx(
         .bulk_create_hierarchy_in_tx(tx, bulk_nodes)
         .await
         .map_err(|e| {
-            // Preserve the InvalidUpdate/other distinction rather than
-            // flattening everything to `internal_error`: a genuinely
-            // invalid description (e.g. content failing schema field
-            // validation) is a client mistake, not a server fault, and
-            // callers one layer up (`handle_update_schema`) discriminate
+            // Preserve the client-mistake/server-fault distinction rather
+            // than flattening everything to `internal_error`: a genuinely
+            // invalid description (e.g. content failing behavior or schema
+            // field validation) is a client mistake, not a server fault,
+            // and callers one layer up (`handle_update_schema`) discriminate
             // on this to decide invalid_params vs. internal_error.
+            // `prepare_bulk_hierarchy_nodes` can surface either variant
+            // depending on which validator rejects first (behaviors ->
+            // ValidationFailed, schema field checks -> InvalidUpdate).
             match e {
                 NodeServiceError::InvalidUpdate(msg) => MarkdownError::invalid_params(format!(
+                    "Failed to create description subtree for schema '{schema_id}': {msg}"
+                )),
+                NodeServiceError::ValidationFailed(msg) => MarkdownError::invalid_params(format!(
                     "Failed to create description subtree for schema '{schema_id}': {msg}"
                 )),
                 other => MarkdownError::internal_error(format!(
