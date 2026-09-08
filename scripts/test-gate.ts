@@ -19,6 +19,7 @@
  */
 
 import { $ } from "bun";
+import { reportBranchBehind } from "./check-branch-behind";
 
 async function run(label: string, cmd: () => Promise<unknown>) {
   console.log(`\n▶ ${label}`);
@@ -41,6 +42,12 @@ async function run(label: string, cmd: () => Promise<unknown>) {
 // its `src/` unit tests. The remaining sidecars aren't staged here — a cold
 // build of them takes minutes, too much for every push — so `rust:test` checks
 // every required path up front and names the command that produces each.
+// Staleness check, not a fix for the merge race — see check-branch-behind.ts.
+// Runs first so the warning (if any) is visible before the several-minutes
+// pyramid below, and never blocks: a fetch/rev-list failure degrades to a
+// skipped check rather than a failed push.
+await reportBranchBehind();
+
 await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
 await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
 await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);
