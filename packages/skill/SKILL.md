@@ -265,7 +265,7 @@ If the user wants something out of the way rather than gone, prefer moving it (r
 
 ```bash
 nodespace import file ./notes.md
-nodespace import dir ./docs --auto-collection-routing
+nodespace import dir ./docs ./adr --auto-collection-routing
 ```
 
 Top-level headings become root nodes, sub-headings become children — for any multi-section document, not only bulk import. Report the number of nodes created; don't follow up with search calls to verify.
