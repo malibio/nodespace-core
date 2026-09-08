@@ -1239,26 +1239,66 @@ impl NodeService {
     /// PersonNode to this node (role `owner`, status `active`). Must run after the
     /// local person seed so the owner edge always has a person to attach to.
     async fn seed_database_settings_if_needed(&self) -> Result<(), NodeServiceError> {
-        if !self
+        // ADR-069 §1a/S5, closing F13: the idempotency guard checks the
+        // owner EDGE, not merely the settings node's existence. The node and
+        // its owner edge are two separate writes below; if the edge write
+        // ever failed after the node had already been created, checking
+        // node-existence alone would treat the singleton as "already seeded"
+        // on every subsequent open and the edge would never be retried,
+        // leaving the database permanently ownerless. Checking the edge
+        // means a partial prior failure is detected and the create_node
+        // call below is then a no-op via `create_node`'s own singleton
+        // short-circuit (`node.node_type == "database-settings"`), so only
+        // the missing edge gets (re)created.
+        let existing_settings = self
             .query_nodes_by_type("database-settings", None)
             .await?
-            .is_empty()
-        {
-            return Ok(());
+            .into_iter()
+            .next();
+
+        if let Some(ref settings) = existing_settings {
+            let local_person_id = self
+                .query_nodes_by_type("person", None)
+                .await?
+                .into_iter()
+                .next()
+                .map(|p| p.id);
+            if let Some(ref local_person_id) = local_person_id {
+                let has_owner_edge = self
+                    .store()
+                    .get_relationship_record(local_person_id, &settings.id, "has_role")
+                    .await
+                    .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+                    .is_some();
+                if has_owner_edge {
+                    return Ok(());
+                }
+                // Node exists, edge does not — fall through and repair it.
+            } else {
+                // No local person yet to own the edge; nothing to repair
+                // until seeding order creates one. Existing behavior: do
+                // not error, just skip until a later open can retry.
+                return Ok(());
+            }
         }
 
-        let settings = Node::new_with_id(
-            DATABASE_SETTINGS_NODE_ID.to_string(),
-            "database-settings".to_string(),
-            String::new(),
-            serde_json::json!({
-                "database-settings": {
-                    "sync_enabled": false,
-                    "auth_status": "local"
-                }
-            }),
-        );
-        let settings_id = self.create_node(settings).await?;
+        let settings_id = match existing_settings {
+            Some(settings) => settings.id,
+            None => {
+                let settings = Node::new_with_id(
+                    DATABASE_SETTINGS_NODE_ID.to_string(),
+                    "database-settings".to_string(),
+                    String::new(),
+                    serde_json::json!({
+                        "database-settings": {
+                            "sync_enabled": false,
+                            "auth_status": "local"
+                        }
+                    }),
+                );
+                self.create_node(settings).await?
+            }
+        };
 
         // Attach the owner role edge from the local PersonNode. Seeding order
         // guarantees exactly one local person exists at this point.
@@ -5338,6 +5378,63 @@ mod tests {
             .expect("owner has_role edge exists");
         assert_eq!(edge.properties["role"], "owner");
         assert_eq!(edge.properties["status"], "active");
+    }
+
+    /// ADR-069 §1a/S5 regression test for F13: the seeding guard must check
+    /// the owner EDGE's existence, not merely the settings node's. Before
+    /// this fix, once the singleton node existed, the guard short-circuited
+    /// unconditionally and a missing owner edge (e.g. from a prior failed
+    /// seed) was never retried — the database was permanently ownerless.
+    /// Simulates that prior partial failure by deleting the edge the normal
+    /// seeding path already created, then re-running the seeding step
+    /// directly (as a fresh app open would) and asserting the edge is
+    /// repaired rather than silently skipped.
+    #[tokio::test]
+    async fn test_seed_database_settings_repairs_missing_owner_edge() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let person_id = people[0].id.clone();
+
+        // Simulate the F13 partial-failure state: settings node exists, but
+        // its owner edge does not (as if the edge write had failed on a
+        // prior seed attempt).
+        service
+            .store()
+            .delete_generic_relationship(&person_id, DATABASE_SETTINGS_NODE_ID, "has_role")
+            .await
+            .unwrap();
+        assert!(
+            service
+                .store()
+                .get_relationship_record(&person_id, DATABASE_SETTINGS_NODE_ID, "has_role")
+                .await
+                .unwrap()
+                .is_none(),
+            "precondition: owner edge must be gone before the repair runs"
+        );
+
+        // Re-run the seeding step directly, as a fresh app open would.
+        service.seed_database_settings_if_needed().await.unwrap();
+
+        let repaired_edge = service
+            .store()
+            .get_relationship_record(&person_id, DATABASE_SETTINGS_NODE_ID, "has_role")
+            .await
+            .unwrap();
+        assert!(
+            repaired_edge.is_some(),
+            "the missing owner edge must be repaired, not silently left missing \
+             just because the settings node already existed"
+        );
+
+        // Still exactly one settings node — the repair must not have
+        // duplicated it via a second create.
+        let settings = service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap();
+        assert_eq!(settings.len(), 1);
     }
 
     // --- get_local_person / set_local_person_identity (ADR-037, core#2388) ---
