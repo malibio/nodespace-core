@@ -120,7 +120,6 @@ export function readGroupValue(node: Node, field: string): string | null {
  * a `required: true` schema field in the first place (kanban-view.svelte's
  * `displayColumns` and `moveCard` both guard on `activeField?.required`).
  *
-
  * Both shapes this produces persist through the store's viewer-write rule: a
  * user-defined schema field — the common Kanban case — is written under
  * `properties[field]` (property changes always persist, matching
