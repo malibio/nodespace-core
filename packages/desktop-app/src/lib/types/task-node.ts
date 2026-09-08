@@ -52,7 +52,7 @@ export type TaskPriority = CoreTaskPriority | string;
  * TaskNode - The canonical type-safe interface for task nodes
  *
  * Use this interface instead of the generic `Node` type when you need type-safe
- * access to task-specific fields (status, priority, dueDate, assignee).
+ * access to task-specific fields (status, priority, dueDate).
  *
  * The generic `Node` interface does NOT include these fields - they are promoted
  * to the top level of the node by the backend and accessed through `TaskNode`.
@@ -68,8 +68,7 @@ export type TaskPriority = CoreTaskPriority | string;
  *   "modifiedAt": "2025-01-01T00:00:00Z",
  *   "status": "open",
  *   "priority": "medium",
- *   "dueDate": null,
- *   "assignee": null
+ *   "dueDate": null
  * }
  * ```
  *
@@ -90,7 +89,6 @@ export interface TaskNode {
   status: TaskStatus;
   priority?: TaskPriority;
   dueDate?: string | null;
-  assignee?: string | null;
   startedAt?: string | null;
   completedAt?: string | null;
 }
@@ -181,33 +179,9 @@ export function setTaskDueDate(node: TaskNode, dueDate: string | undefined): Tas
 }
 
 /**
- * Get the task assignee
- *
- * @param node - Task node
- * @returns Assignee ID string or undefined if not set
- */
-export function getTaskAssignee(node: TaskNode): string | undefined {
-  return node.assignee ?? undefined;
-}
-
-/**
- * Set the task assignee (immutable)
- *
- * @param node - Task node
- * @param assignee - Assignee ID string or undefined to clear
- * @returns New node with updated assignee
- */
-export function setTaskAssignee(node: TaskNode, assignee: string | undefined): TaskNode {
-  return {
-    ...node,
-    assignee: assignee ?? null
-  };
-}
-
-/**
  * Partial update structure for task nodes
  *
- * Supports updating task-specific properties (status, priority, dueDate, assignee)
+ * Supports updating task-specific properties (status, priority, dueDate)
  * and node fields (content). All fields are optional - only include fields to update.
  *
  * This interface matches the Rust `TaskNodeUpdate` struct for type-safe CRUD operations.
@@ -236,9 +210,6 @@ export interface TaskNodeUpdate {
 
   /** Update due date (type-specific field) - null to clear */
   dueDate?: string | null;
-
-  /** Update assignee (type-specific field) - null to clear */
-  assignee?: string | null;
 
   /** Update started_at date (type-specific field) - null to clear */
   startedAt?: string | null;
@@ -274,7 +245,6 @@ export function nodeToTaskNode(node: Node): TaskNode {
     status: task.status ?? 'open',
     priority: task.priority,
     dueDate: task.dueDate ?? null,
-    assignee: task.assignee ?? null,
     startedAt: task.startedAt ?? null,
     completedAt: task.completedAt ?? null
   };
@@ -291,8 +261,6 @@ export const TaskNodeHelpers = {
   setTaskPriority,
   getTaskDueDate,
   setTaskDueDate,
-  getTaskAssignee,
-  setTaskAssignee,
   nodeToTaskNode,
 
   /**
@@ -386,7 +354,6 @@ export const TaskNodeHelpers = {
       status?: TaskStatus;
       priority?: TaskPriority;
       dueDate?: string;
-      assignee?: string;
     } = {}
   ): TaskNode {
     return {
@@ -398,8 +365,7 @@ export const TaskNodeHelpers = {
       version: 1,
       status: options.status ?? 'open',
       priority: options.priority,
-      dueDate: options.dueDate ?? null,
-      assignee: options.assignee ?? null
+      dueDate: options.dueDate ?? null
     };
   }
 };

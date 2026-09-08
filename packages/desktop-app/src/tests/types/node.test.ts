@@ -38,8 +38,7 @@ describe('isNode type guard', () => {
         mentions: ['@user1', '@user2'],
         status: 'todo',
         priority: 1,
-        dueDate: '2025-12-31',
-        assignee: 'john'
+        dueDate: '2025-12-31'
       };
 
       expect(isNode(fullNode)).toBe(true);

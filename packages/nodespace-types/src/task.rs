@@ -124,8 +124,6 @@ pub struct TaskNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub assignee: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
@@ -145,8 +143,6 @@ pub struct TaskNodeUpdate {
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
     pub due_date: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assignee: Option<Option<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

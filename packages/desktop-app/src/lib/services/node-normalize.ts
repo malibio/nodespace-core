@@ -58,7 +58,6 @@ export const OPTIMISTIC_TYPED_FIELDS: Record<string, readonly PromotedField[]> =
     { from: 'status', to: 'status' },
     { from: 'priority', to: 'priority' },
     { from: 'dueDate', to: 'dueDate' },
-    { from: 'assignee', to: 'assignee' },
     { from: 'startedAt', to: 'startedAt' },
     { from: 'completedAt', to: 'completedAt' }
   ]

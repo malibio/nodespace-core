@@ -4,7 +4,7 @@
  * TaskSchemaForm used to carry its own hardcoded STATUS_OPTIONS/PRIORITY_OPTIONS
  * enum constants and bespoke date-picker markup, duplicating what the real task
  * schema's coreValues/userValues and SchemaFieldLeaf already provide. That
- * duplication was removed: the 6 core fields now render through the shared
+ * duplication was removed: the 5 core fields now render through the shared
  * SchemaFieldLeaf (driven by the schema TaskSchemaForm fetches from the backend),
  * and the Collapsible shell / trigger row / gated Relationships button / nested-
  * field modal now come from the shared TypedFormShell (also used by
@@ -29,8 +29,6 @@
  *   - the Relationships button is now gated on the node's type actually having a
  *     typed relationship, matching GenericSchemaForm — previously it showed
  *     unconditionally, a real inconsistency that has now been fixed
- *   - the assignee field's bespoke combobox (unrelated to the enum/date-picker
- *     duplication) is untouched
  *   - user-defined (non-core) schema fields still render dynamically
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -108,8 +106,7 @@ function realTaskSchema(): SchemaNode {
       ),
       dateField('due_date', 'Due date'),
       dateField('started_at', 'Started at'),
-      dateField('completed_at', 'Completed at'),
-      { name: 'assignee', friendlyName: 'Assignee', type: 'text', protection: 'user', indexed: true, required: false }
+      dateField('completed_at', 'Completed at')
     ]
   };
 }
@@ -171,7 +168,6 @@ describe('TaskSchemaForm — core fields render from the fetched schema, not a h
     await waitFor(() => expect(screen.getAllByText('Open').length).toBeGreaterThanOrEqual(2));
     expect(screen.getByText('Select Priority...')).toBeTruthy();
     expect(screen.getAllByText('Pick a date')).toHaveLength(3); // due date, started at, completed at
-    expect(screen.getByText('Select assignee...')).toBeTruthy();
   });
 
   it('renders whatever core status values the SCHEMA declares, not a hardcoded fallback list', async () => {
@@ -219,9 +215,8 @@ describe('TaskSchemaForm — schema-fetch failure degrades gracefully (no blank 
     await openForm(container);
 
     // 5 core fields (status, priority, due date, started at, completed at) each fall back
-    // to the unavailable hint — assignee is unaffected (its combobox has no schema dependency).
+    // to the unavailable hint.
     await waitFor(() => expect(screen.getAllByText('Unable to load')).toHaveLength(5));
-    expect(screen.getByText('Select assignee...')).toBeTruthy();
   });
 
   it('does not show "Unable to load" while the schema fetch is merely still in flight', async () => {
@@ -328,31 +323,15 @@ describe('TaskSchemaForm — Relationships button is now gated (previously uncon
   });
 });
 
-describe('TaskSchemaForm — assignee field (unrelated bespoke combobox, unchanged)', () => {
-  it('still renders its own combobox rather than a plain SchemaFieldLeaf text input', async () => {
-    loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
-    vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(taskNode());
-    const { container } = render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
-    await openForm(container);
-
-    await waitFor(() => expect(screen.getByLabelText('Assignee')).toBeTruthy());
-    await fireEvent.click(screen.getByLabelText('Assignee'));
-
-    // The empty-placeholder-list combobox behavior (TODO: UserService), not a text input.
-    expect(screen.getByPlaceholderText('Search assignee...')).toBeTruthy();
-    expect(screen.getByText('No assignees available')).toBeTruthy();
-  });
-});
-
 describe('TaskSchemaForm — field completion badge', () => {
-  it('counts filled core fields out of 6', async () => {
+  it('counts filled core fields out of 5', async () => {
     loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'task', groups: [] });
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       taskNode({ status: 'open', priority: 'high', dueDate: '2026-12-31' })
     );
     render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
 
-    await waitFor(() => expect(screen.getByText('3/6 fields')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('3/5 fields')).toBeTruthy());
   });
 
   it('includes user-defined schema fields in the total', async () => {
@@ -371,7 +350,7 @@ describe('TaskSchemaForm — field completion badge', () => {
 
     render(TaskSchemaForm, { props: { nodeId: 'task-1' } });
 
-    await waitFor(() => expect(screen.getByText('1/7 fields')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('1/6 fields')).toBeTruthy());
   });
 });
 

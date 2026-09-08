@@ -35,12 +35,11 @@ CREATE INDEX IF NOT EXISTS idx_node_lifecycle ON node (lifecycle_status);
 CREATE INDEX IF NOT EXISTS idx_task_status ON node (json_extract(properties, '$.task.status')) WHERE node_type = 'task';
 CREATE INDEX IF NOT EXISTS idx_task_due_date ON node (json_extract(properties, '$.task.due_date')) WHERE node_type = 'task';
 CREATE INDEX IF NOT EXISTS idx_task_priority ON node (json_extract(properties, '$.task.priority')) WHERE node_type = 'task';
-CREATE INDEX IF NOT EXISTS idx_task_assignee ON node (json_extract(properties, '$.task.assignee')) WHERE node_type = 'task';
 -- Composite index serving "open tasks ordered by due date" without a filesort.
 CREATE INDEX IF NOT EXISTS idx_task_status_due_date ON node (json_extract(properties, '$.task.status'), json_extract(properties, '$.task.due_date')) WHERE node_type = 'task';
 CREATE INDEX IF NOT EXISTS idx_project_status ON node (json_extract(properties, '$.project.status')) WHERE node_type = 'project';
 
--- Holds BOTH instance-level edges (task→person assigned_to, has_child, …) and
+-- Holds BOTH instance-level edges (person→task tasks/assignee, has_child, …) and
 -- schema relationship DECLARATIONS (v004): a declaration row connects two
 -- schema nodes (in_node = declaring schema, out_node = target schema, or a
 -- self-edge when untyped) under the declared name, with the full

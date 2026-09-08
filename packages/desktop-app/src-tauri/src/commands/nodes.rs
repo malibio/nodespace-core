@@ -888,16 +888,6 @@ fn task_update_to_proto(id: &str, version: i64, update: TaskNodeUpdate) -> Updat
                 value: s,
             },
         }),
-        assignee: update.assignee.map(|opt| match opt {
-            None => OptionalStringClear {
-                clear: true,
-                value: String::new(),
-            },
-            Some(a) => OptionalStringClear {
-                clear: false,
-                value: a,
-            },
-        }),
         started_at: update.started_at.map(|opt| match opt {
             None => OptionalTimestampClear {
                 clear: true,

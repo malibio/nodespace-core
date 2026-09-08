@@ -2492,10 +2492,6 @@ impl SqliteStore {
                     .get("due_date")
                     .and_then(|v| v.as_str())
                     .map(normalize_date_field),
-                assignee: task_props
-                    .get("assignee")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
                 started_at: task_props
                     .get("started_at")
                     .and_then(|v| v.as_str())

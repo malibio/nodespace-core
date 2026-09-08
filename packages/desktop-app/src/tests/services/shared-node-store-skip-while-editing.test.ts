@@ -650,7 +650,6 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
       status: string;
       priority?: string;
       dueDate?: string | null;
-      assignee?: string | null;
       startedAt?: string | null;
       completedAt?: string | null;
     };

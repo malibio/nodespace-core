@@ -722,8 +722,7 @@ impl NodeBehavior for TaskNodeBehavior {
             "task": {
                 "status": "open",
                 "priority": "medium",
-                "due_date": null,
-                "assignee": null
+                "due_date": null
             }
         })
     }
@@ -3268,7 +3267,6 @@ mod tests {
         assert_eq!(metadata["task"]["status"], "open");
         assert_eq!(metadata["task"]["priority"], "medium");
         assert!(metadata["task"]["due_date"].is_null());
-        assert!(metadata["task"]["assignee"].is_null());
     }
 
     #[test]

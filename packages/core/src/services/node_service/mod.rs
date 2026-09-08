@@ -6285,11 +6285,11 @@ mod tests {
     /// #2006 content-only guard would leave it stale.
     #[tokio::test]
     async fn update_task_node_property_only_recomputes_templated_title() {
-        use crate::models::TaskNodeUpdate;
+        use crate::models::{TaskNodeUpdate, TaskPriority};
         use crate::services::{CreateNodeParams, InsertPositionOwned};
 
         let (service, _temp) = create_test_service().await;
-        set_task_title_template(&service, "Owner: {assignee}").await;
+        set_task_title_template(&service, "Priority: {priority}").await;
 
         let id = service
             .create_node_with_parent(CreateNodeParams {
@@ -6305,8 +6305,8 @@ mod tests {
 
         let created = service.get_node(&id).await.unwrap().unwrap();
 
-        // Assignee-only update (no content) — the template now depends on it.
-        let update = TaskNodeUpdate::new().with_assignee(Some("alice".to_string()));
+        // Priority-only update (no content) — the template now depends on it.
+        let update = TaskNodeUpdate::new().with_priority(Some(TaskPriority::High));
         service
             .update_task_node(&id, created.version, update)
             .await
@@ -6315,7 +6315,7 @@ mod tests {
         let refetched = service.get_node(&id).await.unwrap().unwrap();
         assert_eq!(
             refetched.title.as_deref(),
-            Some("Owner: alice"),
+            Some("Priority: High"),
             "a property-only update must recompute a title_template-driven title"
         );
     }
@@ -6325,11 +6325,11 @@ mod tests {
     /// must be the new property, not the pre-update one (one write behind).
     #[tokio::test]
     async fn update_task_node_combined_update_uses_post_merge_properties() {
-        use crate::models::TaskNodeUpdate;
+        use crate::models::{TaskNodeUpdate, TaskPriority};
         use crate::services::{CreateNodeParams, InsertPositionOwned};
 
         let (service, _temp) = create_test_service().await;
-        set_task_title_template(&service, "Owner: {assignee}").await;
+        set_task_title_template(&service, "Priority: {priority}").await;
 
         let id = service
             .create_node_with_parent(CreateNodeParams {
@@ -6343,22 +6343,22 @@ mod tests {
             .await
             .unwrap();
 
-        // Seed a prior assignee so a stale read would produce a visibly wrong title.
+        // Seed a prior priority so a stale read would produce a visibly wrong title.
         let created = service.get_node(&id).await.unwrap().unwrap();
         service
             .update_task_node(
                 &id,
                 created.version,
-                TaskNodeUpdate::new().with_assignee(Some("bob".to_string())),
+                TaskNodeUpdate::new().with_priority(Some(TaskPriority::Low)),
             )
             .await
             .unwrap();
 
-        // One call updating BOTH content and assignee.
+        // One call updating BOTH content and priority.
         let seeded = service.get_node(&id).await.unwrap().unwrap();
         let update = TaskNodeUpdate::new()
             .with_content("Ship the spec".to_string())
-            .with_assignee(Some("carol".to_string()));
+            .with_priority(Some(TaskPriority::High));
         service
             .update_task_node(&id, seeded.version, update)
             .await
@@ -6371,8 +6371,8 @@ mod tests {
         );
         assert_eq!(
             refetched.title.as_deref(),
-            Some("Owner: carol"),
-            "combined update must compute title from the new (post-merge) assignee, not the stale one"
+            Some("Priority: High"),
+            "combined update must compute title from the new (post-merge) priority, not the stale one"
         );
     }
 
@@ -6779,6 +6779,99 @@ mod tests {
             .await
             .expect_err("a numeric enum value must be rejected");
         assert!(err.to_string().contains("must be a string"), "got: {err}");
+    }
+
+    /// End-to-end coverage for the person→task `assignee` relationship:
+    /// assignment and clearing both work through the generic
+    /// relationship API, with no task-specific or assignee-specific code path.
+    /// Person declares `tasks` (Out/Many); task's `assignee` (reverse, One) is
+    /// derived, never declared directly — mirrors project's `tasks`/`project`
+    /// pair (`core_schemas.rs`).
+    #[tokio::test]
+    async fn person_task_assignee_relationship_assigns_and_clears_end_to_end() {
+        use crate::services::{CreateNodeParams, InsertPositionOwned};
+
+        let (service, _temp) = create_test_service().await;
+        let service = std::sync::Arc::new(service);
+
+        let person_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "person".to_string(),
+                content: String::new(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let task_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "Ship the feature".to_string(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Assign: person -[tasks]-> task, using the name declared on person's
+        // schema (mirrors project's declaration; task has no entry of its own).
+        service
+            .create_relationship(&person_id, "tasks", &task_id, serde_json::json!({}))
+            .await
+            .expect("assigning a task to a person must succeed");
+
+        // Person's outbound side.
+        let outbound = crate::ops::rel_ops::get_node_relationships(&service, &person_id)
+            .await
+            .unwrap();
+        let out_group = outbound
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "tasks" && g.direction == "out")
+            .expect("person must show the outbound tasks relationship");
+        assert_eq!(out_group.count, 1);
+        assert_eq!(out_group.related[0].id, task_id);
+
+        // Task's derived inverse: the reverse_name "assignee" surfaces via the
+        // inbound side, not a declaration on task's own schema.
+        let inbound = crate::ops::rel_ops::get_node_relationships(&service, &task_id)
+            .await
+            .unwrap();
+        let in_group = inbound
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "tasks" && g.direction == "in")
+            .expect("task must show the inbound (assignee) side of the relationship");
+        assert_eq!(in_group.count, 1);
+        assert_eq!(in_group.related[0].id, person_id);
+        assert_eq!(
+            in_group.reverse_name, "assignee",
+            "the inbound group's reverse_name is what actually encodes \"assignee\" \
+             as a concept at runtime — must match the schema declaration"
+        );
+
+        // Clear: deleting the edge removes assignment on both sides.
+        service
+            .delete_relationship(&person_id, "tasks", &task_id)
+            .await
+            .expect("clearing an assignment must succeed");
+
+        let outbound_after = crate::ops::rel_ops::get_node_relationships(&service, &person_id)
+            .await
+            .unwrap();
+        let out_group_after = outbound_after
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "tasks" && g.direction == "out")
+            .expect("the relationship group still exists (declared), now empty");
+        assert_eq!(
+            out_group_after.count, 0,
+            "cleared assignment must not persist"
+        );
     }
 
     /// The in-place edit path is validated too — otherwise an edge created with

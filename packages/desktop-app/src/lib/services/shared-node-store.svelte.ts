@@ -695,7 +695,6 @@ type TaskFieldName =
   | 'status'
   | 'priority'
   | 'dueDate'
-  | 'assignee'
   | 'startedAt'
   | 'completedAt'
   | 'content';
@@ -1373,7 +1372,7 @@ export class SharedNodeStore {
         const isNodeTypeChange =
           'nodeType' in changes && changes.nodeType !== existingNode.nodeType;
         const isPropertyChange = 'properties' in changes;
-        // Check for type-specific property changes (status, priority, dueDate, assignee, etc.)
+        // Check for type-specific property changes (status, priority, dueDate, etc.)
         // These are persisted via type-specific updaters registered in the plugin system
         const currentNode = this.nodes.get(nodeId);
         const hasTypeUpdater = currentNode?.nodeType
@@ -1384,7 +1383,6 @@ export class SharedNodeStore {
           ('status' in changes ||
             'priority' in changes ||
             'dueDate' in changes ||
-            'assignee' in changes ||
             'startedAt' in changes ||
             'completedAt' in changes);
         const shouldPersist =
@@ -2656,7 +2654,7 @@ export class SharedNodeStore {
   /**
    * Update a task node with type-safe property updates
    *
-   * Routes task-specific field updates (status, priority, dueDate, assignee) through
+   * Routes task-specific field updates (status, priority, dueDate) through
    * the type-safe update path that directly modifies task node properties in the backend.
    *
    * This method provides end-to-end type safety for task updates:
@@ -2708,10 +2706,6 @@ export class SharedNodeStore {
     if (update.dueDate !== undefined) {
       localChanges.dueDate = update.dueDate;
       myFieldSeq.dueDate = this.bumpTaskFieldSeq(nodeId, 'dueDate');
-    }
-    if (update.assignee !== undefined) {
-      localChanges.assignee = update.assignee;
-      myFieldSeq.assignee = this.bumpTaskFieldSeq(nodeId, 'assignee');
     }
     if (update.startedAt !== undefined) {
       localChanges.startedAt = update.startedAt;
@@ -2826,12 +2820,6 @@ export class SharedNodeStore {
               this.getTaskFieldSeq(nodeId, 'dueDate') === myFieldSeq.dueDate
             ) {
               confirmedFields.dueDate = updatedTaskNode.dueDate;
-            }
-            if (
-              update.assignee !== undefined &&
-              this.getTaskFieldSeq(nodeId, 'assignee') === myFieldSeq.assignee
-            ) {
-              confirmedFields.assignee = updatedTaskNode.assignee;
             }
             if (
               update.startedAt !== undefined &&

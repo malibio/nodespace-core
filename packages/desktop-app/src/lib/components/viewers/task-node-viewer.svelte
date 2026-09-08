@@ -4,7 +4,7 @@
   Features:
   - Wraps BaseNodeViewer for node management
   - BaseNodeViewer automatically loads TaskSchemaForm via plugin registry
-  - Direct type-specific property binding (status, priority, dueDate, assignee)
+  - Direct type-specific property binding (status, priority, dueDate)
   - Type-safe updates via updateTaskNode
   - Follows *NodeViewer pattern (like DateNodeViewer)
 

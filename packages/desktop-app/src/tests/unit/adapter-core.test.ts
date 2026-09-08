@@ -39,7 +39,6 @@ describe('adapter-core: buildTaskNodeUpdatePatch (tri-state clearable encoding)'
     const patch = buildTaskNodeUpdatePatch({ status: 'done' });
     expect(patch.priority).toBeUndefined();
     expect(patch.dueDate).toBeUndefined();
-    expect(patch.assignee).toBeUndefined();
   });
 
   it('encodes null as an explicit clear', () => {

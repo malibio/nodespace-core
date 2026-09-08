@@ -2,7 +2,7 @@
  * Tests for TaskNode Type-Safe Wrapper
  *
  * TaskNode uses flat structure matching Rust backend serialization.
- * Spoke fields (status, priority, dueDate, assignee) are at the top level, not nested.
+ * Spoke fields (status, priority, dueDate) are at the top level, not nested.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -16,8 +16,6 @@ import {
   setTaskPriority,
   getTaskDueDate,
   setTaskDueDate,
-  getTaskAssignee,
-  setTaskAssignee,
   TaskNodeHelpers
 } from '$lib/types/task-node';
 
@@ -237,74 +235,6 @@ describe('setTaskDueDate', () => {
   });
 });
 
-describe('getTaskAssignee', () => {
-  it('returns assignee from flat structure', () => {
-    const node: TaskNode = {
-      id: 'test-14',
-      nodeType: 'task',
-      content: 'Test task',
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      version: 1,
-      status: 'open',
-      assignee: 'user-123'
-    };
-
-    expect(getTaskAssignee(node)).toBe('user-123');
-  });
-
-  it('returns undefined when assignee is null', () => {
-    const node: TaskNode = {
-      id: 'test-15',
-      nodeType: 'task',
-      content: 'Test task',
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      version: 1,
-      status: 'open',
-      assignee: null
-    };
-
-    expect(getTaskAssignee(node)).toBeUndefined();
-  });
-});
-
-describe('setTaskAssignee', () => {
-  it('sets assignee immutably', () => {
-    const original: TaskNode = {
-      id: 'test-16',
-      nodeType: 'task',
-      content: 'Test task',
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      version: 1,
-      status: 'open'
-    };
-
-    const updated = setTaskAssignee(original, 'user-456');
-
-    expect(original.assignee).toBeUndefined();
-    expect(updated.assignee).toBe('user-456');
-  });
-
-  it('clears assignee when set to undefined', () => {
-    const original: TaskNode = {
-      id: 'test-17',
-      nodeType: 'task',
-      content: 'Test task',
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      version: 1,
-      status: 'open',
-      assignee: 'user-456'
-    };
-
-    const updated = setTaskAssignee(original, undefined);
-
-    expect(updated.assignee).toBeNull();
-  });
-});
-
 describe('TaskNodeHelpers', () => {
   describe('isCompleted', () => {
     it('returns true for done status', () => {
@@ -462,7 +392,6 @@ describe('TaskNodeHelpers', () => {
       expect(task.status).toBe('open');
       expect(task.priority).toBeUndefined();
       expect(task.dueDate).toBeNull();
-      expect(task.assignee).toBeNull();
       expect(task.id).toMatch(/^task-/);
     });
 
@@ -470,15 +399,13 @@ describe('TaskNodeHelpers', () => {
       const task = TaskNodeHelpers.createTaskNode('Important task', {
         status: 'in_progress',
         priority: 'high',
-        dueDate: '2025-12-31',
-        assignee: 'user-123'
+        dueDate: '2025-12-31'
       });
 
       expect(task.content).toBe('Important task');
       expect(task.status).toBe('in_progress');
       expect(task.priority).toBe('high');
       expect(task.dueDate).toBe('2025-12-31');
-      expect(task.assignee).toBe('user-123');
     });
   });
 });

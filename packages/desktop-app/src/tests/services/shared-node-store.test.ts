@@ -2008,7 +2008,7 @@ describe('SharedNodeStore', () => {
 
         store.setNode(taskNode, viewerSource);
 
-        // TaskNodeUpdate uses status, priority, dueDate, assignee fields
+        // TaskNodeUpdate uses status, priority, dueDate fields
         store.updateTaskNode('task-1', { status: 'completed' }, viewerSource);
 
         const updated = store.getNode('task-1');
@@ -2454,8 +2454,7 @@ describe('SharedNodeStore', () => {
           {
             status: 'completed',
             priority: 'high',
-            dueDate: '2024-12-31',
-            assignee: 'user@example.com'
+            dueDate: '2024-12-31'
           },
           viewerSource
         );

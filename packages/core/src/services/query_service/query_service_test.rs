@@ -1467,7 +1467,6 @@ mod tests {
             ("status", "json_extract(properties, '$.task.status')"),
             ("due_date", "json_extract(properties, '$.task.due_date')"),
             ("priority", "json_extract(properties, '$.task.priority')"),
-            ("assignee", "json_extract(properties, '$.task.assignee')"),
         ] {
             assert_eq!(query_service.resolve_field(field, "task"), expected);
         }
