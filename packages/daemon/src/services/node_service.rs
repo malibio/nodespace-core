@@ -338,7 +338,7 @@ impl GrpcNodeService for NodeServiceImpl {
             properties,
             add_to_collections: req.add_to_collections,
             add_to_collection_ids: req.add_to_collection_ids,
-            remove_from_collections: req.remove_from_collections,
+            remove_from_collection_ids: req.remove_from_collection_ids,
             lifecycle_status: req.lifecycle_status,
         };
 
@@ -2517,7 +2517,7 @@ mod tests {
             version: None, // omit version — triggers auto-fetch path
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         });
         let updated = svc.update_node(update_req).await.unwrap().into_inner();
@@ -2553,7 +2553,7 @@ mod tests {
             version: None,
             add_to_collections: vec!["membership-coll".to_string()],
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         });
         svc.update_node(add_req).await.unwrap();
@@ -2577,7 +2577,7 @@ mod tests {
             version: None,
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: vec![collection_id.clone()],
+            remove_from_collection_ids: vec![collection_id.clone()],
             lifecycle_status: None,
         });
         svc.update_node(remove_req).await.unwrap();
@@ -2819,7 +2819,7 @@ mod tests {
             ),
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         });
         let err = svc

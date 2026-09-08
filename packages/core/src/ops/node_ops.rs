@@ -65,8 +65,10 @@ pub struct UpdateNodeInput {
     /// Collection IDs to add the node to. The ID-based counterpart of
     /// [`Self::add_to_collections`]; callers pass one form or the other.
     pub add_to_collection_ids: Vec<String>,
-    /// Collection IDs to remove the node from.
-    pub remove_from_collections: Vec<String>,
+    /// Collection IDs to remove the node from. IDs, not paths: removal detaches
+    /// an existing `member_of` edge, so a path passed here would resolve to
+    /// nothing and silently remove no membership.
+    pub remove_from_collection_ids: Vec<String>,
     pub lifecycle_status: Option<String>,
 }
 
@@ -178,8 +180,11 @@ pub async fn create_node(
         })
         .await?;
 
-    // Add to every requested collection. A failure here propagates rather than
-    // leaving the caller with a silently uncollected node.
+    // Add to every requested collection. A failure propagates rather than
+    // returning a success that hid an unfiled node — but it is not atomic with
+    // the node write above: the node stays persisted, as do any collections
+    // already joined before the failing one. The caller sees the error and can
+    // retry the join; it does not get a silent partial success.
     let mut collection_ids = Vec::with_capacity(collection_paths.len());
     if !collection_paths.is_empty() || !collection_ids_requested.is_empty() {
         let collection_service = CollectionService::new(node_service.store(), node_service);
@@ -336,7 +341,7 @@ pub async fn update_node(
     let collection_service = CollectionService::new(node_service.store(), node_service);
     let mut collections_added =
         Vec::with_capacity(input.add_to_collections.len() + input.add_to_collection_ids.len());
-    let mut collections_removed = Vec::with_capacity(input.remove_from_collections.len());
+    let mut collections_removed = Vec::with_capacity(input.remove_from_collection_ids.len());
 
     for path in &input.add_to_collections {
         let resolved = collection_service
@@ -352,7 +357,7 @@ pub async fn update_node(
         collections_added.push(collection_id.clone());
     }
 
-    for collection_id in &input.remove_from_collections {
+    for collection_id in &input.remove_from_collection_ids {
         collection_service
             .remove_from_collection(&input.node_id, collection_id)
             .await?;

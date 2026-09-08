@@ -220,8 +220,12 @@ message UpdateNodeRequest {
   // collections in one update. Missing path segments are created. Mutually
   // exclusive with `add_to_collection_ids`.
   repeated string add_to_collections = 6;
-  // Collection IDs to remove the node from. Repeated.
-  repeated string remove_from_collections = 7;
+  // Collection IDs to remove the node from. Repeated. IDs, not paths: removal
+  // detaches an existing `member_of` edge, so there is no path to resolve and
+  // a path passed here would match no edge. Named `..._ids` for that reason —
+  // `add_to_collections` above takes PATHS, and an identical suffix on the two
+  // would make a path here look correct while silently removing nothing.
+  repeated string remove_from_collection_ids = 7;
   // unset = no change; "" is not a legitimate lifecycle_status.
   optional string lifecycle_status = 8;
   // Collection IDs to add the node to. Repeated. The ID-based counterpart of

@@ -537,7 +537,7 @@ pub async fn update_node(
         properties: update.properties.map(|p| p.to_string()),
         add_to_collections: Vec::new(),
         add_to_collection_ids: Vec::new(),
-        remove_from_collections: Vec::new(),
+        remove_from_collection_ids: Vec::new(),
         lifecycle_status: update.lifecycle_status,
     };
 

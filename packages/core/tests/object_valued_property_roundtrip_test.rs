@@ -228,7 +228,7 @@ async fn object_property_survives_an_update() -> Result<()> {
             properties: Some(json!({ "address": moved })),
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )

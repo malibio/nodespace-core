@@ -2920,7 +2920,7 @@ impl GraphToolExecutor {
             properties: new_properties,
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         };
 
@@ -3195,7 +3195,7 @@ impl GraphToolExecutor {
             properties: Some(json!({ "status": params.status })),
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         };
 

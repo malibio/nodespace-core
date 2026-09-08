@@ -2276,6 +2276,112 @@ async fn node_update_collection_adds_and_removes_membership() {
     let _ = shutdown.send(());
 }
 
+/// Removal takes collection IDs, not paths — the asymmetry with
+/// `add_to_collections` (which takes paths) is why the field is named
+/// `remove_from_collection_ids`.
+///
+/// This pins the consequence, not just the name. Removal detaches an existing
+/// `member_of` edge, so a path passed where an id belongs matches no edge and
+/// `delete_relationship` reports success: the call returns Ok and the
+/// membership survives. That is a silent data-integrity failure rather than an
+/// error, so a rename back to a symmetric `remove_from_collections` — which
+/// would make passing a path look correct — must fail here.
+#[tokio::test]
+async fn removing_by_path_instead_of_id_does_not_silently_drop_membership() {
+    let (sock, shutdown, _tempdir) = spawn_test_daemon().await;
+    let mut client = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+    let mut raw = connect(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("raw connect");
+
+    let created = raw
+        .create_node(CreateNodeRequest {
+            node_type: "text".into(),
+            content: "membership survives a bad removal".into(),
+            parent_id: None,
+            properties: String::new(),
+            collections: vec!["ops:oncall".into()],
+            collection_ids: Vec::new(),
+            lifecycle_status: None,
+            id: None,
+            position: None,
+        })
+        .await
+        .expect("seed node")
+        .into_inner();
+    let node_id = created.node_id;
+
+    let before = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert_eq!(before.collection_ids.len(), 1, "fixture must be a member");
+
+    // Pass the PATH where an id belongs — the mistake the old symmetric field
+    // name invited. It removes nothing.
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: node_id.clone(),
+            content: None,
+            properties: vec![],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec!["ops:oncall".into()],
+        }),
+        true,
+    )
+    .await
+    .expect("the call itself succeeds — that is precisely the hazard");
+
+    let after = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest {
+            node_id: node_id.clone(),
+        })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert_eq!(
+        after.collection_ids, before.collection_ids,
+        "a path is not an id: nothing should have been removed"
+    );
+
+    // The id form is what actually detaches the edge.
+    let leaf_id = before.collection_ids[0].clone();
+    commands::node::run(
+        &mut client,
+        commands::node::NodeAction::Update(commands::node::UpdateArgs {
+            id: node_id.clone(),
+            content: None,
+            properties: vec![],
+            collections: vec![],
+            collection_ids: vec![],
+            remove_collection_ids: vec![leaf_id],
+        }),
+        true,
+    )
+    .await
+    .expect("removal by id");
+
+    let removed = raw
+        .get_node_collections(nodespace_daemon::nodespace::NodeCollectionsRequest { node_id })
+        .await
+        .expect("get_node_collections")
+        .into_inner();
+    assert!(
+        removed.collection_ids.is_empty(),
+        "removal by id must actually detach: {:?}",
+        removed.collection_ids
+    );
+
+    let _ = shutdown.send(());
+}
+
 /// A collection that cannot be resolved must fail the command rather than
 /// leaving the caller with a silently uncollected node.
 #[tokio::test]

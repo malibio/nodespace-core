@@ -245,7 +245,7 @@ async fn update_increments_version() {
             properties: None,
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         })
         .await
@@ -556,7 +556,7 @@ async fn watch_nodes_receives_create_update_delete_events() {
             properties: None,
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         })
         .await
@@ -1024,7 +1024,7 @@ async fn update_node_auto_fetches_version_when_omitted() {
             properties: None,
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         })
         .await
@@ -1039,7 +1039,7 @@ async fn update_node_auto_fetches_version_when_omitted() {
 }
 
 /// Parity test: add then remove a collection membership via
-/// update_node's add_to_collection / remove_from_collection fields.
+/// update_node's add_to_collections (paths) / remove_from_collection_ids (ids) fields.
 #[tokio::test]
 async fn update_node_add_then_remove_collection_membership() {
     let (mut client, shutdown, _tempdir) = spawn_test_daemon().await;
@@ -1081,7 +1081,7 @@ async fn update_node_add_then_remove_collection_membership() {
             properties: None,
             add_to_collections: vec!["membership-test".into()],
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: Vec::new(),
+            remove_from_collection_ids: Vec::new(),
             lifecycle_status: None,
         })
         .await
@@ -1109,7 +1109,7 @@ async fn update_node_add_then_remove_collection_membership() {
             properties: None,
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
-            remove_from_collections: vec![collection_id.clone()],
+            remove_from_collection_ids: vec![collection_id.clone()],
             lifecycle_status: None,
         })
         .await

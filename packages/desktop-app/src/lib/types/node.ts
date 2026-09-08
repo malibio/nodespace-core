@@ -192,7 +192,7 @@ export interface Node {
    *
    * Populated from member_of edges in the database (member_of.in = this.id).
    * This field is read-only and computed on query - to modify memberships,
-   * use the add_to_collection/remove_from_collection operations.
+   * use the add_to_collections/remove_from_collection_ids operations.
    *
    * ## Collection System Overview
    *
@@ -216,11 +216,11 @@ export interface Node {
    *   console.log('Node belongs to:', node.memberOf);
    * }
    *
-   * // Add node to collection via MCP
-   * await updateNode(node.id, node.version, { add_to_collection: 'hr:policy' });
+   * // Add node to collections by PATH (missing segments are created)
+   * await updateNode(node.id, node.version, { add_to_collections: ['hr:policy'] });
    *
-   * // Remove from collection
-   * await updateNode(node.id, node.version, { remove_from_collection: 'collection-id' });
+   * // Remove from collections by ID (removal detaches an edge, so it takes ids, not paths)
+   * await updateNode(node.id, node.version, { remove_from_collection_ids: ['collection-id'] });
    * ```
    *
    * @see CollectionNode for the collection node type itself
@@ -282,7 +282,7 @@ export interface Node {
  * });
  *
  * // Add a document to the collection
- * await updateNode(docId, docVersion, { add_to_collection: 'hr:policy' });
+ * await updateNode(docId, docVersion, { add_to_collections: ['hr:policy'] });
  *
  * // Query all members of a collection
  * const members = await queryNodes({ collection: 'hr:policy' });
