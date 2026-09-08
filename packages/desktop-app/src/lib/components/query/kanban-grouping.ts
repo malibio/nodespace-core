@@ -105,6 +105,21 @@ export function readGroupValue(node: Node, field: string): string | null {
  * by `value`, writing the value back to wherever it is *read* from (see
  * `readGroupValue`) so the card re-groups consistently after the store update.
  *
+ * `value` is `null` for a move to Unassigned — written through as a genuine
+ * `null`/absent value, not an empty string. An empty string is a real
+ * (if unusual) enum value some backends would accept and persist as a
+ * `TaskStatus::User("")` rather than clearing the field, so callers moving a
+ * card to Unassigned must pass `null` here, not `''`.
+ *
+ * Not every field this can be called for actually HAS clear semantics on the
+ * backend, though: task's `status` is a required, non-nullable `TaskStatus`
+ * with no "cleared" state at all (unlike its siblings `priority`/`dueDate`/
+ * `assignee`, which are genuinely optional). A `null` write to such a field
+ * round-trips as an HTTP success while silently changing nothing server-side
+ * — the caller is responsible for never offering Unassigned as a target for
+ * a `required: true` schema field in the first place (kanban-view.svelte's
+ * `displayColumns` and `moveCard` both guard on `activeField?.required`).
+ *
  * Both shapes this produces persist through the store's viewer-write rule: a
  * user-defined schema field — the common Kanban case — is written under
  * `properties[field]` (property changes always persist, matching
@@ -113,7 +128,11 @@ export function readGroupValue(node: Node, field: string): string | null {
  * (`status`/`priority`/…). Grouping a core type by a non-standard top-level enum
  * field is out of scope — its board would move cards but not persist them.
  */
-export function resolveFieldWrite(node: Node, field: string, value: string): Partial<Node> {
+export function resolveFieldWrite(
+  node: Node,
+  field: string,
+  value: string | null
+): Partial<Node> {
   const rec = node as unknown as Record<string, unknown>;
   const camel = toCamelCase(field);
   const props = (node.properties ?? {}) as Record<string, unknown>;

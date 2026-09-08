@@ -85,9 +85,18 @@
   const activeGroupBy = $derived(picked ?? resolveActiveGroupBy(eligible, groupBy));
   const activeField = $derived(eligible.find((f) => f.name === activeGroupBy) ?? null);
 
-  // Columns from the enum's values, plus a trailing Unassigned bucket.
+  // Columns from the enum's values, plus a trailing Unassigned bucket — but
+  // only when the field can actually hold "no value". A `required: true`
+  // field (e.g. task's `status`, which the backend models as a
+  // non-nullable `TaskStatus` with no clear semantics — see
+  // `resolveFieldWrite`'s doc comment) always has a real value on every
+  // node, so its board would never naturally bucket anything into
+  // Unassigned; offering it as a drop target would just silently no-op the
+  // write instead of clearing the field (there is nothing to clear it TO).
   const columns = $derived(enumColumns(activeField));
-  const displayColumns = $derived([...columns, { value: UNASSIGNED, label: 'Unassigned' }]);
+  const displayColumns = $derived(
+    activeField?.required ? columns : [...columns, { value: UNASSIGNED, label: 'Unassigned' }]
+  );
 
   // Bucket the (existing) result nodes by their group-by value. Reads each node
   // from the store, so a move — which rewrites the value — re-derives the board.
@@ -243,10 +252,15 @@
     const field = activeGroupBy;
     const from = readGroupValue(node, field);
     const target = toColumn === UNASSIGNED ? null : toColumn;
+    // Defense-in-depth alongside `displayColumns` omitting Unassigned for a
+    // required field (see that computation's doc comment): a required field
+    // has no clear semantics on the backend, so writing `null` to it would
+    // silently no-op rather than actually move the card anywhere.
+    if (target === null && activeField?.required) return;
     if (from === target) return; // dropping into its own column is a no-op — no write
     const chainKey = `${id}:${field}`;
     if (!chainOrigin.has(chainKey)) chainOrigin.set(chainKey, from);
-    const changes = resolveFieldWrite(node, field, target ?? '');
+    const changes = resolveFieldWrite(node, field, target);
     log.debug('KanbanView: moving card', { id, field, toColumn });
     sharedNodeStore.updateNode(
       id,
@@ -291,7 +305,7 @@
           const revertTo = chainOrigin.has(chainKey) ? chainOrigin.get(chainKey)! : from;
           chainOrigin.delete(chainKey); // this failure settles the chain
           log.debug('KanbanView: reverting failed move', { id, field, revertTo, target });
-          const revertChanges = resolveFieldWrite(currentNode, field, revertTo ?? '');
+          const revertChanges = resolveFieldWrite(currentNode, field, revertTo);
           sharedNodeStore.updateNode(
             id,
             revertChanges,

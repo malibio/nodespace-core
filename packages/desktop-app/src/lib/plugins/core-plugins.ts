@@ -207,6 +207,21 @@ export const taskNodePlugin: PluginDefinition = {
       if ('content' in changes && changes.content !== undefined)
         update.content = changes.content as string;
 
+      // A caller (e.g. Kanban grouped by a field this updater doesn't map —
+      // see `resolveFieldWrite`'s doc comment on that being out of scope)
+      // can hand this a `changes` object with no field this updater
+      // recognizes. Sending an empty `TaskNodeUpdate` to the backend would
+      // still be rejected ("TaskNodeUpdate contains no changes"), but only
+      // as an opaque, unhelpful `[ERROR] updateTaskNode – Object` once it
+      // reaches the daemon. Failing loudly here, with the fields nobody
+      // recognized, is diagnosable — the previous version silently reduced
+      // to `{}` and let a generic backend rejection stand in for it.
+      if (Object.keys(update).length === 0) {
+        throw new Error(
+          `Task update has no fields this updater can map (received: ${Object.keys(changes).join(', ') || '(none)'})`
+        );
+      }
+
       // Returns TaskNode which has node fields but not properties (flat structure)
       // Cast to Node for interface compatibility - sharedNodeStore will handle appropriately
       const result = await backendAdapter.updateTaskNode(id, version, update);
