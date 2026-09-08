@@ -233,6 +233,25 @@ nodespace search "" --type task    # list all nodes of a type (empty query)
 
 **Output:** JSON array of matching nodes
 
+### Import markdown files
+
+```bash
+nodespace import file ./notes.md --collection "docs:rust"
+nodespace import dir ./docs
+nodespace import dir ./docs ./adr ./specs --auto-collection-routing   # several directories, one call
+nodespace import dir ./docs --replace                                # re-import in place
+```
+
+Import is a repeatable sync, not a one-off bulk load: re-running `import dir`/`import file` without `--replace` skips a document already imported (no duplicates), and `--replace` refreshes its child subtree from the fresh parse while keeping the root node — so anything that already links to it stays valid. A first import and a refresh are the same command, just with or without `--replace`.
+
+`import dir` accepts more than one directory in a single call — one process, one summary, instead of a shell loop calling it once per directory. `--auto-collection-routing` still routes each file relative to *its own* directory's root, never a synthesised common ancestor across the directories passed, so two unrelated trees can't produce surprising collection paths. Per-directory failures (a bad path, an unreadable folder) are reported in the combined results rather than aborting the rest. Passing exactly one directory behaves exactly as `import dir <dir>` always has.
+
+`--auto-collection-routing` turns directory structure into collection membership for free — the folder layout becomes the collection hierarchy, no separate tagging step. Combined with `--replace`, markdown-on-disk becomes a viable source of truth: import once to build the tree, re-import to keep it current.
+
+**Options (`import dir`):** `--collection <path>`, `--use-filename-as-title`, `--auto-collection-routing`, `--exclude <pattern>` (repeatable), `--include-agent-files`, `--include-hidden`, `--no-recursive`, `--replace` — see the flag list below for exact semantics.
+
+**Output:** streamed progress events (human mode: `[step/9] name: message` on stderr, plus a pass/fail line per file); JSON mode prints one combined array of `{file_path, root_id, nodes_created, success, error, collection, archived}` once the call completes.
+
 ### Mention relationships
 
 ```bash
@@ -554,7 +573,7 @@ Import markdown files into NodeSpace
 
 **`nodespace import dir`** — Import all markdown files from a directory (recurses into sub-folders by default; see --no-recursive)
 
-- `<DIRECTORY>` — Path to the directory containing markdown files (required)
+- `<DIRECTORIES>` — Path(s) to the directory containing markdown files. Pass more than one to import several directories in a single call: each directory is walked and routed relative to its own root, and results are combined into one summary rather than reported per directory (required)
 - `--collection <COLLECTION>` — Collection path to assign all documents to
 - `--use-filename-as-title` — Use filename stems as document titles
 - `--auto-collection-routing` — Route files to collections based on directory structure

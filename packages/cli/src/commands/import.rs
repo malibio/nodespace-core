@@ -45,8 +45,12 @@ pub struct ImportFileArgs {
 
 #[derive(Args, Debug)]
 pub struct ImportDirArgs {
-    /// Path to the directory containing markdown files.
-    pub directory: String,
+    /// Path(s) to the directory containing markdown files. Pass more than
+    /// one to import several directories in a single call: each directory
+    /// is walked and routed relative to its own root, and results are
+    /// combined into one summary rather than reported per directory.
+    #[arg(required = true, num_args = 1..)]
+    pub directories: Vec<String>,
 
     /// Collection path to assign all documents to.
     #[arg(long)]
@@ -171,20 +175,52 @@ async fn run_file(client: &mut ImportClient, args: ImportFileArgs, json: bool) -
     Ok(())
 }
 
-async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> Result<()> {
-    // The three folder-walk filters default ON; each CLI flag opts out of one,
-    // so the option (recorded in ImportOptions with the inverse polarity) is the
-    // flag itself. See WalkFilters for the applied semantics.
+/// Dispatches on directory count: a single directory keeps behaving exactly
+/// as before this flag existed (`run_one_dir` is that original code path,
+/// unmodified — including a scan failure aborting the whole command). Two or
+/// more directories go through `run_multi_dir`, which walks and imports each
+/// one against its own `base_directory` (so `--auto-collection-routing`
+/// stays relative to each directory's own root, never a synthesised common
+/// ancestor) and combines the results into one summary instead of one per
+/// directory. A per-directory scan or import failure there is recorded and
+/// the remaining directories still run.
+async fn run_dir(client: &mut ImportClient, mut args: ImportDirArgs, json: bool) -> Result<()> {
     let filters = WalkFilters {
         exclude_agent_files: !args.include_agent_files,
         skip_hidden: !args.include_hidden,
         recursive: !args.no_recursive,
     };
-    let file_paths = collect_markdown_files(&args.directory, &args.exclude_patterns, filters)?;
+
+    if args.directories.len() == 1 {
+        // `mem::take` rather than `args.directories.into_iter().next()` so
+        // `args` (used below for its other fields) is never partially moved.
+        let directory = std::mem::take(&mut args.directories)
+            .into_iter()
+            .next()
+            .expect("len checked above");
+        return run_one_dir(client, directory, args, filters, json).await;
+    }
+
+    run_multi_dir(client, args, filters, json).await
+}
+
+/// Import a single directory. This is the pre-#2398 behavior verbatim: a
+/// directory that fails to scan (doesn't exist, unreadable, ...) aborts the
+/// whole command via `?` rather than being reported as a partial failure —
+/// `run_multi_dir` is deliberately more lenient about that, but a single
+/// explicit directory should still fail loudly.
+async fn run_one_dir(
+    client: &mut ImportClient,
+    directory: String,
+    args: ImportDirArgs,
+    filters: WalkFilters,
+    json: bool,
+) -> Result<()> {
+    let file_paths = collect_markdown_files(&directory, &args.exclude_patterns, filters)?;
 
     if file_paths.is_empty() {
         if !json {
-            eprintln!("No markdown files found in {}", args.directory);
+            eprintln!("No markdown files found in {}", directory);
         }
         return Ok(());
     }
@@ -194,7 +230,7 @@ async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> 
         use_filename_as_title: args.use_filename_as_title,
         auto_collection_routing: args.auto_collection_routing,
         exclude_patterns: args.exclude_patterns,
-        base_directory: args.directory,
+        base_directory: directory,
         replace: args.replace,
         include_agent_files: args.include_agent_files,
         include_hidden: args.include_hidden,
@@ -234,6 +270,144 @@ async fn run_dir(client: &mut ImportClient, args: ImportDirArgs, json: bool) -> 
     }
 
     Ok(())
+}
+
+/// Import several directories in one call, combining their results into one
+/// summary instead of reporting one per directory. Each directory is walked
+/// and imported against its own `base_directory`, so `--auto-collection-routing`
+/// stays relative to that directory's own root rather than a synthesised
+/// common ancestor across every directory passed. A directory that fails to
+/// scan (doesn't exist, unreadable, ...) or whose import RPC fails is
+/// recorded as a failure in the combined results; it does not stop the rest
+/// from running. Only ever called with 2+ directories — `run_dir` routes a
+/// single directory to `run_one_dir` instead.
+async fn run_multi_dir(
+    client: &mut ImportClient,
+    args: ImportDirArgs,
+    filters: WalkFilters,
+    json: bool,
+) -> Result<()> {
+    let mut all_results: Vec<FileImportResult> = Vec::new();
+
+    for directory in &args.directories {
+        let file_paths = match collect_markdown_files(directory, &args.exclude_patterns, filters) {
+            Ok(paths) => paths,
+            Err(e) => {
+                if !json {
+                    eprintln!("✗ {}: {}", directory, e);
+                }
+                all_results.push(directory_failure_result(
+                    directory,
+                    &format!("Failed to scan directory: {e}"),
+                ));
+                continue;
+            }
+        };
+
+        if file_paths.is_empty() {
+            if !json {
+                eprintln!("No markdown files found in {}", directory);
+            }
+            continue;
+        }
+
+        let opts = ImportOptions {
+            collection: args.collection.clone().unwrap_or_default(),
+            use_filename_as_title: args.use_filename_as_title,
+            auto_collection_routing: args.auto_collection_routing,
+            exclude_patterns: args.exclude_patterns.clone(),
+            base_directory: directory.clone(),
+            replace: args.replace,
+            include_agent_files: args.include_agent_files,
+            include_hidden: args.include_hidden,
+            no_recursion: args.no_recursive,
+        };
+
+        match stream_import(client, file_paths, opts, json).await {
+            Ok(mut results) => all_results.append(&mut results),
+            Err(e) => {
+                if !json {
+                    eprintln!("✗ {}: {}", directory, e);
+                }
+                all_results.push(directory_failure_result(directory, &e.to_string()));
+            }
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&results_to_json(&all_results))?
+        );
+    } else {
+        let succeeded = all_results.iter().filter(|r| r.success).count();
+        let failed = all_results.len() - succeeded;
+        let nodes: u32 = all_results.iter().map(|r| r.nodes_created).sum();
+        println!(
+            "Imported {} file(s) across {} directories ({} nodes){}",
+            succeeded,
+            args.directories.len(),
+            nodes,
+            if failed > 0 {
+                format!(", {failed} failed")
+            } else {
+                String::new()
+            }
+        );
+        for r in all_results.iter().filter(|r| !r.success) {
+            println!("  ✗ {}: {}", r.file_path, r.error);
+        }
+    }
+
+    Ok(())
+}
+
+/// Stream one `ImportMarkdownFiles` call to completion, printing per-step
+/// progress as it happens (human mode only), and returning the terminal
+/// (step 9) event's per-file results. Used by `run_multi_dir`, which defers
+/// printing any per-directory summary text so results from every directory
+/// combine into one summary at the end instead of one per directory.
+async fn stream_import(
+    client: &mut ImportClient,
+    file_paths: Vec<String>,
+    opts: ImportOptions,
+    json: bool,
+) -> Result<Vec<FileImportResult>> {
+    let mut stream = client
+        .import_markdown_files(Request::new(ImportMarkdownFilesRequest {
+            file_paths,
+            options: Some(opts),
+        }))
+        .await?
+        .into_inner();
+
+    let mut final_results = Vec::new();
+    while let Some(event) = stream.next().await {
+        let event = event?;
+        if !json {
+            eprintln!("[{}/9] {}: {}", event.step, event.step_name, event.message);
+        }
+        if event.step == 9 {
+            final_results = event.results;
+        }
+    }
+    Ok(final_results)
+}
+
+/// A synthetic per-file result standing in for a directory-level failure
+/// (couldn't be scanned, or the import RPC itself failed), so it surfaces in
+/// the combined results/summary the same way a single file's failure does,
+/// with no separate handling needed downstream.
+fn directory_failure_result(directory: &str, error: &str) -> FileImportResult {
+    FileImportResult {
+        file_path: directory.to_string(),
+        root_id: String::new(),
+        nodes_created: 0,
+        success: false,
+        error: error.to_string(),
+        collection: String::new(),
+        archived: false,
+    }
 }
 
 /// Filters applied while walking a directory for import. Each field is stated
