@@ -356,6 +356,7 @@ async fn search_without_embedding_service_reports_unavailable() {
             filters: None,
             threshold: 0.0,
             limit: 0,
+            include_content: false,
         },
         true,
     )

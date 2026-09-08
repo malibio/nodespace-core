@@ -142,6 +142,11 @@ message NodeData {
   string lifecycle_status = 7; // "active" | "archived" | "deleted"
   string created_at = 8;       // RFC 3339 timestamp
   string modified_at = 9;      // RFC 3339 timestamp
+  // Aggregated markdown for this node's subtree (root content plus every
+  // descendant, rendered depth-first as markdown, no inline node IDs). Only
+  // populated when the request that produced this NodeData opted in (e.g.
+  // SearchRequest.include_markdown); empty on every other read path.
+  string markdown = 11;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,9 +299,9 @@ message NodeListResponse {
 // ---------------------------------------------------------------------------
 
 // SearchRequest exposes a subset of SearchSemanticInput from
-// packages/core/src/ops/search_ops.rs. Fields not yet exposed (will be
-// added when consumers need them): exclude_collections, include_markdown,
-// include_archived, scope, include_edges, graph_boost, property_filters.
+// packages/core/src/ops/search_ops.rs (`filters` carries property_filters).
+// Fields not yet exposed (will be added when consumers need them):
+// exclude_collections, include_archived, scope, include_edges, graph_boost.
 message SearchRequest {
   string query = 1;
   // node_types filters results to any of the specified node types.
@@ -313,6 +318,13 @@ message SearchRequest {
   bool semantic = 8;          // true = semantic search, false = structured query
   // JSON-encoded array of {field, operator, value} filter objects; empty = no filters
   string filters = 9;
+  // Number of top-ranked results (by rank order) to attach aggregated
+  // subtree markdown to, via NodeData.markdown — lets a caller answer from
+  // the result set itself instead of a follow-up GetChildren/ExportMarkdown
+  // per hit. 0 (default) = no results get markdown, matching prior
+  // behavior. Clamped server-side to 5 regardless of the value sent, so
+  // output size stays bounded even at a large --limit.
+  int32 include_markdown = 10;
 }
 
 // SearchNodes returns NodeListResponse.

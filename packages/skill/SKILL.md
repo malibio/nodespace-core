@@ -135,7 +135,7 @@ Use this to pick the right command for the task at hand.
 
 Date format for all date properties: **YYYY-MM-DD**. Available operators: `equals`, `contains`, `gt`, `lt`, `gte`, `lte`, `in`, `exists`. Filter types: `property`, `content`, `relationship`, `metadata`.
 
-**`nodespace search` is semantic** (embedding-based similarity), ranked by relevance. Pass `--type` to narrow to one or more node types, `--limit` to cap results (default 20). It does not currently expose graph-boost, cross-collection exclusion, or edge-inclusion — for those, fall back to `nodespace query` plus a follow-up `nodespace relationship get` if you need connected nodes.
+**`nodespace search` is semantic** (embedding-based similarity), ranked by relevance. Pass `--type` to narrow to one or more node types, `--limit` to cap results (default 20), `--include-content` to also read the top 5 hits (a bare result is just its heading). No graph-boost, cross-collection exclusion, or edge-inclusion — fall back to `nodespace query` plus `nodespace relationship get` for those.
 
 **Multiple topics:** run `nodespace search` once per topic rather than one broad search plus per-result fetches.
 

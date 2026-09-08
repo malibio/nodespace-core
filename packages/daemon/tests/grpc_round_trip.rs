@@ -483,6 +483,176 @@ async fn search_nodes_empty_query_matches_wildcard_query() {
     let _ = shutdown.send(());
 }
 
+/// A search result can opt into carrying enough content to answer
+/// from — the top-ranked results attach their subtree markdown (root plus
+/// descendants), rather than forcing a follow-up fetch per hit to reach a
+/// document's body. Exercises the enumerate ("*") path since it needs no
+/// loaded embedding model; the markdown-attachment code downstream of
+/// ranking is identical for a real semantic search.
+#[tokio::test]
+async fn search_nodes_include_markdown_attaches_subtree_content() {
+    let (mut client, node_service, shutdown, _tempdir) = spawn_test_daemon_with_embeddings().await;
+
+    let root_id = node_service
+        .create_node(nodespace_core::models::Node::new(
+            "text".to_string(),
+            "# Team Onboarding".to_string(),
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("out-of-band create root failed");
+
+    node_service
+        .create_node_with_parent(nodespace_core::services::CreateNodeParams {
+            id: None,
+            node_type: "text".to_string(),
+            content: "New hires start with the setup guide.".to_string(),
+            parent_id: Some(root_id.clone()),
+            position: nodespace_core::services::InsertPositionOwned::End,
+            properties: serde_json::json!({}),
+        })
+        .await
+        .expect("out-of-band create child failed");
+
+    // Default (include_markdown unset -> 0): no markdown attached, matching
+    // prior behavior — a plain search stays cheap.
+    let bare = client
+        .search_nodes(SearchRequest {
+            query: "*".into(),
+            node_types: vec!["text".into()],
+            semantic: true,
+            ..SearchRequest::default()
+        })
+        .await
+        .expect("search_nodes failed")
+        .into_inner();
+    let bare_root = bare
+        .nodes
+        .iter()
+        .find(|n| n.id == root_id)
+        .expect("root present in bare results");
+    assert!(
+        bare_root.markdown.is_empty(),
+        "markdown must stay empty unless include_markdown is requested"
+    );
+    assert_eq!(bare_root.content, "# Team Onboarding");
+
+    // Opt in: the root's markdown now carries the child's content too, so
+    // the result answers on its own without a follow-up GetChildren call.
+    let expanded = client
+        .search_nodes(SearchRequest {
+            query: "*".into(),
+            node_types: vec!["text".into()],
+            semantic: true,
+            include_markdown: 5,
+            ..SearchRequest::default()
+        })
+        .await
+        .expect("search_nodes with include_markdown failed")
+        .into_inner();
+    let expanded_root = expanded
+        .nodes
+        .iter()
+        .find(|n| n.id == root_id)
+        .expect("root present in expanded results");
+    assert!(
+        expanded_root
+            .markdown
+            .contains("New hires start with the setup guide."),
+        "expected subtree markdown to include the child's content, got: {:?}",
+        expanded_root.markdown
+    );
+    assert!(expanded_root.markdown.contains("Team Onboarding"));
+    // The result's own `content` field is untouched by the opt-in — only the
+    // new `markdown` field carries the expanded subtree.
+    assert_eq!(expanded_root.content, "# Team Onboarding");
+
+    let _ = shutdown.send(());
+}
+
+/// A negative `include_markdown` from a malformed/adversarial client must
+/// not panic via `i32 -> usize` wraparound — it clamps to 0 (no markdown),
+/// the same as never sending the field.
+#[tokio::test]
+async fn search_nodes_negative_include_markdown_clamps_to_zero() {
+    let (mut client, node_service, shutdown, _tempdir) = spawn_test_daemon_with_embeddings().await;
+
+    let root_id = node_service
+        .create_node(nodespace_core::models::Node::new(
+            "text".to_string(),
+            "Some root".to_string(),
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("out-of-band create root failed");
+
+    let response = client
+        .search_nodes(SearchRequest {
+            query: "*".into(),
+            node_types: vec!["text".into()],
+            semantic: true,
+            include_markdown: -1,
+            ..SearchRequest::default()
+        })
+        .await
+        .expect("search_nodes with negative include_markdown failed")
+        .into_inner();
+
+    let root = response
+        .nodes
+        .iter()
+        .find(|n| n.id == root_id)
+        .expect("root present in results");
+    assert!(root.markdown.is_empty());
+
+    let _ = shutdown.send(());
+}
+
+/// An oversized `include_markdown` (well above the documented cap) still
+/// only attaches markdown to at most 5 results — the upper bound is
+/// enforced server-side, not merely by what a well-behaved client happens
+/// to send.
+#[tokio::test]
+async fn search_nodes_oversized_include_markdown_still_caps_at_five() {
+    let (mut client, node_service, shutdown, _tempdir) = spawn_test_daemon_with_embeddings().await;
+
+    for i in 0..7 {
+        node_service
+            .create_node(nodespace_core::models::Node::new(
+                "text".to_string(),
+                format!("Capped root {i}"),
+                serde_json::json!({}),
+            ))
+            .await
+            .expect("out-of-band create root failed");
+    }
+
+    let response = client
+        .search_nodes(SearchRequest {
+            query: "*".into(),
+            node_types: vec!["text".into()],
+            semantic: true,
+            include_markdown: 100,
+            ..SearchRequest::default()
+        })
+        .await
+        .expect("search_nodes with oversized include_markdown failed")
+        .into_inner();
+
+    assert_eq!(response.count, 7, "expected all 7 seeded roots back");
+    let with_markdown = response
+        .nodes
+        .iter()
+        .filter(|n| !n.markdown.is_empty())
+        .count();
+    assert_eq!(
+        with_markdown, 5,
+        "include_markdown must be capped at 5 regardless of the requested value"
+    );
+
+    let _ = shutdown.send(());
+}
+
 /// Per-event timeout for WatchNodes streaming tests. Generous enough to
 /// absorb a loaded CI runner but short enough to fail fast when an event is
 /// genuinely missing.

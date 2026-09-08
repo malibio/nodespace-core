@@ -525,6 +525,7 @@ Semantic search across the knowledge graph
 - `--filters <FILTERS>` — JSON-encoded array of {field, operator, value} filter objects
 - `--threshold <THRESHOLD>` — Semantic similarity threshold, 0.0-1.0 (0.0 = server default of 0.7)
 - `--limit <LIMIT>` — Maximum number of results to return (0 = server default, currently 20)
+- `--include-content` — Attach each top result's aggregated subtree markdown to the response, so a hit can be answered from directly instead of needing a follow-up `node get`/`node export` per result. Bounded server-side to the top 5 results regardless of `--limit`; off by default so a plain search stays cheap
 
 ### `nodespace query`
 
