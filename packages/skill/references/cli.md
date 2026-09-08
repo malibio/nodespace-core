@@ -578,7 +578,7 @@ Import markdown files into NodeSpace
 - `--use-filename-as-title` — Use filename stems as document titles
 - `--auto-collection-routing` — Route files to collections based on directory structure
 - `--exclude <EXCLUDE_PATTERNS>` — Directory names to exclude (repeatable, e.g. --exclude node_modules)
-- `--include-agent-files` — Include CLAUDE.md / AGENTS.md files (default: excluded). Matched by basename, case-insensitive, at any depth
+- `--include-agent-files` — Include CLAUDE.md / AGENTS.md / DESIGN.md files (default: excluded). Matched by basename, case-insensitive, at any depth
 - `--include-hidden` — Include hidden files and folders — any path component starting with '.', e.g. .git/, .claude/, dotfiles (default: skipped)
 - `--no-recursive` — Import only the top-level directory; do not descend into sub-folders (default: recurses into sub-folders)
 - `--replace` — Refresh already-imported documents in place: replace each existing document's child subtree from the fresh parse, keeping its root node so inbound links survive. Without this, already-imported documents are skipped (a plain re-import never duplicates)

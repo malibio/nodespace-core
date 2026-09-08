@@ -50,8 +50,8 @@ message ImportOptions {
   // *opt-out* of its default-on filter so the proto3 zero value (false) is the
   // default-on behavior: leaving a field unset keeps the filter active.
   //
-  // When true, include CLAUDE.md / AGENTS.md files. Matched by basename,
-  // case-insensitive, at any depth. Default (false) excludes them.
+  // When true, include CLAUDE.md / AGENTS.md / DESIGN.md files. Matched by
+  // basename, case-insensitive, at any depth. Default (false) excludes them.
   bool include_agent_files = 7;
   // When true, include hidden files and folders — any path component starting
   // with '.' (e.g. .git/, .claude/, dotfiles). Default (false) skips them.

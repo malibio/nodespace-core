@@ -2,9 +2,7 @@
     import { Badge } from '$lib/components/ui/badge';
     import { Button } from '$lib/components/ui/button';
     import FolderInputIcon from '@lucide/svelte/icons/folder-input';
-    import ImportOptionsModal from '$lib/components/settings/import-options-modal.svelte';
-
-    let importModalOpen = $state(false);
+    import { importModalStore } from '$lib/stores/import-modal.svelte';
 </script>
 
 <div class="max-w-[600px]">
@@ -13,7 +11,7 @@
 
     <div class="border-border flex items-center justify-between border-b py-3">
         <span class="text-foreground text-sm">Local Folder Import</span>
-        <Button variant="outline" size="sm" onclick={() => (importModalOpen = true)}>
+        <Button variant="outline" size="sm" onclick={() => importModalStore.show()}>
             <FolderInputIcon />
             Import Folder…
         </Button>
@@ -29,5 +27,3 @@
         <Badge variant="secondary">Coming Soon</Badge>
     </div>
 </div>
-
-<ImportOptionsModal bind:open={importModalOpen} />

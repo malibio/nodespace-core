@@ -23,7 +23,7 @@ import type { ImportOptions } from './import-service';
 export interface ImportModalState {
   /** Absolute path of the folder chosen via the native picker. */
   folderPath: string;
-  /** "Exclude CLAUDE.md / AGENTS.md" (default checked). */
+  /** "Exclude agent/design files (CLAUDE.md, AGENTS.md, DESIGN.md)" (default checked). */
   excludeAgentFiles: boolean;
   /** "Skip hidden files/folders" (default checked). */
   skipHidden: boolean;
