@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { computeTabTitle } from '$lib/utils/tab-title';
 import { pluginRegistry } from '$lib/plugins/plugin-registry';
-import type { Tab } from '$lib/stores/navigation.svelte';
+import { LOADING_TAB_TITLE, type Tab } from '$lib/stores/navigation.svelte';
 import { createTestNode } from '../helpers/test-helpers';
 
 function createTestTab(overrides: Partial<Tab> = {}): Tab {
@@ -78,19 +78,38 @@ describe('computeTabTitle', () => {
 
   it('falls back to "Untitled" — not the stale placeholder — once the node is hydrated but titleless', () => {
     // A hydrated node that resolves to no title (e.g. a brand-new ai-chat with
-    // no content yet) must NOT keep showing the tab's opening placeholder —
-    // "Loading..." would then never clear, since a genuinely titleless node
-    // never makes getNodeTitle return truthy. This is distinct from the
+    // no content yet) must NOT keep showing the tab's opening "Loading..."
+    // placeholder — it would then never clear, since a genuinely titleless
+    // node never makes getNodeTitle return truthy. This is distinct from the
     // "no node found yet" case above, which correctly keeps tab.title.
     const node = createTestNode({ nodeType: 'date', content: '' });
     const tab = createTestTab({
       content: { nodeId: node.id, nodeType: 'date' },
-      title: 'Loading...'
+      title: LOADING_TAB_TITLE
     });
     const getNode = vi.fn().mockReturnValue(node);
     vi.spyOn(pluginRegistry, 'getNodeTitle').mockReturnValue(undefined);
 
     expect(computeTabTitle(tab, getNode)).toBe('Untitled');
+  });
+
+  it('keeps a caller-supplied title (not the generic placeholder) even once hydrated with no title of its own', () => {
+    // A tab can open with something better than the generic "Loading..."
+    // placeholder — e.g. the relationship picker passes a related node's raw
+    // id as a stable, distinguishing label when that node has neither a
+    // title nor content. Once hydrated, a titleless node must NOT collapse
+    // that into the generic "Untitled" fallback: several such tabs would
+    // then be indistinguishable from each other in the tab bar, the exact
+    // "identical placeholder rows" problem the fallback exists to avoid.
+    const node = createTestNode({ nodeType: 'person', content: '' });
+    const tab = createTestTab({
+      content: { nodeId: node.id, nodeType: 'person' },
+      title: node.id
+    });
+    const getNode = vi.fn().mockReturnValue(node);
+    vi.spyOn(pluginRegistry, 'getNodeTitle').mockReturnValue(undefined);
+
+    expect(computeTabTitle(tab, getNode)).toBe(node.id);
   });
 
   it('truncates and strips markdown header syntax via formatTabTitle', () => {

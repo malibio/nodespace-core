@@ -27,7 +27,8 @@ import {
   createPane,
   setActivePane,
   setActiveTab,
-  DEFAULT_PANE_ID
+  DEFAULT_PANE_ID,
+  LOADING_TAB_TITLE
 } from '$lib/stores/navigation.svelte';
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
@@ -63,10 +64,13 @@ export interface FocusOrOpenOptions {
    */
   nodeType: string;
   /**
-   * Title for a newly created tab. Defaults to `'Loading...'`, a placeholder
-   * that `computeTabTitle` (tab-title.ts) replaces once the node is present in
-   * the store — pass a value only when the caller already knows the real
-   * title (skipping that placeholder flash), not as a substitute for it.
+   * Title for a newly created tab. Defaults to `LOADING_TAB_TITLE`
+   * (`navigation.svelte.ts`), a placeholder `computeTabTitle` (tab-title.ts)
+   * replaces with a generic fallback once the node hydrates with no title of
+   * its own. Pass a value only when the caller already knows the real title,
+   * or has something better than the generic fallback to show meanwhile
+   * (e.g. a related node's id) — computeTabTitle preserves any title other
+   * than the exact default, even past hydration.
    */
   title?: string;
   /**
@@ -446,7 +450,7 @@ export class NavigationService {
    * @param options - Tab `nodeType`, optional `title`, optional `matchNodeType`
    */
   focusOrOpenNode(nodeId: string, options: FocusOrOpenOptions): void {
-    const { nodeType, title = 'Loading...', matchNodeType = false } = options;
+    const { nodeType, title = LOADING_TAB_TITLE, matchNodeType = false } = options;
 
     if (this.focusNodeTab(nodeId, matchNodeType ? nodeType : undefined)) return;
 
