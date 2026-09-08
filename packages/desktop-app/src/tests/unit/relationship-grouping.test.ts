@@ -656,4 +656,18 @@ describe('relationship-grouping: linkedTargetIds / isTargetLinked / filterUnlink
     const candidates = [{ id: 'p9' }];
     expect(filterUnlinkedTargets(group, candidates)).toEqual(candidates);
   });
+
+  it('isTargetLinked recognizes a differently-cased paste of an already-linked id', () => {
+    // The picker's UUID_RE accepts a pasted id in any case, so a paste that
+    // differs only in case from an already-linked row's id must still be
+    // caught here — otherwise it slips past this exact guard by casing alone.
+    const group = groupWithRows(['550e8400-e29b-41d4-a716-446655440000']);
+    expect(isTargetLinked(group, '550E8400-E29B-41D4-A716-446655440000')).toBe(true);
+  });
+
+  it('filterUnlinkedTargets drops a differently-cased duplicate of an already-linked id', () => {
+    const group = groupWithRows(['550e8400-e29b-41d4-a716-446655440000']);
+    const candidates = [{ id: '550E8400-E29B-41D4-A716-446655440000' }, { id: 'p9' }];
+    expect(filterUnlinkedTargets(group, candidates)).toEqual([{ id: 'p9' }]);
+  });
 });

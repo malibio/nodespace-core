@@ -283,14 +283,18 @@ export function groupSupportsEdgeEditing(group: RelationshipGroupView): boolean 
  * search results and a pasted id) filter against this same set, so pasting
  * the id of an already-linked node can never slip past the guard that search
  * results are already filtered by.
+ *
+ * Lowercased: the picker's UUID_RE accepts a pasted id in any case, so a
+ * differently-cased paste of an already-linked id must still compare equal
+ * here — otherwise it would slip past this exact guard by casing alone.
  */
 export function linkedTargetIds(group: RelationshipGroupView): Set<string> {
-  return new Set(group.rows.map((row) => row.id));
+  return new Set(group.rows.map((row) => row.id.toLowerCase()));
 }
 
-/** Whether a node id is already linked into this group. */
+/** Whether a node id is already linked into this group, case-insensitively. */
 export function isTargetLinked(group: RelationshipGroupView, id: string): boolean {
-  return linkedTargetIds(group).has(id);
+  return linkedTargetIds(group).has(id.toLowerCase());
 }
 
 /** Drop nodes already linked into the group from a set of candidate targets. */
@@ -299,7 +303,7 @@ export function filterUnlinkedTargets<T extends { id: string }>(
   nodes: T[]
 ): T[] {
   const existing = linkedTargetIds(group);
-  return nodes.filter((node) => !existing.has(node.id));
+  return nodes.filter((node) => !existing.has(node.id.toLowerCase()));
 }
 
 /** The groups a node's relationship panel renders, partitioned by what each needs. */
