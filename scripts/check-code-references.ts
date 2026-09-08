@@ -40,7 +40,20 @@ const SCAN_ROOTS = [
   "packages/nlp-engine",
 ];
 const EXTENSIONS = new Set([".rs", ".ts", ".svelte", ".js"]);
-const EXCLUDE_DIR_NAMES = new Set(["node_modules", "target", ".git", "dist", "build"]);
+// Generated build output, not source. `.svelte-kit` matters as much as the
+// rest: it inlines source comments into its bundles, so a build dir left over
+// from before a cleanup keeps reporting references the source no longer has —
+// and because the walk reads the filesystem rather than git, being gitignored
+// does not spare it. That failure blocks every push until the stale build is
+// deleted, which is a false positive rather than drift.
+const EXCLUDE_DIR_NAMES = new Set([
+  "node_modules",
+  "target",
+  ".git",
+  "dist",
+  "build",
+  ".svelte-kit",
+]);
 
 // This checker's own source and test necessarily describe the patterns they
 // scan for in comments/messages/fixtures, which would otherwise self-match.
