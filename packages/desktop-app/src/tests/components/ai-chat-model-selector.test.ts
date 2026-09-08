@@ -55,21 +55,33 @@ function handleChangeValue(
   }
 }
 
-/** Mirrors the pty branch of handleModelSelect() from ai-chat-node-viewer.svelte. */
+/**
+ * Mirrors the pty branch of handleModelSelect() from ai-chat-node-viewer.svelte.
+ *
+ * The write keys are the canonical snake_case schema names (`turn_status`/
+ * `session_status`), NOT the camelCase `turnStatus`/`sessionStatus` the
+ * confirmed node reads back as. This distinction is load-bearing, not
+ * cosmetic: ai-chat has no dedicated typed write command like `task` does,
+ * so whatever key this object uses reaches storage verbatim. A prior version
+ * of this mirror (and the real component) used camelCase here, which reached
+ * storage but was never recognized by anything reading the turn/session
+ * axes — a real PTY launch silently never set session_status at all. See
+ * `AiChatNode::from_node`'s doc comment (Rust) for the full incident.
+ */
 function buildPtyUpdate(
   current: Partial<AiChatNode> | undefined,
   agentId: string
 ): {
   messages: unknown[];
-  turnStatus: string;
-  sessionStatus: string;
+  turn_status: string;
+  session_status: string;
   provider: string;
   model: string | null;
 } {
   return {
     messages: current?.messages ?? [],
-    turnStatus: current?.turnStatus ?? 'idle',
-    sessionStatus: current?.sessionStatus ?? 'active',
+    turn_status: current?.turnStatus ?? 'idle',
+    session_status: current?.sessionStatus ?? 'active',
     provider: 'pty',
     model: agentId || null,
   };
@@ -164,7 +176,7 @@ describe('AiChatModelSelector — PTY agent list derivation', () => {
 });
 
 describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
-  it('writes provider "pty" with the selected agent id as model, preserving existing messages/turnStatus/sessionStatus', () => {
+  it('writes provider "pty" with the selected agent id as model, preserving existing messages/turn_status/session_status', () => {
     const current: Partial<AiChatNode> = {
       messages: [{ role: 'user', content: 'hi' }] as AiChatNode['messages'],
       turnStatus: 'processing',
@@ -176,18 +188,18 @@ describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
     expect(update.provider).toBe('pty');
     expect(update.model).toBe('claude-code');
     expect(update.messages).toEqual(current.messages);
-    expect(update.turnStatus).toBe('processing');
-    expect(update.sessionStatus).toBe('active');
+    expect(update.turn_status).toBe('processing');
+    expect(update.session_status).toBe('active');
   });
 
-  it('defaults messages to [], turnStatus to "idle", and sessionStatus to "active" for a fresh node', () => {
+  it('defaults messages to [], turn_status to "idle", and session_status to "active" for a fresh node', () => {
     const update = buildPtyUpdate(undefined, 'gemini-cli');
 
     expect(update.provider).toBe('pty');
     expect(update.model).toBe('gemini-cli');
     expect(update.messages).toEqual([]);
-    expect(update.turnStatus).toBe('idle');
-    expect(update.sessionStatus).toBe('active');
+    expect(update.turn_status).toBe('idle');
+    expect(update.session_status).toBe('active');
   });
 
   it('nulls model when no agent id is provided', () => {

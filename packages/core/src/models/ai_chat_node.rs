@@ -183,6 +183,23 @@ impl AiChatNode {
     /// `flatten_properties_for_api` has promoted them). Mirrors the dual
     /// nested/flat handling in [`TaskNode::from_node`](crate::models::TaskNode).
     ///
+    /// Reads ONLY the canonical snake_case schema names (`turn_status`,
+    /// `session_status`) — deliberately not dual-cased. An earlier version of
+    /// this function checked camelCase first as a defensive fallback for a
+    /// frontend write that (at the time) sent `turnStatus`/`sessionStatus`
+    /// verbatim. That turned out to be actively wrong, not just redundant:
+    /// updates here deep-merge onto the existing stored object rather than
+    /// replacing it, so a stray camelCase key, once written, is never
+    /// cleaned up — the daemon's own canonical-key rewrites land beside it,
+    /// not over it. Checking camelCase first then means a *stale* value
+    /// permanently shadows every subsequent *fresh* canonical write (this
+    /// broke `ai_chat_send_to_idle_test`: the turn completed and the daemon
+    /// correctly wrote `turn_status: "idle"`, but the stale `turnStatus:
+    /// "processing"` from the original send kept winning forever). The real
+    /// fix is at the write side: every writer — daemon and frontend alike —
+    /// must use this exact canonical key, so there is only ever one key to
+    /// read.
+    ///
     /// # Errors
     ///
     /// Returns [`ValidationError::InvalidNodeType`] when the node is not an

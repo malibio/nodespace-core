@@ -233,7 +233,13 @@
             ...current?.properties,
             'capture:agent_type': selectedAgent,
             'capture:session_id': result.sessionId,
-            sessionStatus: 'active',
+            // Canonical snake_case key, matching the schema's declared field
+            // name and what capture_service.rs's backfill writes — ai-chat
+            // has no dedicated typed write command, so whatever key this
+            // object uses reaches storage verbatim (see AiChatNode::
+            // from_node's doc comment for why a camelCase key here would be
+            // silently wrong, not just inconsistent).
+            session_status: 'active',
           },
         },
         { type: 'viewer', viewerId: 'ai-chat-pty-session' }

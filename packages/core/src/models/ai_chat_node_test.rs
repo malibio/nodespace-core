@@ -65,6 +65,62 @@ mod tests {
         assert_eq!(chat.messages[0].role, "assistant");
     }
 
+    /// Deliberately NOT recognized: a real "Send" click once wrote camelCase
+    /// (`turnStatus`) here, and `from_node` briefly dual-read it as a
+    /// convenience. That was wrong, not just redundant — writes here
+    /// deep-merge onto the existing stored object instead of replacing it,
+    /// so a stray camelCase key is never cleaned up, and reading it
+    /// preferentially meant a stale value permanently shadowed every
+    /// subsequent fresh canonical write (this is exactly how
+    /// `ai_chat_send_to_idle_test` broke: the turn completed and the daemon
+    /// correctly wrote `turn_status: "idle"`, but the stale `turnStatus:
+    /// "processing"` from the original send kept winning forever). The real
+    /// fix is at the write side — every writer uses this exact canonical
+    /// key — so `from_node` must ignore camelCase entirely, not merely
+    /// deprioritize it.
+    #[test]
+    fn from_node_ignores_camel_case_turn_and_session_status() {
+        let node = ai_chat_node(json!({
+            "ai-chat": {
+                "turnStatus": "processing",
+                "sessionStatus": "archived",
+                "messages": []
+            }
+        }));
+
+        let chat = AiChatNode::from_node(node).unwrap();
+        assert_eq!(
+            chat.turn_status, "",
+            "camelCase must not be read as the turn axis"
+        );
+        assert_eq!(
+            chat.session_status, "",
+            "camelCase must not be read as the session axis"
+        );
+    }
+
+    /// The scenario that broke `ai_chat_send_to_idle_test`: a stale camelCase
+    /// key sits beside a fresh canonical one (deep-merge never removes the
+    /// former). The canonical key must win regardless — this is what makes
+    /// it safe for `to_properties_value` to always emit only the canonical
+    /// name without needing to actively strip a same-axis camelCase key.
+    #[test]
+    fn from_node_reads_canonical_key_even_beside_a_stale_camel_case_one() {
+        let node = ai_chat_node(json!({
+            "ai-chat": {
+                "turnStatus": "processing",
+                "turn_status": "idle",
+                "sessionStatus": "archived",
+                "session_status": "active",
+                "messages": []
+            }
+        }));
+
+        let chat = AiChatNode::from_node(node).unwrap();
+        assert_eq!(chat.turn_status, "idle");
+        assert_eq!(chat.session_status, "active");
+    }
+
     #[test]
     fn from_node_defaults_when_empty() {
         let node = ai_chat_node(json!({ "ai-chat": {} }));

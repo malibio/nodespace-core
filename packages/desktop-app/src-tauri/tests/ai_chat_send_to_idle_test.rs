@@ -160,8 +160,18 @@ async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
 
     // "Send a message": append a user message and flip turn_status to
     // processing — the exact mechanism scripts/aichat.ts's cmdSend
-    // documents. session_status is deliberately untouched: this write owns
-    // only the turn axis, mirroring the real frontend's handleSend.
+    // documents, and the exact key shape the real frontend's handleSend
+    // actually sends: the canonical snake_case `turn_status`, matching the
+    // schema's declared field name. This matters more than it looks: ai-chat
+    // has no dedicated typed write command like task does, so the generic
+    // updateNode path forwards whatever key the frontend used verbatim all
+    // the way into storage — a camelCase `turnStatus` write once reached
+    // storage but was never recognized by anything that reads the turn axis,
+    // so a real "Send" click silently never triggered a turn at all (see
+    // `AiChatNode::from_node`'s doc comment for the full incident). Every
+    // writer, frontend included, must use this exact key. session_status is
+    // deliberately untouched: this write owns only the turn axis, mirroring
+    // handleSend.
     let after_send = update_node(
         state.clone(),
         id.clone(),

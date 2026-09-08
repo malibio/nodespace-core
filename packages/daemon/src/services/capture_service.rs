@@ -59,10 +59,18 @@ pub struct CompletedSession {
 /// writer (it only merges `capture:*` keys plus `session_status`/`last_active`),
 /// so the node's optimistic-concurrency version is not a concern here — and a
 /// spurious version conflict from a concurrent viewer edit must not silently
-/// drop the capture. The update deep-merges, so it never clobbers
-/// `provider`/`messages`, and — since it only ever writes `session_status`,
-/// never `turn_status` — it cannot clobber whatever turn state the daemon left
-/// behind either.
+/// drop the capture. The update deep-merges at the property level, so a
+/// non-conflicting write never clobbers `provider`/`messages`, and this path
+/// only ever writes `session_status`, never `turn_status`. That does NOT make
+/// the two axes fully race-free under genuine concurrency, though:
+/// `update_node_unchecked` bypasses the version check entirely (no bump), so
+/// a concurrent daemon-authored `turn_status` write racing this one is a
+/// read-modify-write against the same row with no ordering guarantee between
+/// them — the loser's read predates the winner's write and its merge can
+/// still land a stale value. Acceptable today because capture fires once, at
+/// session end, when no turn is normally in flight; a real fix (e.g. routing
+/// through the checked update path, or a seam like ADR-067's proposed
+/// unit-of-work boundary) is a separate, larger change.
 pub async fn finalize_capture(
     session: &CompletedSession,
     capture: &SessionCapture,

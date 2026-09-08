@@ -177,6 +177,10 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
 fn ai_chat_node_to_value(node: Node) -> Result<serde_json::Value, String> {
     let props = &node.properties;
 
+    // Canonical snake_case only — see `nodespace_core::models::AiChatNode::
+    // from_node`'s doc comment for why a camelCase fallback here would be
+    // actively wrong (a stale camelCase key permanently shadowing fresh
+    // canonical writes), not just redundant.
     let turn_status = props
         .get("turn_status")
         .and_then(|v| v.as_str())
@@ -315,6 +319,38 @@ mod wire_contract {
         assert_eq!(
             out["sessionStatus"], "archived",
             "session_status must promote even while a turn is processing"
+        );
+    }
+
+    /// Deliberately NOT recognized: see `nodespace_core::models::AiChatNode::
+    /// from_node`'s doc comment. Writes here deep-merge onto the existing
+    /// stored object rather than replacing it, so a camelCase key, once
+    /// written, is never cleaned up — recognizing it would let a stale value
+    /// permanently shadow every subsequent fresh canonical write. Every
+    /// writer must use the canonical snake_case name; this promotion must
+    /// stay blind to the camelCase form, not just deprioritize it.
+    #[test]
+    fn ai_chat_ignores_camel_case_turn_and_session_status() {
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Chat".to_string(),
+            serde_json::json!({
+                "ai-chat": {
+                    "turnStatus": "processing",
+                    "sessionStatus": "archived",
+                    "messages": []
+                }
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        assert_eq!(
+            out["turnStatus"], "",
+            "camelCase must not promote the turn axis"
+        );
+        assert_eq!(
+            out["sessionStatus"], "",
+            "camelCase must not promote the session axis"
         );
     }
 
