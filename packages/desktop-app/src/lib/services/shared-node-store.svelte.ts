@@ -2175,14 +2175,29 @@ export class SharedNodeStore {
                   // stuck on "Choose a model to get started" even after the write
                   // succeeded.
                   //
-                  // Spread the full response over the local node so every
-                  // type-specific top-level field is corrected, but re-assert
-                  // `content` and `properties` from the local node afterward if
-                  // they've moved on since `currentNode` was snapshotted for this
-                  // RPC — a user (or another in-flight write) may have changed
-                  // either while this request was in flight, and blindly applying
-                  // the response for that older send would clobber the newer local
-                  // state. `properties` is compared shallowly since callers replace
+                  // Spread the response over the local node so every
+                  // type-specific top-level field is corrected, but scope the
+                  // patch: apply a field from the response only if the local
+                  // node's current value for it still matches `currentNode` —
+                  // the pre-RPC snapshot this write's request was actually
+                  // built from. `currentNode` here IS the full payload this
+                  // write sent, so "still matches" covers both "this write
+                  // changed it" (response reflects this write's own value)
+                  // and "nothing changed it" (safe to take the backend's
+                  // value, including a newly-promoted typed field where both
+                  // sides are `undefined`). If a user (or another in-flight
+                  // write, e.g. a second Kanban move on the same node fired
+                  // before this RPC resolved) changed a field this write
+                  // never touched while this request was in flight, the
+                  // field no longer matches `currentNode` and is left alone —
+                  // otherwise this response's stale value would clobber the
+                  // newer one (mirrors the equivalent, already-fixed clobber
+                  // class in `updateNode()`'s success handler). `content` and
+                  // `properties` keep their own special-case handling;
+                  // `version` is always applied — every response's version is
+                  // the latest authoritative one, needed for the next
+                  // write's OCC check regardless of which fields it touches.
+                  // `properties` is compared shallowly since callers replace
                   // it wholesale rather than patching individual keys.
                   const latestNode = this.nodes.get(nodeId);
                   if (latestNode && updatedFromBackend) {
@@ -2198,9 +2213,21 @@ export class SharedNodeStore {
                       localHasMovedOn || updatedFromBackend.properties === undefined
                         ? latestNode.properties
                         : updatedFromBackend.properties;
-                    Object.assign(latestNode, updatedFromBackend, {
+                    const scopedFields: Record<string, unknown> = {};
+                    const localRec = latestNode as unknown as Record<string, unknown>;
+                    const currentRec = currentNode as unknown as Record<string, unknown>;
+                    for (const [key, value] of Object.entries(updatedFromBackend)) {
+                      if (key === 'content' || key === 'properties' || key === 'version') {
+                        continue;
+                      }
+                      if (localRec[key] === currentRec[key]) {
+                        scopedFields[key] = value;
+                      }
+                    }
+                    Object.assign(latestNode, scopedFields, {
                       content: localContent,
-                      properties: localProperties
+                      properties: localProperties,
+                      version: updatedFromBackend.version
                     });
                     this.nodesSet(nodeId, latestNode);
                   }
