@@ -20,6 +20,20 @@ export function normalizeNodeData(nodeData: Node): Node {
 }
 
 /**
+ * One promoted field: `from` is the property key the write payload actually
+ * uses (what `changesProperties`/`mergedProperties` are keyed by), `to` is the
+ * top-level `Node` key viewers read. The two differ for ai-chat's canonical
+ * snake_case property keys (`turn_status`, `session_status`), which the
+ * backend promotes to camelCase top-level fields (`turnStatus`,
+ * `sessionStatus`) — see `ai_chat_node_to_value` in
+ * `packages/nodespace-types/src/convert.rs`. They're equal everywhere else.
+ */
+interface PromotedField {
+  from: string;
+  to: string;
+}
+
+/**
  * Optimistic-only mirror of the backend's typed-field promotion
  * (`node_to_typed_value` / `flatten_properties_for_api` in
  * `packages/nodespace-types/src/convert.rs`). For each node type, lists the
@@ -32,9 +46,22 @@ export function normalizeNodeData(nodeData: Node): Node {
  * convert.rs degrades optimistic latency only — never correctness. Keep in sync
  * with convert.rs when the promoted field set changes.
  */
-export const OPTIMISTIC_TYPED_FIELDS: Record<string, readonly string[]> = {
-  'ai-chat': ['turnStatus', 'sessionStatus', 'provider', 'model', 'messages'],
-  task: ['status', 'priority', 'dueDate', 'assignee', 'startedAt', 'completedAt']
+export const OPTIMISTIC_TYPED_FIELDS: Record<string, readonly PromotedField[]> = {
+  'ai-chat': [
+    { from: 'turn_status', to: 'turnStatus' },
+    { from: 'session_status', to: 'sessionStatus' },
+    { from: 'provider', to: 'provider' },
+    { from: 'model', to: 'model' },
+    { from: 'messages', to: 'messages' }
+  ],
+  task: [
+    { from: 'status', to: 'status' },
+    { from: 'priority', to: 'priority' },
+    { from: 'dueDate', to: 'dueDate' },
+    { from: 'assignee', to: 'assignee' },
+    { from: 'startedAt', to: 'startedAt' },
+    { from: 'completedAt', to: 'completedAt' }
+  ]
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -86,16 +113,16 @@ export function promoteTypedFields(
   const nestedMerged = mergedProperties[nodeType];
   const promoted: Record<string, unknown> = {};
 
-  for (const field of fields) {
-    if (Object.prototype.hasOwnProperty.call(changesProperties, field)) {
+  for (const { from, to } of fields) {
+    if (Object.prototype.hasOwnProperty.call(changesProperties, from)) {
       // Flat shape (e.g. ai-chat: properties.model)
-      promoted[field] = mergedProperties[field];
+      promoted[to] = mergedProperties[from];
     } else if (
       isPlainObject(nestedChanges) &&
-      Object.prototype.hasOwnProperty.call(nestedChanges, field)
+      Object.prototype.hasOwnProperty.call(nestedChanges, from)
     ) {
       // Nested shape (e.g. task schema form: properties.task.status)
-      promoted[field] = isPlainObject(nestedMerged) ? nestedMerged[field] : undefined;
+      promoted[to] = isPlainObject(nestedMerged) ? nestedMerged[from] : undefined;
     }
   }
 

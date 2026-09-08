@@ -82,8 +82,8 @@ describe('SharedNodeStore', () => {
         {
           properties: {
             messages: [],
-            turnStatus: 'idle',
-            sessionStatus: 'active',
+            turn_status: 'idle',
+            session_status: 'active',
             provider: 'native',
             model: 'm1'
           }
@@ -109,11 +109,11 @@ describe('SharedNodeStore', () => {
         skip
       );
 
-      // Sending a message writes messages+turnStatus but NOT provider/model —
-      // and NOT sessionStatus, which belongs to the PTY path.
+      // Sending a message writes messages+turn_status but NOT provider/model —
+      // and NOT session_status, which belongs to the PTY path.
       store.updateNode(
         aiChatNode.id,
-        { properties: { messages: [{ role: 'user', content: 'hi' }], turnStatus: 'processing' } },
+        { properties: { messages: [{ role: 'user', content: 'hi' }], turn_status: 'processing' } },
         viewerSource,
         skip
       );
