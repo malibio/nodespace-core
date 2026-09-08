@@ -1274,7 +1274,25 @@ fn def_create_schema() -> ToolDefinition {
                             "cardinality": { "type": "string", "enum": ["one", "many"], "description": "Cardinality: 'one' or 'many' (default)" },
                             "reverseName": { "type": "string", "description": "REQUIRED. What this edge is called read from the target's end — one edge is stored and read from both sides, so it needs a name from each. Choose it: plural where the target may hold many (an invoice billed_to a customer reads back as 'invoices', NOT 'Invoice (Customer)')." },
                             "reverseCardinality": { "type": "string", "enum": ["one", "many"], "description": "REQUIRED. How many sources may point at one target: 'one' or 'many'. An invoice billed_to one customer, where a customer may have many invoices, is cardinality 'one' with reverseCardinality 'many'." },
-                            "description": { "type": "string", "description": "What this relationship represents" }
+                            "description": { "type": "string", "description": "What this relationship represents" },
+                            "edgeFields": {
+                                "type": "array",
+                                "description": "Attributes carried on the edge itself, not on either node — use for facts about the CONNECTION (an access level on a membership, a billing date on an invoice link), never for facts about a node (those go in that type's own fields). Give an edge field a fixed vocabulary the same way a node field does: {\"name\": \"access\", \"type\": \"enum\", \"coreValues\": [{\"value\": \"owner\", \"label\": \"Owner\"}, {\"value\": \"editor\", \"label\": \"Editor\"}, {\"value\": \"viewer\", \"label\": \"Viewer\"}]}. coreValues is REQUIRED when type=\"enum\" and REJECTED on any other type; a default must be one of the declared values; values must be unique. Edge enums are closed — there is no userValues/extensible. An undeclared value is rejected when an edge is created or edited, not stored. Only relationships you declare can carry edgeFields — the built-in structural names (member_of, has_child, mentions, has_role) are reserved and cannot take one. required/default are recorded but NOT enforced at write time: an omitted enum key is stored absent, never filled in from default.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": { "type": "string", "description": "Edge field name, lowercase snake_case — the storage key." },
+                                        "type": { "type": "string", "description": "Field type: text, number, date, enum, boolean" },
+                                        "coreValues": {
+                                            "type": "array",
+                                            "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum edge field with no values always fails validation. Rejected on any other type. Array of {value, label} pairs (e.g. {\"value\": \"owner\", \"label\": \"Owner\"}); use lowercase values (e.g. 'owner' not 'Owner')."
+                                        },
+                                        "required": { "type": "boolean", "description": "Recorded but NOT enforced when an edge is written — an omitted key is stored absent, not rejected." },
+                                        "default": { "description": "Must be one of coreValues' declared values on an enum field. Recorded but NOT applied to an edge that omits this key — do not rely on it to supply a value." }
+                                    },
+                                    "required": ["name", "type"]
+                                }
+                            }
                         },
                         "required": ["name", "targetType", "direction", "cardinality", "reverseName", "reverseCardinality"]
                     }
@@ -1355,7 +1373,25 @@ fn def_update_schema() -> ToolDefinition {
                             "direction": { "type": "string", "enum": ["out", "in"] },
                             "cardinality": { "type": "string", "enum": ["one", "many"] },
                             "reverseName": { "type": "string", "description": "REQUIRED. What this edge is called read from the target's end — one edge is stored and read from both sides, so it needs a name from each. Choose it: plural where the target may hold many (an invoice billed_to a customer reads back as 'invoices', NOT 'Invoice (Customer)')." },
-                            "reverseCardinality": { "type": "string", "enum": ["one", "many"], "description": "REQUIRED. How many sources may point at one target: 'one' or 'many'. An invoice billed_to one customer, where a customer may have many invoices, is cardinality 'one' with reverseCardinality 'many'." }
+                            "reverseCardinality": { "type": "string", "enum": ["one", "many"], "description": "REQUIRED. How many sources may point at one target: 'one' or 'many'. An invoice billed_to one customer, where a customer may have many invoices, is cardinality 'one' with reverseCardinality 'many'." },
+                            "edgeFields": {
+                                "type": "array",
+                                "description": "Attributes carried on the edge itself, not on either node — use for facts about the CONNECTION (an access level on a membership, a billing date on an invoice link), never for facts about a node (those go in that type's own fields). Give an edge field a fixed vocabulary the same way a node field does: {\"name\": \"access\", \"type\": \"enum\", \"coreValues\": [{\"value\": \"owner\", \"label\": \"Owner\"}, {\"value\": \"editor\", \"label\": \"Editor\"}, {\"value\": \"viewer\", \"label\": \"Viewer\"}]}. coreValues is REQUIRED when type=\"enum\" and REJECTED on any other type; a default must be one of the declared values; values must be unique. Edge enums are closed — there is no userValues/extensible. An undeclared value is rejected when an edge is created or edited, not stored. Only relationships you declare can carry edgeFields — the built-in structural names (member_of, has_child, mentions, has_role) are reserved and cannot take one. required/default are recorded but NOT enforced at write time: an omitted enum key is stored absent, never filled in from default.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": { "type": "string", "description": "Edge field name, lowercase snake_case — the storage key." },
+                                        "type": { "type": "string", "description": "Field type: text, number, date, enum, boolean" },
+                                        "coreValues": {
+                                            "type": "array",
+                                            "description": "REQUIRED and must be non-empty when type=\"enum\" — an enum edge field with no values always fails validation. Rejected on any other type. Array of {value, label} pairs (e.g. {\"value\": \"owner\", \"label\": \"Owner\"}); use lowercase values (e.g. 'owner' not 'Owner')."
+                                        },
+                                        "required": { "type": "boolean", "description": "Recorded but NOT enforced when an edge is written — an omitted key is stored absent, not rejected." },
+                                        "default": { "description": "Must be one of coreValues' declared values on an enum field. Recorded but NOT applied to an edge that omits this key — do not rely on it to supply a value." }
+                                    },
+                                    "required": ["name", "type"]
+                                }
+                            }
                         },
                         "required": ["name", "targetType", "direction", "cardinality", "reverseName", "reverseCardinality"]
                     }

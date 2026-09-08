@@ -117,10 +117,11 @@ CALL create_schema NOW: your next action is the tool call, not planning text.
 /// (the `coreValues`/`core_values` casing contradiction ADR-064 records is
 /// exactly that drift). The model reads the tool schema immediately before
 /// calling `create_schema`, so shape rules belong there rather than in prose
-/// interpolated earlier in the prompt. Four of the five actually have that
-/// tool-schema coverage today; `enum-edge-fields` does not (see its own
-/// comment below) — it is excluded from the prompt per the same doctrine,
-/// but the tool-schema side ADR-064 calls for hasn't been built yet.
+/// interpolated earlier in the prompt. All five now have that tool-schema
+/// coverage: `enum-edge-fields`'s content (coreValues, closed vocabulary,
+/// reserved relationship names) lives on the `edgeFields` property of
+/// `relationships` items in both `def_create_schema()` and
+/// `def_update_schema()`.
 #[cfg(test)]
 const SCHEMA_RULES_NOT_IN_PROMPT: &[&str] = &[
     // Field-naming shape: stated on create_schema's own field description.
@@ -135,18 +136,10 @@ const SCHEMA_RULES_NOT_IN_PROMPT: &[&str] = &[
     // Enum value/label casing: stated on create_schema's enum field
     // description.
     "enum-format",
-    // Edge field shape (coreValues, closed vocabulary): NOT currently stated
-    // anywhere in create_schema's or update_schema's tool schema — neither
-    // takes an `edgeFields` parameter at all (packages/agent/src/local_agent/tools.rs).
-    // The only enforcement is the post-hoc validator in
-    // packages/core/src/schema/mod.rs, which runs after the model has
-    // already committed to a shape — exactly the "too late" failure mode
-    // ADR-064 exists to prevent for this category of rule. This entry
-    // belongs here per ADR-064's *intent* (argument shape moves off the
-    // prompt and onto the tool schema), but that tool-schema side doesn't
-    // exist yet, so today this rule reaches the in-app agent through
-    // neither channel. A follow-up should add an `edgeFields` property to
-    // both tool schemas and only then can this comment claim real coverage.
+    // Edge field shape (coreValues, closed vocabulary, reserved relationship
+    // names): stated on the `edgeFields` property of `relationships` items in
+    // both create_schema's and update_schema's tool schema
+    // (packages/agent/src/local_agent/tools.rs).
     "enum-edge-fields",
 ];
 

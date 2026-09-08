@@ -2172,9 +2172,13 @@ impl NodeBehavior for ToolNodeBehavior {
 /// `validate_parameter_schema_depth` increments depth on every object-valued
 /// key (structural keys like `properties`/`items` included), so a legitimately
 /// shaped tool schema nests deeper than its conceptual field nesting suggests.
-/// The deepest valid internal tool is `create_schema`, whose enum-field path
-/// `properties → fields → items → properties → coreValues → items → properties
-/// → label` reaches depth 8. The limit is 9 to admit that and leave a small
+/// The deepest valid internal tool is `create_schema`, whose edge-field path
+/// `properties → relationships → items → properties → edgeFields → items →
+/// properties → coreValues` reaches depth 8 (`coreValues` there is a leaf
+/// description, not a further-nested items/properties pair — unlike a node
+/// field's own `coreValues`, an edge field's is documented in prose rather
+/// than a nested `{value, label}` item schema, precisely because that nesting
+/// would exceed this limit). The limit is 9 to admit that and leave a small
 /// margin, while still rejecting pathological/unbounded external schemas.
 const MAX_SCHEMA_DEPTH: usize = 9;
 
