@@ -15,3 +15,4 @@ pub use index_manager::IndexManager;
 pub use sqlite_store::{
     ensure_sqlite_vec_registered, RelationshipRecord, SqliteStore, StoreChange, StoreOperation,
 };
+pub(crate) use sqlite_store::tx::Tx;

@@ -21,7 +21,7 @@
 
 use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::events::DomainEvent;
-use crate::db::{SqliteStore, StoreChange, StoreOperation};
+use crate::db::{SqliteStore, StoreChange, StoreOperation, Tx};
 use crate::models::{FilterOperator, Node, NodeFilter, NodeUpdate, PropertyFilter};
 use crate::services::error::NodeServiceError;
 use crate::services::NodeAccessor;
@@ -29,6 +29,8 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::sync::broadcast;
 
@@ -455,9 +457,18 @@ const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// `Immediate` — every event is broadcast as it arrives (default).
 /// `Batching` — events accumulate in the map; last-write-wins per node_id.
+/// `Transactional` — events accumulate in emission order for the duration of
+/// a `NodeService::with_transaction` call (ADR-069 §2); flushed in order on
+/// commit, discarded outright on rollback. A `Vec`, not a coalescing map:
+/// in-transaction order is semantically required (e.g. `move_node` must
+/// flush its new-parent-edge event before its old-parent-removal event), and
+/// relationship events — which are not node-keyed — must buffer here too,
+/// unlike `Batching`, which relationship events bypass entirely (see
+/// `emit_event`'s match below).
 pub(crate) enum BatchState {
     Immediate,
     Batching(HashMap<String, crate::db::events::EventEnvelope>),
+    Transactional(Vec<crate::db::events::EventEnvelope>),
 }
 
 /// Whether an event envelope should be forwarded to the origin-filtered push
@@ -515,6 +526,152 @@ impl Drop for BatchEmitGuard {
         }
     }
 }
+
+/// Send every buffered envelope, in order, mirroring to the push channel the
+/// same way immediate emission and `BatchEmitGuard::drop` do. Shared by both
+/// so the mirror/send logic exists in exactly one place.
+fn flush_envelopes(
+    envelopes: Vec<crate::db::events::EventEnvelope>,
+    tx: &broadcast::Sender<crate::db::events::EventEnvelope>,
+    push_tx: &broadcast::Sender<crate::db::events::EventEnvelope>,
+    push_excluded_origin: &RwLock<Option<String>>,
+) {
+    for envelope in envelopes {
+        if push_forward_allowed(push_excluded_origin, &envelope) {
+            let _ = push_tx.send(envelope.clone());
+        }
+        let _ = tx.send(envelope);
+    }
+}
+
+/// A `NodeService`-level unit of work in progress (ADR-069 §1b). Wraps the
+/// store's own [`Tx`] plus this transaction's event buffer, and is the only
+/// way an `_in_tx` `NodeService` method may reach either. It exposes
+/// `store_tx()` for calling store `_in_tx` methods and, indirectly,
+/// `emit_event` for buffering domain events (see `BatchState::Transactional`)
+/// — it does not expose `self.store` or anything that could open a second
+/// transaction, the same "unrepresentable by construction" discipline `Tx`
+/// itself applies one layer down.
+pub(crate) struct NodeServiceTx<'t> {
+    store_tx: &'t Tx<'t>,
+}
+
+impl<'t> NodeServiceTx<'t> {
+    /// The store-level transaction handle, for calling store `_in_tx`
+    /// methods. Not exposed as `self.store.write()` or any store method that
+    /// opens its own transaction — see the type's own doc comment.
+    pub(crate) fn store_tx(&self) -> &Tx<'t> {
+        self.store_tx
+    }
+}
+
+impl NodeService {
+    /// Run `f` inside one `NodeService`-level transaction (ADR-069 §1b):
+    /// opens one store-level transaction via `self.store.with_transaction`,
+    /// switches event emission to `BatchState::Transactional` for the
+    /// closure's duration, and on success flushes the buffered events in
+    /// order — on failure discards them, since an event is a statement about
+    /// committed state (ADR-069 §2) and nothing in the buffer committed.
+    ///
+    /// Methods composed inside `f` must be their `_in_tx` variants, taking
+    /// `&NodeServiceTx`. Calling a non-`_in_tx` method (which opens its own
+    /// `with_transaction`) from inside `f` deadlocks, for the same reason
+    /// calling a non-`_in_tx` store method from inside a store transaction
+    /// does: the write guard is already held.
+    pub(crate) async fn with_transaction<T, F>(&self, f: F) -> Result<T, NodeServiceError>
+    where
+        F: for<'t> FnOnce(&'t NodeServiceTx<'t>) -> Pin<Box<dyn Future<Output = Result<T, NodeServiceError>> + Send + 't>>
+            + Send
+            + 'static,
+        T: Send,
+    {
+        // Nesting guard mirrors `begin_batch_emit`'s: an outer transaction's
+        // buffer would be silently discarded if an inner one reset the
+        // state on either its own commit or its own rollback.
+        {
+            let state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
+            debug_assert!(
+                matches!(*state, BatchState::Immediate),
+                "with_transaction called while a batch or transaction is already active"
+            );
+        }
+
+        let batch_state = Arc::clone(&self.batch_state);
+        *batch_state.lock().unwrap_or_else(|e| e.into_inner()) =
+            BatchState::Transactional(Vec::new());
+
+        // If the closure itself panics, restore `Immediate` on unwind so a
+        // later caller doesn't inherit a stuck `Transactional` state.
+        struct ResetOnDrop<'a>(&'a Mutex<BatchState>, bool);
+        impl Drop for ResetOnDrop<'_> {
+            fn drop(&mut self) {
+                if !self.1 {
+                    *self.0.lock().unwrap_or_else(|e| e.into_inner()) = BatchState::Immediate;
+                }
+            }
+        }
+        let mut reset_guard = ResetOnDrop(&batch_state, false);
+
+        let result: Result<T, NodeServiceError> = self
+            .store
+            .with_transaction(move |store_tx| {
+                Box::pin(async move {
+                    let ns_tx = NodeServiceTx { store_tx };
+                    f(&ns_tx)
+                        .await
+                        .map_err(|e| anyhow::anyhow!(NodeServiceTxError(e)))
+                })
+            })
+            .await
+            .map_err(|e| match e.downcast::<NodeServiceTxError>() {
+                Ok(NodeServiceTxError(service_err)) => service_err,
+                // Not a re-wrapped closure error — the transaction machinery
+                // itself failed (begin/commit/rollback). This is exactly
+                // `TransactionFailed`'s reserved scope (ADR-069 §2a): the
+                // failure originates from the seam, not from business logic.
+                Err(e) => NodeServiceError::transaction_failed(e.to_string()),
+            });
+
+        // Commit already happened (or didn't) inside `self.store.with_transaction`
+        // by the time we get here — this only decides what to do with the
+        // buffered events.
+        let prev = std::mem::replace(
+            &mut *batch_state.lock().unwrap_or_else(|e| e.into_inner()),
+            BatchState::Immediate,
+        );
+        reset_guard.1 = true; // already reset above; skip the Drop's redundant reset
+
+        if result.is_ok() {
+            if let BatchState::Transactional(buf) = prev {
+                flush_envelopes(
+                    buf,
+                    &self.event_tx,
+                    &self.push_event_tx,
+                    &self.push_excluded_origin,
+                );
+            }
+        }
+        // On error, `prev`'s buffer (if any) is simply dropped — discarded,
+        // per ADR-069 §2: nothing in it describes committed state.
+
+        result
+    }
+}
+
+/// Wraps a `NodeServiceError` so it can round-trip through
+/// `SqliteStore::with_transaction`'s `anyhow::Result`, then be told apart
+/// from a genuine transaction-machinery failure on the way back out. See
+/// `NodeService::with_transaction`.
+#[derive(Debug)]
+struct NodeServiceTxError(NodeServiceError);
+
+impl std::fmt::Display for NodeServiceTxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for NodeServiceTxError {}
 
 /// Check if a string matches date node format: YYYY-MM-DD
 ///
@@ -979,7 +1136,14 @@ impl NodeService {
                     },
                 };
 
-                // In batch mode, accumulate last-write-wins per node.
+                // In batch mode, accumulate last-write-wins per node. In
+                // transactional mode, accumulate in order (ADR-069 §2) — but
+                // this path is store-`notify`-driven, and every `_in_tx`
+                // store method deliberately skips `notify` (see e.g.
+                // `create_node_in_tx`'s doc comment), so in practice this
+                // arm is unreached today. Handled anyway so the match stays
+                // exhaustive and correct if a future in-tx store method ever
+                // does call `notify`.
                 // In immediate mode (default), broadcast directly.
                 let mut state = batch_state_ref.lock().unwrap_or_else(|e| e.into_inner());
                 match &mut *state {
@@ -994,6 +1158,9 @@ impl NodeService {
                     BatchState::Batching(buf) => {
                         // Batched events flush (and mirror) in BatchEmitGuard::drop.
                         buf.insert(change.node.id.clone(), envelope);
+                    }
+                    BatchState::Transactional(buf) => {
+                        buf.push(envelope);
                     }
                 }
             });
@@ -1870,11 +2037,13 @@ impl NodeService {
     ///
     pub fn begin_batch_emit(&self) -> BatchEmitGuard {
         let mut state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
-        // Nested batch guards are not supported: the outer guard's buffered events
+        // Nested batch guards are not supported: the outer buffer's events
         // would be silently discarded when the inner guard resets the state.
+        // Same hazard applies to a `with_transaction` call active while a
+        // batch guard is requested — one buffer, not two (ADR-069 §2).
         debug_assert!(
             matches!(*state, BatchState::Immediate),
-            "begin_batch_emit called while a batch is already active"
+            "begin_batch_emit called while a batch or transaction is already active"
         );
         *state = BatchState::Batching(HashMap::new());
         drop(state);
@@ -1915,6 +2084,14 @@ impl NodeService {
             (BatchState::Batching(buf), Some(id)) => {
                 // Batched events flush (and mirror) in BatchEmitGuard::drop.
                 buf.insert(id, envelope);
+            }
+            // Matches regardless of node-id extraction, unlike `Batching`'s
+            // arm above: a transaction buffer must hold node-keyed AND
+            // relationship events in one ordered sequence (ADR-069 §2), so
+            // relationship events cannot fall through to the immediate arm
+            // below the way they do for `Batching`.
+            (BatchState::Transactional(buf), _) => {
+                buf.push(envelope);
             }
             _ => {
                 // Mirror to the push channel unless this envelope's origin is
@@ -3671,6 +3848,60 @@ mod tests {
             result.is_ok(),
             "create_node_with_parent should accept a container parent"
         );
+    }
+
+    /// ADR-069 S2 regression test: an induced failure between the node
+    /// insert and the parent-edge insert must leave NO node row and add NO
+    /// `get_roots()` entry — the orphaned-root hazard `create_node_with_parent`
+    /// used to have when the two writes were separate transactions. Exercises
+    /// the real `NodeService::with_transaction` seam and the same
+    /// `create_node_in_tx` primitive `create_node_with_parent` composes,
+    /// returning an error after the node insert instead of calling
+    /// `create_parent_edge_in_tx` — this is exactly the failure-after-
+    /// validation case a doomed second write represents.
+    #[tokio::test]
+    async fn test_create_node_with_parent_rolls_back_node_on_edge_failure() {
+        let (service, _temp) = create_test_service().await;
+
+        let container = Node::new("text".to_string(), "container".to_string(), json!({}));
+        let container_id = service.create_node(container).await.unwrap();
+
+        let node_id = uuid::Uuid::new_v4().to_string();
+        let node = Node::new("text".to_string(), "orphan-candidate".to_string(), json!({}));
+        let node = Node { id: node_id.clone(), ..node };
+
+        let service_for_tx = service.clone();
+        let result: Result<String, NodeServiceError> = service
+            .with_transaction(move |tx| {
+                let service = service_for_tx.clone();
+                let node = node.clone();
+                Box::pin(async move {
+                    let created_id = service.create_node_in_tx(tx, node).await?;
+                    // Simulate the edge write failing (constraint violation,
+                    // I/O error, crash) — same failure class as F5 in the
+                    // write-atomicity survey. Must roll back the insert above.
+                    Err(NodeServiceError::query_failed(
+                        "simulated parent-edge write failure",
+                    ))?;
+                    Ok::<String, NodeServiceError>(created_id)
+                })
+            })
+            .await;
+
+        assert!(result.is_err(), "the induced failure must propagate");
+
+        assert!(
+            service.get_node(&node_id).await.unwrap().is_none(),
+            "node row must not exist after the transaction rolled back"
+        );
+
+        let roots = service.get_roots(None, None).await.unwrap();
+        assert!(
+            !roots.iter().any(|n| n.id == node_id),
+            "a rolled-back create must never appear as a spurious root"
+        );
+        // The unrelated, already-committed container must be unaffected.
+        assert!(service.get_node(&container_id).await.unwrap().is_some());
     }
 
     // C3c: atomic child-transfer tests

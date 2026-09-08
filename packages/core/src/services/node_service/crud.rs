@@ -166,6 +166,65 @@ impl NodeService {
         Ok(node.id)
     }
 
+    /// `_in_tx` twin of [`Self::create_node`] (ADR-069 §1b/S2). Identical
+    /// validation/title pipeline; the insert lands on `tx.store_tx()` instead
+    /// of opening its own transaction, and the `NodeCreated` event is
+    /// buffered via `self.emit_event` (routed to the transaction buffer by
+    /// `BatchState::Transactional` — see `NodeService::with_transaction`)
+    /// instead of relying on the store notifier, since `create_node_in_tx`
+    /// (the store method) deliberately does not call `notify`.
+    ///
+    /// Does not handle the `database-settings` singleton short-circuit or
+    /// collection-name-collision marking that `create_node` does — no
+    /// composed caller (`create_node_with_parent`) creates either of those
+    /// node shapes through this path today; if one ever does, add the
+    /// missing behavior here rather than silently diverging.
+    pub(crate) async fn create_node_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        mut node: Node,
+    ) -> Result<String, NodeServiceError> {
+        if is_date_node_id(&node.id) {
+            node.node_type = "date".to_string();
+        }
+
+        self.behaviors.validate_node(&node)?;
+
+        if node.node_type != "schema" {
+            node.properties =
+                Self::normalize_flat_properties_to_namespace(&node.node_type, &node.properties);
+            if let Some(schema_json) = self.get_schema_for_type(&node.node_type).await? {
+                if let Some(fields_json) = schema_json.get("fields") {
+                    if let Ok(fields) = serde_json::from_value::<Vec<crate::models::SchemaField>>(
+                        fields_json.clone(),
+                    ) {
+                        self.apply_schema_defaults_with_fields(&mut node, &fields)?;
+                        self.validate_node_with_fields(&node, &fields)?;
+                    }
+                }
+            }
+        }
+
+        if node.title.is_none() {
+            node.title = self.compute_title(&node, None).await?;
+        }
+
+        if node.node_type == "playbook" {
+            self.validate_playbook_rules(&node.properties).await?;
+        }
+
+        crate::db::SqliteStore::create_node_in_tx(tx.store_tx(), &node)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert node: {}", e)))?;
+
+        self.emit_event(DomainEvent::NodeCreated {
+            node_id: node.id.clone(),
+            node_type: node.node_type.clone(),
+        });
+
+        Ok(node.id)
+    }
+
     /// Create a node with parent relationship in a single operation
     ///
     /// This is the primary node creation API that enforces all business rules:
@@ -379,22 +438,55 @@ impl NodeService {
             lifecycle_status: "active".to_string(),
         };
 
+        // Steps 6+7 (ADR-069 §1b/S2): the node insert and its parent edge
+        // land in ONE transaction, closing the orphaned-root hazard —
+        // previously two independent atomic writes, where a failure on the
+        // edge left the node row live with no `has_child` edge (a
+        // silently-orphaned root visible in `get_roots()`). A parent-less
+        // create (`params.parent_id.is_none()`, e.g. a root/date node) still
+        // opens its own single-statement transaction via `create_node`'s
+        // standalone wrapper — nothing to compose when there is no edge.
         tracing::debug!(
-            "create_node_with_parent: about to call create_node at {}ms",
+            "create_node_with_parent: about to create node{} at {}ms",
+            if params.parent_id.is_some() {
+                " + parent edge"
+            } else {
+                ""
+            },
             start.elapsed().as_millis()
         );
-        let created_id = self.create_node(node).await?;
+        let created_id = if let Some(ref parent_id) = params.parent_id {
+            let parent_id = parent_id.clone();
+            let position = params.position.clone();
+            // `with_transaction`'s closure must be `'static`, so an owned
+            // clone (cheap — `NodeService` is a handful of `Arc`s) moves in
+            // rather than borrowing `&self`.
+            let service = self.clone();
+            let service_for_tx = service.clone();
+            service
+                .with_transaction(move |tx| {
+                    Box::pin(async move {
+                        let created_id = service_for_tx.create_node_in_tx(tx, node).await?;
+                        service_for_tx
+                            .create_parent_edge_in_tx(tx, &created_id, &parent_id, position.as_ref())
+                            .await?;
+                        Ok(created_id)
+                    })
+                })
+                .await?
+        } else {
+            self.create_node(node).await?
+        };
         tracing::debug!(
             node_id = %created_id,
-            "create_node_with_parent: create_node completed at {}ms",
+            "create_node_with_parent: create completed at {}ms",
             start.elapsed().as_millis()
         );
 
-        // Step 7: Create parent relationship if parent specified
-        if let Some(parent_id) = params.parent_id {
-            self.create_parent_edge(&created_id, &parent_id, params.position.as_ref())
-                .await?;
-
+        // Step 8: Post-commit follow-up (embedding queueing — deliberately
+        // outside the transaction boundary, ADR-069 §5: derived state with
+        // its own reconciliation loop).
+        if params.parent_id.is_some() {
             // Step 8a: Child node created - queue root for embedding regeneration
             // The new child's content should be included in the root's aggregate embedding
             // (root-aggregate model)
@@ -698,6 +790,117 @@ impl NodeService {
                 tracing::warn!("Failed to sync mentions for node {}: {}", id, e);
             }
         }
+
+        Ok(())
+    }
+
+    /// `_in_tx` twin of [`Self::update_node_unchecked`] (ADR-069 §1b/S3).
+    /// Identical validation/merge pipeline; the write lands on
+    /// `tx.store_tx()` and the `NodeUpdated` event is buffered via
+    /// `self.emit_event` instead of relying on the store notifier. Mention
+    /// sync is intentionally NOT reproduced here — it stays outside the
+    /// transaction boundary by design (ADR-069 §5, derived state that
+    /// self-heals); the only current caller (`rename_schema_field_in_tx`)
+    /// updates a schema node's `fields` JSON, whose content mention sync is
+    /// a no-op in practice, and a future caller updating real content
+    /// through this path should call `sync_mentions` itself after `commit`.
+    pub(crate) async fn update_node_unchecked_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        id: &str,
+        update: NodeUpdate,
+    ) -> Result<(), NodeServiceError> {
+        if update.is_empty() {
+            return Err(NodeServiceError::invalid_update(
+                "Update contains no changes",
+            ));
+        }
+
+        let existing = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(id))?;
+
+        let mut updated = existing.clone();
+        let mut node_type_changed = false;
+        let mut content_changed = false;
+        let mut properties_changed = false;
+
+        if let Some(node_type) = update.node_type {
+            node_type_changed = updated.node_type != node_type;
+            updated.node_type = node_type;
+        }
+
+        if let Some(content) = update.content {
+            if updated.content != content {
+                content_changed = true;
+            }
+            updated.content = content;
+        }
+
+        if let Some(properties) = update.properties {
+            properties_changed = true;
+            if updated.node_type == "schema" {
+                Self::deep_merge_namespaced_properties(&mut updated.properties, properties);
+            } else {
+                let normalized_properties =
+                    Self::normalize_flat_properties_to_namespace(&updated.node_type, &properties);
+                Self::deep_merge_namespaced_properties(
+                    &mut updated.properties,
+                    normalized_properties,
+                );
+            }
+        }
+
+        self.behaviors.validate_node(&updated)?;
+
+        if node_type_changed && updated.node_type != "schema" {
+            if let Some(schema_json) = self.get_schema_for_type(&updated.node_type).await? {
+                if let Some(fields_json) = schema_json.get("fields") {
+                    if let Ok(fields) = serde_json::from_value::<Vec<crate::models::SchemaField>>(
+                        fields_json.clone(),
+                    ) {
+                        self.apply_schema_defaults_with_fields(&mut updated, &fields)?;
+                        self.validate_node_with_fields(&updated, &fields)?;
+                    }
+                }
+            }
+        } else if updated.node_type != "schema" {
+            self.validate_node_against_schema(&updated).await?;
+        }
+
+        let title_update = if content_changed || node_type_changed || properties_changed {
+            Some(self.compute_title(&updated, None).await?)
+        } else {
+            None
+        };
+        if let Some(ref new_title) = title_update {
+            updated.title = new_title.clone();
+        }
+
+        let node_update = crate::models::NodeUpdate {
+            node_type: Some(updated.node_type.clone()),
+            content: Some(updated.content.clone()),
+            properties: Some(updated.properties.clone()),
+            title: title_update,
+            lifecycle_status: None,
+        };
+
+        crate::db::SqliteStore::update_node_in_tx(tx.store_tx(), id, node_update)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Reflects the store's unconditional version bump — see
+        // `SqliteStore::update_node_in_tx` (mirrors `update_node`'s own
+        // "exactly one version bump per call" statement).
+        updated.version += 1;
+
+        self.emit_event(DomainEvent::NodeUpdated {
+            node_id: id.to_string(),
+            node_type: updated.node_type.clone(),
+            node: updated,
+            changed_properties: vec![],
+        });
 
         Ok(())
     }
@@ -1342,6 +1545,44 @@ impl NodeService {
         })?;
 
         // NOTE: NodeUpdated event is now automatically emitted by store notifier
+
+        Ok(updated_node)
+    }
+
+    /// `_in_tx` twin of [`Self::update_node_with_version_bump`] (ADR-069
+    /// §1b/S4). Same no-op content/properties, version-checked bump; the
+    /// read of current values and the checked write both land on
+    /// `tx.store_tx()` (ADR-069 §3: the OCC re-check is sound inside the
+    /// transaction, closing the TOCTOU window the standalone method's
+    /// pre-read leaves open). A version mismatch surfaces as
+    /// `NodeServiceError::VersionConflict` — an expected outcome of
+    /// concurrent writes, never `TransactionFailed` (ADR-069 §2a) — which
+    /// rolls back the whole unit of work via the caller's `?`.
+    pub(crate) async fn update_node_with_version_bump_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        node_id: &str,
+        expected_version: i64,
+    ) -> Result<Node, NodeServiceError> {
+        let result = crate::db::SqliteStore::update_node_with_version_check_in_tx(
+            tx.store_tx(),
+            node_id,
+            expected_version,
+            NodeUpdate::default(),
+        )
+        .await
+        .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        let updated_node = result.ok_or_else(|| {
+            NodeServiceError::version_conflict(node_id, expected_version, expected_version + 1)
+        })?;
+
+        self.emit_event(DomainEvent::NodeUpdated {
+            node_id: updated_node.id.clone(),
+            node_type: updated_node.node_type.clone(),
+            node: updated_node.clone(),
+            changed_properties: vec![],
+        });
 
         Ok(updated_node)
     }

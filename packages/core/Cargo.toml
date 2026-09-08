@@ -24,6 +24,7 @@ nodespace-nlp-engine = { path = "../nlp-engine", optional = true }
 
 # Async runtime
 tokio = { workspace = true }
+futures = "0.3"
 
 # Serialization
 serde = { workspace = true }

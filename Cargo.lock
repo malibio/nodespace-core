@@ -3521,6 +3521,7 @@ dependencies = [
  "chrono",
  "criterion",
  "cron",
+ "futures",
  "http-body-util",
  "libsql",
  "libsql-sys",

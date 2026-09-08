@@ -818,6 +818,50 @@ impl NodeService {
         Ok(())
     }
 
+    /// `_in_tx` twin of [`Self::create_parent_edge`] (ADR-069 §1b/S2). Same
+    /// idempotency posture is NOT reproduced here — callers reach this only
+    /// from `create_node_with_parent_in_tx`, where `child_id` is a node this
+    /// same transaction just created via `create_node_in_tx`, so it can
+    /// never already have a parent edge to be idempotent against. The
+    /// sibling-position resolution runs against a pooled reader exactly like
+    /// `resolve_insert_position` does today (existing siblings under
+    /// `parent_id` are necessarily already-committed data, not something
+    /// this transaction is concurrently mutating), then the edge insert
+    /// itself lands on `tx.store_tx()`.
+    pub(crate) async fn create_parent_edge_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        child_id: &str,
+        parent_id: &str,
+        position: crate::services::InsertPosition<'_>,
+    ) -> Result<(), NodeServiceError> {
+        let resolved = self
+            .resolve_insert_position(position, Some(parent_id))
+            .await?;
+        let insert_after_id: Option<&str> = resolved.as_deref();
+
+        let actual_order = crate::db::SqliteStore::create_has_child_edge_in_tx(
+            tx.store_tx(),
+            parent_id,
+            child_id,
+            insert_after_id,
+        )
+        .await
+        .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        self.emit_event(DomainEvent::RelationshipCreated {
+            relationship: crate::db::events::RelationshipEvent::new(
+                format!("relationship:{}:{}", parent_id, child_id),
+                parent_id,
+                child_id,
+                "has_child",
+                serde_json::json!({"order": actual_order}),
+            ),
+        });
+
+        Ok(())
+    }
+
     /// Batched sibling of [`Self::create_parent_edge`] for the sync-apply cold-sweep's
     /// reconnect path: attach many genuinely-unparented children under their parents in
     /// ONE store transaction, then emit one `RelationshipCreated` per created edge —
