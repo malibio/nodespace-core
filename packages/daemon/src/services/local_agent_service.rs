@@ -1366,6 +1366,34 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         request: Request<DeleteModelRequest>,
     ) -> Result<Response<DeleteModelResponse>, Status> {
         let model_id = request.into_inner().model_id;
+
+        // Independent of the model manager's own loaded-guard below: that
+        // guard only compares against its own catalog bookkeeping
+        // (`loaded_model_id`), which can lag the actual engine on
+        // `SharedLocalAgent` -- the engine only swaps lazily, on next
+        // inference use. `active_model_id` names whichever model that real
+        // engine was last swapped in for, so checking it here catches a
+        // still-resident engine even if some future path moves the catalog's
+        // own bookkeeping off this model_id without swapping the engine too.
+        //
+        // Check-then-act, not atomic with the delete below: a concurrent
+        // `load_model` for this same id could re-activate it in the gap.
+        // Accepted rather than closed with a lock spanning both calls --
+        // `GgufModelManager::delete`'s own catalog guard has the identical
+        // shape, and closing only this one instance would still leave a
+        // caller racing `load_model` against `delete_model` with no true
+        // fix; that needs its own design, not a narrower patch here.
+        if self.inner.shared.active_model_id.lock().await.as_deref() == Some(model_id.as_str()) {
+            return Err(Status::failed_precondition(format!(
+                "cannot delete model '{model_id}' while it is the active inference engine"
+            )));
+        }
+
+        // `model_manager()` is re-checked here (not reused from the guard
+        // above, which reads only `active_model_id` and never touches the
+        // manager) so `delete` still runs through its own catalog guard --
+        // the two guards are independent checks against independent state,
+        // not a single check split in two.
         self.model_manager()
             .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
             .delete(&model_id)
@@ -1379,12 +1407,37 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         request: Request<LoadModelRequest>,
     ) -> Result<Response<LoadModelResponse>, Status> {
         let model_id = request.into_inner().model_id;
+        // Checked up front so a missing model manager reports the specific
+        // `MODEL_MANAGER_UNAVAILABLE` status, matching every other model-
+        // management RPC, rather than falling through into
+        // `load_model_and_collect_events`'s own (differently-worded) internal
+        // check and error event.
         self.model_manager()
-            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
-            .load(&model_id)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to load model: {e}")))?;
-        Ok(Response::new(LoadModelResponse {}))
+            .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?;
+        // Drive the same eager load-and-swap path `EnsureModelReady` streams
+        // (`load_model_and_collect_events` with no live sender just awaits the
+        // whole load and returns its events). `GgufModelManager::load()` alone
+        // only flips catalog bookkeeping -- the actual `SharedLocalAgent`
+        // engine would otherwise only swap lazily, on the next inference use.
+        // That gap let `load_model(B)` mark B as loaded in the catalog while
+        // the resident engine was still A's, so a following `delete_model(A)`
+        // read the catalog's loaded-guard as clear and deleted a file the
+        // engine still referenced. Loading the real engine synchronously here,
+        // before the catalog is marked loaded, closes that window.
+        let events = self.load_model_and_collect_events(&model_id, None).await;
+        match events.last() {
+            Some(event) if event.event_type == "error" => Err(Status::internal(format!(
+                "Failed to load model: {}",
+                event
+                    .error_message
+                    .clone()
+                    .unwrap_or_else(|| "unknown error".to_string())
+            ))),
+            Some(event) if event.event_type == "ready" => Ok(Response::new(LoadModelResponse {})),
+            _ => Err(Status::internal(
+                "Failed to load model: no terminal event produced",
+            )),
+        }
     }
 
     async fn unload_model(
@@ -3050,6 +3103,160 @@ mod tests {
              a stale model_id here means the multi-GB engine is still resident"
         );
         assert_eq!(status.granted_n_ctx, 0);
+    }
+
+    /// `GgufModelManager::load()` clears the *previous* model's catalog entry
+    /// internally (to mark the new one loaded), but that alone never touches
+    /// the actual engine on `SharedLocalAgent` -- the engine only swaps
+    /// lazily, on next inference use. So a catalog switch to B without an
+    /// intervening `unload_model` could leave the catalog's own loaded-guard
+    /// checking B while the resident engine was still A's, letting
+    /// `delete_model(A)` slip through and delete a file the engine still
+    /// referenced. `delete_model`'s RPC handler now also checks
+    /// `SharedLocalAgent::active_model_id` -- the real engine identity --
+    /// independent of the catalog's own bookkeeping, so this holds even if
+    /// something other than `load_model`'s own (now eager-swapping) RPC path
+    /// moves the catalog off A without the engine following. Regression
+    /// guard: once A's engine is genuinely resident (simulating actual
+    /// inference use) and the catalog has moved on to B (simulating a
+    /// completed model switch), `delete_model(A)` must still be rejected.
+    #[tokio::test]
+    async fn delete_model_guard_survives_a_load_switch_without_intervening_unload() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let models_dir = tempdir.path().join("models");
+
+        let discovery = GgufModelManager::with_dir(models_dir.clone()).expect("model manager");
+        let mut entries = discovery.list().await.expect("list").into_iter();
+        let model_a = entries.next().expect("catalog has at least two entries");
+        let model_b = entries.next().expect("catalog has at least two entries");
+        for entry in [&model_a, &model_b] {
+            let filename = entry
+                .filename
+                .clone()
+                .expect("catalog entry has a filename");
+            std::fs::write(models_dir.join(&filename), b"fake gguf")
+                .expect("write fake model file");
+        }
+
+        let mgr = Arc::new(GgufModelManager::with_dir(models_dir.clone()).expect("model manager"));
+        mgr.load(&model_a.id).await.expect("load A");
+
+        let daemon_config_path = tempdir.path().join("daemon.toml");
+        let shared = SharedLocalAgent::from_model_manager(
+            daemon_config_path,
+            Some(mgr.clone()),
+            MODEL_SPEC_SNAPSHOT_TIMEOUT,
+        );
+        let node_service = test_node_service(tempdir.path().join("daemon-db")).await;
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let svc = LocalAgentServiceImpl::new(shared, node_service, embedding);
+
+        // A has actually been used for inference: the real engine is genuinely
+        // A's, matching `replace_engine_if_changed`'s lazy on-first-use swap.
+        svc.replace_engine_if_changed(
+            &model_a.id,
+            Arc::new(SpecEngine {
+                model_id: "/fake/a-resolved.gguf".to_string(),
+                context_window: 4096,
+            }),
+        )
+        .await;
+
+        // Model switch to B without an intervening `unload_model` call: only
+        // the catalog moves on, exactly as `GgufModelManager::load()` does
+        // internally. The resident engine is untouched -- still A's.
+        mgr.load(&model_b.id).await.expect("load B");
+        assert_eq!(
+            mgr.loaded_model().await.expect("loaded_model"),
+            Some(model_b.id.clone()),
+            "catalog must report B as loaded after the switch"
+        );
+
+        let delete_result = svc
+            .delete_model(Request::new(DeleteModelRequest {
+                model_id: model_a.id.clone(),
+            }))
+            .await;
+
+        assert!(
+            delete_result.is_err(),
+            "delete_model(A) must be rejected while A's engine is still resident, \
+             even though the catalog's loaded_model_id now says B"
+        );
+
+        let filename = model_a.filename.expect("catalog entry has a filename");
+        assert!(
+            models_dir.join(&filename).exists(),
+            "A's GGUF file must not be deleted while its engine is still resident"
+        );
+    }
+
+    /// `load_model`'s RPC handler used to call only
+    /// `GgufModelManager::load()` -- catalog bookkeeping alone, with no real
+    /// engine ever built or swapped in. It now drives the same
+    /// load-and-swap path `EnsureModelReady` streams, so a failure building
+    /// the real engine (an unreadable/invalid GGUF file, here) must fail the
+    /// RPC and must not mark the catalog loaded or touch the resident
+    /// engine -- the eager swap only takes effect once the real engine
+    /// actually exists, closing the window the catalog-only path left open.
+    #[tokio::test]
+    async fn load_model_rpc_does_not_mark_loaded_when_the_real_engine_fails_to_build() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let models_dir = tempdir.path().join("models");
+
+        let discovery = GgufModelManager::with_dir(models_dir.clone()).expect("model manager");
+        let entry = discovery
+            .list()
+            .await
+            .expect("list")
+            .into_iter()
+            .next()
+            .expect("catalog has at least one entry");
+        let filename = entry
+            .filename
+            .clone()
+            .expect("catalog entry has a filename");
+        // Not a real GGUF file -- LlamaChatInferenceEngine::load must reject it.
+        std::fs::write(models_dir.join(&filename), b"not a real gguf file")
+            .expect("write fake model file");
+
+        let mgr = Arc::new(GgufModelManager::with_dir(models_dir.clone()).expect("model manager"));
+        let daemon_config_path = tempdir.path().join("daemon.toml");
+        let shared = SharedLocalAgent::from_model_manager(
+            daemon_config_path,
+            Some(mgr.clone()),
+            MODEL_SPEC_SNAPSHOT_TIMEOUT,
+        );
+        let node_service = test_node_service(tempdir.path().join("daemon-db")).await;
+        let embedding: SharedEmbeddingService = Arc::new(RwLock::new(None));
+        let svc = LocalAgentServiceImpl::new(shared, node_service, embedding);
+
+        let result = svc
+            .load_model(Request::new(LoadModelRequest {
+                model_id: entry.id.clone(),
+            }))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "load_model must fail when the real inference engine cannot be built, \
+             not report success on catalog bookkeeping alone"
+        );
+        assert_eq!(
+            mgr.loaded_model().await.expect("loaded_model"),
+            None,
+            "catalog must not be marked loaded when the real engine failed to build"
+        );
+
+        let status = svc
+            .get_status(Request::new(GetLocalStatusRequest { session_id: None }))
+            .await
+            .expect("get_status")
+            .into_inner();
+        assert_eq!(
+            status.model_id, "",
+            "no engine should be resident after a failed load"
+        );
     }
 
     /// Engine whose `model_info` never returns — the shape of a remote
