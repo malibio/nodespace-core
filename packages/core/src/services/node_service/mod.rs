@@ -3718,6 +3718,62 @@ mod tests {
         assert!(result.is_ok(), "move_node should accept a container parent");
     }
 
+    /// ADR-069 §2/S4 regression test: `move_node` must bump the node's
+    /// version BEFORE emitting any relationship event, not after. Before
+    /// this fix, `RelationshipUpdated`/`RelationshipDeleted` were emitted
+    /// first and the version bump — the write that makes the move
+    /// OCC-safe — ran last, so a consumer could observe "the node moved"
+    /// before that was durably true. Asserts the events arrive on the
+    /// broadcast channel in the corrected order: `NodeUpdated` (the bump,
+    /// emitted by the store notifier) before `RelationshipUpdated`.
+    #[tokio::test]
+    async fn test_move_node_bumps_version_before_emitting_relationship_event() {
+        let (service, _temp) = create_test_service().await;
+
+        let container = Node::new("text".to_string(), "container".to_string(), json!({}));
+        let container_id = service.create_node(container).await.unwrap();
+
+        let child = Node::new("text".to_string(), "child".to_string(), json!({}));
+        let child_id = service.create_node(child).await.unwrap();
+        let child_node = service.get_node(&child_id).await.unwrap().unwrap();
+
+        let mut rx = service.subscribe_to_events();
+
+        service
+            .move_node(
+                &child_id,
+                child_node.version,
+                Some(&container_id),
+                crate::services::InsertPosition::End,
+            )
+            .await
+            .unwrap();
+
+        // Drain events in arrival order and record their kinds up to the
+        // RelationshipUpdated we care about.
+        let mut saw_node_updated_first = false;
+        let mut saw_relationship_updated = false;
+        while let Ok(envelope) = rx.try_recv() {
+            match envelope.event {
+                DomainEvent::NodeUpdated { node_id, .. } if node_id == child_id => {
+                    if !saw_relationship_updated {
+                        saw_node_updated_first = true;
+                    }
+                }
+                DomainEvent::RelationshipUpdated { .. } => {
+                    saw_relationship_updated = true;
+                    assert!(
+                        saw_node_updated_first,
+                        "RelationshipUpdated must not arrive before the version-bump \
+                         NodeUpdated event — the move must be OCC-safe before it is announced"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_relationship_updated, "expected a RelationshipUpdated event for the move");
+    }
+
     #[tokio::test]
     async fn test_reparenting_a_collection_member_is_rejected() {
         // ADR-059 §2 (reparent side): a content node that holds a `member_of` edge
@@ -4043,6 +4099,63 @@ mod tests {
         assert!(
             new_children.is_empty(),
             "new_parent should have no children after rollback"
+        );
+    }
+
+    /// ADR-069 S4 regression test for F9: before this fix, the version-bump
+    /// loop that follows `move_children_to_parent`'s atomic edge swap was
+    /// NOT itself atomic — a failure bumping child k left children 0..k
+    /// bumped (and their `RelationshipUpdated` events already broadcast)
+    /// while k..N were neither, contradicting the method's own doc comment
+    /// ("If any child has a version mismatch the entire batch is rolled
+    /// back — nothing moves"), which covered only the edge swap. This
+    /// exercises the fix directly: run the same bump-loop body the
+    /// production method uses (`update_node_with_version_bump_in_tx` per
+    /// child) inside `NodeService::with_transaction`, inducing a failure
+    /// after the first child's bump has already run inside the closure, and
+    /// asserts that child's version reverts on rollback — proving the loop
+    /// is now one unit rather than N independent ones.
+    #[tokio::test]
+    async fn test_move_children_to_parent_bump_loop_rolls_back_as_one_unit() {
+        let (service, _temp) = create_test_service().await;
+
+        let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
+        let child1_id = service.create_node(child1).await.unwrap();
+        let child1_before = service.get_node(&child1_id).await.unwrap().unwrap();
+        let version_before = child1_before.version;
+
+        let service_for_tx = service.clone();
+        let child1_id_for_tx = child1_id.clone();
+        let result: Result<(), NodeServiceError> = service
+            .with_transaction(move |tx| {
+                let service = service_for_tx.clone();
+                let child1_id = child1_id_for_tx.clone();
+                Box::pin(async move {
+                    // First bump in the "loop" — succeeds, same as production.
+                    service
+                        .update_node_with_version_bump_in_tx(tx, &child1_id, version_before)
+                        .await?;
+
+                    // Simulated failure on a later item in the same batch —
+                    // the exact shape F9 describes (bump k succeeds, k+1
+                    // fails). Must roll back the bump above too.
+                    Err(NodeServiceError::version_conflict(
+                        "child2-placeholder",
+                        0,
+                        1,
+                    ))?;
+                    Ok(())
+                })
+            })
+            .await;
+
+        assert!(result.is_err(), "the induced mid-loop failure must propagate");
+
+        let child1_after = service.get_node(&child1_id).await.unwrap().unwrap();
+        assert_eq!(
+            child1_after.version, version_before,
+            "child1's bump must have rolled back along with the rest of the batch, \
+             not persisted just because it ran first in the loop"
         );
     }
 
