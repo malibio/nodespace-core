@@ -21,9 +21,8 @@
   import { collectionsData, NON_CONTENT_NODE_TYPES } from '$lib/stores/collections.svelte';
   import { createNodeInCollection, searchAddableNodes } from '$lib/services/collection-authoring';
   import type { Node, CollectionNode } from '$lib/types';
-  import { navigationStore, addTab, setActiveTab } from '$lib/stores/navigation.svelte';
+  import { getNavigationService } from '$lib/services/navigation-service';
   import { createLogger } from '$lib/utils/logger';
-  import { v4 as uuidv4 } from 'uuid';
   import { getActiveViewerExtensions } from '$lib/plugins/ui-extensions.svelte';
   import ExtensionOutlet from '$lib/plugins/extension-outlet.svelte';
 
@@ -129,36 +128,12 @@
   }
 
   function handleMemberClick(member: Node) {
-    // Check if node is already open in a tab
-    const currentState = navigationStore.state;
-    const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === member.id);
-
-    if (existingTab) {
-      setActiveTab(existingTab.id, existingTab.paneId);
-    } else {
-      // Create new tab
-      const targetPaneId = getTargetPaneId();
-      addTab(
-        {
-          id: uuidv4(),
-          title: member.content || 'Untitled',
-          type: 'node',
-          content: { nodeId: member.id, nodeType: member.nodeType },
-          closeable: true,
-          paneId: targetPaneId
-        },
-        true
-      );
-    }
-  }
-
-  function getTargetPaneId(): string {
-    const currentState = navigationStore.state;
-    const paneExists = currentState.panes.some((p) => p.id === currentState.activePaneId);
-    if (paneExists) {
-      return currentState.activePaneId;
-    }
-    return currentState.panes[0]?.id ?? 'pane-1';
+    getNavigationService().focusOrOpenNode(member.id, {
+      nodeType: member.nodeType,
+      // The member row already carries its text, so the tab can be titled
+      // immediately rather than showing "Loading..." until the viewer mounts.
+      title: member.content || 'Untitled'
+    });
   }
 
   // Reload the Contents list (user-authored members only — same filter as the

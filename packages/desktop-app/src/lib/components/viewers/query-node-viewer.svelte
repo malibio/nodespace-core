@@ -24,7 +24,7 @@
   import { createSchemaInstance, shouldIntegrateInstance } from '$lib/services/schema-authoring';
   import { getNavigationService } from '$lib/services/navigation-service';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
-  import { navigationStore, setActiveTab, updateTabContent } from '$lib/stores/navigation.svelte';
+  import { navigationStore, updateTabContent } from '$lib/stores/navigation.svelte';
   import TableView from '$lib/components/query/table-view.svelte';
   import ListView from '$lib/components/query/list-view.svelte';
   import KanbanView from '$lib/components/query/kanban-view.svelte';
@@ -522,14 +522,11 @@
   }
 
   function handleRowClick(clickedNodeId: string) {
-    // Check if node is already open in any tab — if so, switch to it
-    const state = navigationStore.state;
-    const existingTab = state.tabs.find((t) => t.content?.nodeId === clickedNodeId);
-    if (existingTab) {
-      setActiveTab(existingTab.id, existingTab.paneId);
-      return;
-    }
-    getNavigationService().navigateToNodeInOtherPane(clickedNodeId, paneId);
+    // Focus the node if it's already open; otherwise open it in the other pane
+    // so this result list stays visible alongside it.
+    const nav = getNavigationService();
+    if (nav.focusNodeTab(clickedNodeId)) return;
+    nav.navigateToNodeInOtherPane(clickedNodeId, paneId);
   }
 
   // Create a fresh instance of the viewed schema type. The list is populated by

@@ -7,11 +7,19 @@
  * - Regular navigation (navigateToNode)
  * - New tab creation (navigateToNode with openInNewTab)
  * - Other pane navigation (navigateToNodeInOtherPane)
+ * - Focus-or-open tab reuse (focusOrOpenNode, focusNodeTab)
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { getNavigationService, NavigationService } from '$lib/services/navigation-service';
-import { navigationStore, resetTabState, DEFAULT_PANE_ID } from '$lib/stores/navigation.svelte';
+import {
+  navigationStore,
+  resetTabState,
+  createPane,
+  addTab,
+  setActivePane,
+  DEFAULT_PANE_ID
+} from '$lib/stores/navigation.svelte';
 import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
 import type { Node } from '$lib/types';
@@ -816,5 +824,193 @@ describe('NavigationService - Entity node navigation (Issue #915)', () => {
     // Should walk all the way up to the date node (nearest viewer-owning ancestor)
     expect(newTab).toBeDefined();
     expect(newTab?.content?.nodeType).toBe('date');
+  });
+});
+
+describe('NavigationService - focusOrOpenNode', () => {
+  let navService: ReturnType<typeof getNavigationService>;
+
+  beforeEach(() => {
+    resetTabState();
+    navService = getNavigationService();
+  });
+
+  function nodeTabs(nodeId: string) {
+    return navigationStore.state.tabs.filter((tab) => tab.content?.nodeId === nodeId);
+  }
+
+  it('opens a tab when the node is not already open', () => {
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+    const tabs = nodeTabs('node-a');
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].content?.nodeType).toBe('text');
+    expect(tabs[0].type).toBe('node');
+    expect(tabs[0].closeable).toBe(true);
+  });
+
+  it('makes the newly opened tab active', () => {
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+    const state = navigationStore.state;
+    const tab = nodeTabs('node-a')[0];
+    expect(state.activeTabIds[tab.paneId]).toBe(tab.id);
+  });
+
+  it('defaults the title to a placeholder the viewer replaces on mount', () => {
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+    expect(nodeTabs('node-a')[0].title).toBe('Loading...');
+  });
+
+  it('uses an explicit title when the caller already knows it', () => {
+    navService.focusOrOpenNode('node-a', { nodeType: 'text', title: 'Quarterly plan' });
+
+    expect(nodeTabs('node-a')[0].title).toBe('Quarterly plan');
+  });
+
+  it('reuses the existing tab instead of opening a duplicate', () => {
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+    const firstTabId = nodeTabs('node-a')[0].id;
+
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+    const tabs = nodeTabs('node-a');
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].id).toBe(firstTabId);
+  });
+
+  it('does not overwrite the existing tab title when reusing it', () => {
+    navService.focusOrOpenNode('node-a', { nodeType: 'text', title: 'Real title' });
+
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+    expect(nodeTabs('node-a')[0].title).toBe('Real title');
+  });
+
+  it('focuses an existing tab that lives in another pane, switching panes', () => {
+    // Open the node in a second pane, then leave the first pane active.
+    const secondPane = createPane();
+    expect(secondPane).not.toBeNull();
+    addTab({
+      id: 'tab-in-other-pane',
+      title: 'Elsewhere',
+      type: 'node',
+      content: { nodeId: 'node-a', nodeType: 'text' },
+      closeable: true,
+      paneId: secondPane!.id
+    });
+    // Put focus back on the first pane, so the match below has to switch panes.
+    setActivePane(DEFAULT_PANE_ID);
+    expect(navigationStore.state.activePaneId).toBe(DEFAULT_PANE_ID);
+
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+    const state = navigationStore.state;
+    expect(nodeTabs('node-a')).toHaveLength(1);
+    expect(state.activePaneId).toBe(secondPane!.id);
+    expect(state.activeTabIds[secondPane!.id]).toBe('tab-in-other-pane');
+  });
+
+  it('opens into the active pane', () => {
+    const secondPane = createPane();
+    expect(secondPane).not.toBeNull();
+
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+    expect(nodeTabs('node-a')[0].paneId).toBe(navigationStore.state.activePaneId);
+  });
+
+  it('does not resolve to a navigation ancestor — it opens the node given', () => {
+    // navigateToNode would walk a primitive up to its viewer-owning ancestor;
+    // focusOrOpenNode deliberately does not.
+    const dateNode: Node = {
+      id: '2026-01-05',
+      nodeType: 'date',
+      content: '',
+      version: 1,
+      properties: {},
+      createdAt: Date.now().toString(),
+      modifiedAt: Date.now().toString()
+    };
+    const child: Node = { ...dateNode, id: 'child-text', nodeType: 'text', content: 'Child' };
+    sharedNodeStore.setNode(dateNode, { type: 'database', reason: 'test' }, true);
+    sharedNodeStore.setNode(child, { type: 'database', reason: 'test' }, true);
+    structureTree.addChild({ parentId: '2026-01-05', childId: 'child-text', order: 1 });
+
+    navService.focusOrOpenNode('child-text', { nodeType: 'text' });
+
+    expect(nodeTabs('child-text')).toHaveLength(1);
+    expect(nodeTabs('2026-01-05')).toHaveLength(0);
+  });
+
+  describe('nodeType routing overrides', () => {
+    it('opens a schema id under the tab nodeType that routes to its viewer', () => {
+      // The sidebar opens schemas as 'query' so the tab reaches QueryNodeViewer.
+      navService.focusOrOpenNode('schema-1', { nodeType: 'query' });
+
+      expect(nodeTabs('schema-1')[0].content?.nodeType).toBe('query');
+    });
+  });
+
+  describe('matchNodeType', () => {
+    it('ignores nodeType by default, so any tab showing the id is reused', () => {
+      navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+
+      navService.focusOrOpenNode('node-a', { nodeType: 'query' });
+
+      expect(nodeTabs('node-a')).toHaveLength(1);
+    });
+
+    it('opens a new tab when matchNodeType is set and the open tab has another type', () => {
+      // A date id is not a real node id: another tab may carry the same string
+      // without being the daily journal.
+      navService.focusOrOpenNode('2026-01-05', { nodeType: 'text' });
+
+      navService.focusOrOpenNode('2026-01-05', { nodeType: 'date', matchNodeType: true });
+
+      const tabs = nodeTabs('2026-01-05');
+      expect(tabs).toHaveLength(2);
+      expect(tabs.some((tab) => tab.content?.nodeType === 'date')).toBe(true);
+    });
+
+    it('reuses the tab when matchNodeType is set and the type matches', () => {
+      navService.focusOrOpenNode('2026-01-05', { nodeType: 'date', matchNodeType: true });
+
+      navService.focusOrOpenNode('2026-01-05', { nodeType: 'date', matchNodeType: true });
+
+      expect(nodeTabs('2026-01-05')).toHaveLength(1);
+    });
+  });
+});
+
+describe('NavigationService - focusNodeTab', () => {
+  let navService: ReturnType<typeof getNavigationService>;
+
+  beforeEach(() => {
+    resetTabState();
+    navService = getNavigationService();
+  });
+
+  it('returns false and opens nothing when the node is not open', () => {
+    const before = navigationStore.state.tabs.length;
+
+    expect(navService.focusNodeTab('node-a')).toBe(false);
+    expect(navigationStore.state.tabs).toHaveLength(before);
+  });
+
+  it('returns true and focuses the tab when the node is open', () => {
+    navService.focusOrOpenNode('node-a', { nodeType: 'text' });
+    const tab = navigationStore.state.tabs.find((t) => t.content?.nodeId === 'node-a');
+    navService.focusOrOpenNode('node-b', { nodeType: 'text' });
+
+    expect(navService.focusNodeTab('node-a')).toBe(true);
+    expect(navigationStore.state.activeTabIds[tab!.paneId]).toBe(tab!.id);
+  });
+
+  it('matches on node id alone, regardless of the tab nodeType', () => {
+    navService.focusOrOpenNode('schema-1', { nodeType: 'query' });
+
+    expect(navService.focusNodeTab('schema-1')).toBe(true);
   });
 });

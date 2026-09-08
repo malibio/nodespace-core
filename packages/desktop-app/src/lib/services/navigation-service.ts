@@ -12,6 +12,11 @@
  * - Resolves node UUIDs to node types using SharedNodeStore (synchronous)
  * - Creates or switches to tabs dynamically
  * - Generates human-readable tab titles from node content
+ *
+ * Three navigation entry points, differing in what they do to existing tabs:
+ * `navigateToNode` re-points the current tab, `navigateToNodeInOtherPane`
+ * always opens a new one beside it, and `focusOrOpenNode` reuses a tab already
+ * showing the node. See each method for which to reach for.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -20,7 +25,9 @@ import {
   navigationStore,
   updateTabContent,
   createPane,
-  setActivePane
+  setActivePane,
+  setActiveTab,
+  DEFAULT_PANE_ID
 } from '$lib/stores/navigation.svelte';
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
@@ -37,6 +44,42 @@ export interface NavigationTarget {
   nodeId: string;
   nodeType: string;
   title: string;
+}
+
+/**
+ * Options for {@link NavigationService.focusOrOpenNode}.
+ *
+ * The three fields exist because the call sites genuinely differ, not to be
+ * general: a schema opens under `nodeType: 'query'` so the tab routes to
+ * QueryNodeViewer, the Daily Journal must not focus a non-date tab that happens
+ * to share today's id, and most callers let their viewer set the real title on
+ * mount while the collection viewer already knows it.
+ */
+export interface FocusOrOpenOptions {
+  /**
+   * The `nodeType` written into the tab's content, which selects the viewer.
+   * Often the node's own type, but deliberately an override for tabs that route
+   * elsewhere (a schema id opened as `'query'`, a chat as `'ai-chat'`).
+   */
+  nodeType: string;
+  /**
+   * Title for a newly created tab. Defaults to `'Loading...'`, which viewers
+   * replace on mount; pass a value only when the caller already knows it.
+   */
+  title?: string;
+  /**
+   * When true, an existing tab must also match `nodeType` to be focused.
+   *
+   * Off by default: a node id identifies one node, so any tab showing it is the
+   * tab the user means. Daily Journal needs it because a date id is not a real
+   * node id — nothing stops another tab from carrying the same string.
+   *
+   * This is a symptom rather than a feature: it exists because date ids are
+   * bare `YYYY-MM-DD` strings sharing a namespace with nothing. If date-node
+   * identity is ever fixed, this option loses its only caller and should go
+   * with it. New callers should not need it.
+   */
+  matchNodeType?: boolean;
 }
 
 export class NavigationService {
@@ -333,6 +376,89 @@ export class NavigationService {
     if (isNonRoot) {
       this.scrollToNode(target.nodeId);
     }
+  }
+
+  /**
+   * The pane a new tab should open into: the active one, or the first pane if
+   * the active id is stale.
+   *
+   * Public because a caller that opens a non-node tab still needs it —
+   * `openSearchTab` creates a `type: 'search'` tab with no `content`, so
+   * {@link focusOrOpenNode}'s node lookup does not apply to it, but the pane
+   * choice is the same question. Callers opening node tabs should not need
+   * this; `focusOrOpenNode` resolves the pane itself.
+   */
+  targetPaneId(): string {
+    const state = navigationStore.state;
+    const paneExists = state.panes.some((pane) => pane.id === state.activePaneId);
+    if (paneExists) return state.activePaneId;
+    return state.panes[0]?.id ?? DEFAULT_PANE_ID;
+  }
+
+  /**
+   * Focus the tab already showing a node; report whether one was found.
+   *
+   * Also the focus half of {@link focusOrOpenNode}, so the two cannot drift on
+   * what counts as "already open". Called directly by the caller whose
+   * "not open yet" branch is not a plain new tab — QueryNodeViewer opens a row
+   * in the *other* pane, so the list stays visible beside it, and wants this
+   * reuse check with its own opening behaviour.
+   *
+   * @param nodeId - Node whose tab to focus
+   * @param nodeType - When given, the tab must also match this type. Omit for
+   *   the usual case: a node id identifies one node, so any tab showing it is
+   *   the tab the user means.
+   * @returns true if a matching tab was found and focused
+   */
+  focusNodeTab(nodeId: string, nodeType?: string): boolean {
+    const existingTab = navigationStore.state.tabs.find(
+      (tab) =>
+        tab.content?.nodeId === nodeId &&
+        (nodeType === undefined || tab.content?.nodeType === nodeType)
+    );
+    if (!existingTab) return false;
+
+    setActiveTab(existingTab.id, existingTab.paneId);
+    return true;
+  }
+
+  /**
+   * Focus the tab already showing a node, or open one if none exists.
+   *
+   * This is the "open it, but don't open it twice" behaviour behind clicking a
+   * node in the sidebar, a search result, or a collection member. It differs
+   * from the other two navigation methods in what it does to existing tabs:
+   *
+   * - {@link navigateToNode} re-points the *current* tab, replacing what the
+   *   user was looking at.
+   * - {@link navigateToNodeInOtherPane} always calls `addTab`, so clicking the
+   *   same node twice stacks duplicates.
+   * - This method reuses a matching tab wherever it lives, switching panes if
+   *   the match is in the other one.
+   *
+   * Unlike the other two it does **not** resolve to a navigation ancestor: it
+   * opens the node it was given. Callers pass ids they mean to open as tabs —
+   * a schema, a chat, a collection member — not child nodes to scroll to.
+   *
+   * @param nodeId - Node to focus or open
+   * @param options - Tab `nodeType`, optional `title`, optional `matchNodeType`
+   */
+  focusOrOpenNode(nodeId: string, options: FocusOrOpenOptions): void {
+    const { nodeType, title = 'Loading...', matchNodeType = false } = options;
+
+    if (this.focusNodeTab(nodeId, matchNodeType ? nodeType : undefined)) return;
+
+    addTab(
+      {
+        id: uuidv4(),
+        title,
+        type: 'node',
+        content: { nodeId, nodeType },
+        closeable: true,
+        paneId: this.targetPaneId()
+      },
+      true
+    );
   }
 
   /**

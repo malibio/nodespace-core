@@ -11,7 +11,7 @@
   import { openSettings } from '$lib/utils/open-settings';
   import { collectionsState, collectionsData } from '$lib/stores/collections.svelte';
   import { formatDateISO } from '$lib/utils/date-formatting.js';
-  import { v4 as uuidv4 } from 'uuid';
+  import { getNavigationService } from '$lib/services/navigation-service';
   import CollectionSubPanel from './collection-sub-panel.svelte';
   import DatabaseSwitcher from './database-switcher.svelte';
   import { onMount, onDestroy } from 'svelte';
@@ -171,27 +171,7 @@
     // Close sub-panel first
     handleCloseSubPanel();
 
-    // Check if node is already open in a tab
-    const currentState = navigationStore.state;
-    const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === nodeId);
-
-    if (existingTab) {
-      setActiveTab(existingTab.id, existingTab.paneId);
-    } else {
-      // Create new tab
-      const targetPaneId = getTargetPaneId();
-      addTab(
-        {
-          id: uuidv4(),
-          title: 'Loading...', // Viewer will update
-          type: 'node',
-          content: { nodeId, nodeType },
-          closeable: true,
-          paneId: targetPaneId
-        },
-        true
-      );
-    }
+    getNavigationService().focusOrOpenNode(nodeId, { nodeType });
   }
 
   /**
@@ -202,90 +182,28 @@
   }
 
   /**
-   * Get the target pane ID for new tabs
-   * Uses active pane, or falls back to first available pane
-   */
-  function getTargetPaneId(): string {
-    const currentState = navigationStore.state;
-    // Use active pane if it exists, otherwise use the first pane
-    const paneExists = currentState.panes.some((p) => p.id === currentState.activePaneId);
-    if (paneExists) {
-      return currentState.activePaneId;
-    }
-    // Fallback to first pane (there should always be at least one)
-    return currentState.panes[0]?.id ?? 'pane-1';
-  }
-
-  /**
-   * Find if today's date is already open in any tab
-   * @returns The tab with today's date if found, null otherwise
-   */
-  function findTodayDateTab() {
-    const todayId = getTodayDateId();
-    const currentState = navigationStore.state;
-
-    return currentState.tabs.find(
-      (tab) => tab.content?.nodeId === todayId && tab.content?.nodeType === 'date'
-    );
-  }
-
-  /**
-   * Handle Daily Journal navigation
-   * 1. First look for existing tab with today's date
-   * 2. If found, make it active
-   * 3. If not found, create new tab in the active pane (or first available pane)
+   * Handle Daily Journal navigation: focus today's date tab, or open one.
+   *
+   * `matchNodeType` because a date id is a date string rather than a real node
+   * id, so an unqualified id match could focus some other tab that happens to
+   * carry the same string.
    */
   function handleDailyJournalClick() {
-    const existingTab = findTodayDateTab();
-
-    if (existingTab) {
-      // Tab with today's date found - activate it
-      setActiveTab(existingTab.id, existingTab.paneId);
-    } else {
-      // No tab with today's date - create new one in active/first pane
-      // Title is a placeholder - DateNodeViewer sets the real title on mount
-      const todayId = getTodayDateId();
-      const targetPaneId = getTargetPaneId();
-      const newTab = {
-        id: uuidv4(),
-        title: todayId, // Placeholder - viewer will update to "Today" on mount
-        type: 'node' as const,
-        content: {
-          nodeId: todayId,
-          nodeType: 'date'
-        },
-        closeable: true,
-        paneId: targetPaneId
-      };
-
-      addTab(newTab, true); // Make it active
-    }
+    const todayId = getTodayDateId();
+    getNavigationService().focusOrOpenNode(todayId, {
+      nodeType: 'date',
+      // Placeholder - DateNodeViewer updates it to "Today" on mount
+      title: todayId,
+      matchNodeType: true
+    });
   }
 
   function handleSchemaClick(schemaId: string) {
-    const currentState = navigationStore.state;
-    const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === schemaId);
-
-    if (existingTab) {
-      setActiveTab(existingTab.id, existingTab.paneId);
-    } else {
-      const targetPaneId = getTargetPaneId();
-      // `nodeType: 'query'` routes the tab to QueryNodeViewer; the viewer itself
-      // branches on the loaded node (schema id → default type view, query id →
-      // saved query) rather than trusting this decorative flag (issue #1919).
-      // TODO(#1919 follow-up): nest materialized saved queries under their type here.
-      addTab(
-        {
-          id: uuidv4(),
-          title: 'Loading...',
-          type: 'node',
-          content: { nodeId: schemaId, nodeType: 'query' },
-          closeable: true,
-          paneId: targetPaneId
-        },
-        true
-      );
-    }
+    // `nodeType: 'query'` routes the tab to QueryNodeViewer; the viewer itself
+    // branches on the loaded node (schema id → default type view, query id →
+    // saved query) rather than trusting this decorative flag (issue #1919).
+    // TODO(#1919 follow-up): nest materialized saved queries under their type here.
+    getNavigationService().focusOrOpenNode(schemaId, { nodeType: 'query' });
   }
 
   /** Fallback label for a chat that has no content yet — chats start empty and
@@ -295,30 +213,11 @@
   }
 
   /**
-   * Open (or focus) an ai-chat node in a tab. Same tab-reuse shape as
-   * `handleSchemaClick`, but routed to `AiChatNodeViewer` via `nodeType: 'ai-chat'`
-   * instead of `handleSchemaClick`'s hardcoded `'query'`.
+   * Open (or focus) an ai-chat node in a tab, routed to `AiChatNodeViewer` via
+   * `nodeType: 'ai-chat'` instead of `handleSchemaClick`'s hardcoded `'query'`.
    */
   function handleAiChatClick(chatId: string) {
-    const currentState = navigationStore.state;
-    const existingTab = currentState.tabs.find((tab) => tab.content?.nodeId === chatId);
-
-    if (existingTab) {
-      setActiveTab(existingTab.id, existingTab.paneId);
-    } else {
-      const targetPaneId = getTargetPaneId();
-      addTab(
-        {
-          id: uuidv4(),
-          title: 'Loading...',
-          type: 'node',
-          content: { nodeId: chatId, nodeType: 'ai-chat' },
-          closeable: true,
-          paneId: targetPaneId
-        },
-        true
-      );
-    }
+    getNavigationService().focusOrOpenNode(chatId, { nodeType: 'ai-chat' });
   }
 
   /**
@@ -352,7 +251,7 @@
           title: 'Search',
           type: 'search',
           closeable: true,
-          paneId: getTargetPaneId()
+          paneId: getNavigationService().targetPaneId()
         },
         true
       );

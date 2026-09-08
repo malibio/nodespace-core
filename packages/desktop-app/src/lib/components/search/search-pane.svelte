@@ -1,11 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { navigationStore, addTab, setActiveTab } from '$lib/stores/navigation.svelte';
+  import { getNavigationService } from '$lib/services/navigation-service';
   import { pluginRegistry } from '$lib/plugins/plugin-registry';
   import { createLogger } from '$lib/utils/logger';
   import type { Node } from '$lib/types/node';
-  import { v4 as uuidv4 } from 'uuid';
 
   const log = createLogger('SearchPane');
 
@@ -79,30 +78,8 @@
     return firstLine?.trim() || '(untitled)';
   }
 
-  function targetPaneId(): string {
-    const state = navigationStore.state;
-    const paneExists = state.panes.some((pane) => pane.id === state.activePaneId);
-    return paneExists ? state.activePaneId : (state.panes[0]?.id ?? 'pane-1');
-  }
-
   function openResult(node: Node) {
-    const state = navigationStore.state;
-    const existingTab = state.tabs.find((tab) => tab.content?.nodeId === node.id);
-    if (existingTab) {
-      setActiveTab(existingTab.id, existingTab.paneId);
-      return;
-    }
-    addTab(
-      {
-        id: uuidv4(),
-        title: 'Loading...', // Viewer sets the real title on mount
-        type: 'node',
-        content: { nodeId: node.id, nodeType: node.nodeType },
-        closeable: true,
-        paneId: targetPaneId()
-      },
-      true
-    );
+    getNavigationService().focusOrOpenNode(node.id, { nodeType: node.nodeType });
   }
 </script>
 
