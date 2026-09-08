@@ -35,23 +35,15 @@ Date nodes make temporal retrieval reliable: if a finding is time-bound, attach 
 
 ## Shared Workspaces (Multi-User)
 
-A NodeSpace collection can be **synced and shared** with a teammate through NodeSpace Pro. When the daemon is bound to a shared collection, another engineer — or their agent — reads and writes the same graph, so you share context across sessions and across people. It is opt-in and private to its members. When you are working in a shared workspace, adjust how you use NodeSpace:
+A NodeSpace collection can be **synced and shared** with a teammate through NodeSpace Pro: the daemon is launched already bound to it, so another engineer — or their agent — reads and writes the same graph. It is opt-in, private to its members, and syncs only once each engineer has signed in and enabled sync. In a shared workspace:
 
-**You share the whole workspace, not a per-command target.** You do not pick the shared collection per write — the daemon is launched already bound to it, so nodes you create sync into it automatically. Everything you save here is visible to your teammate. Keep private scratch notes in a separate, unshared database (`nodespace database create`/`--database`) if you need them.
+**Everything you save is visible, and you are not the only writer.** You don't pick the shared collection per write — nodes you create sync into it automatically. Keep private scratch in a separate database (`nodespace database create`/`--database`). A node here may have been created or last edited by your teammate, so don't assume it is yours or stable across your session, and search at session start to pull what they already saved. Don't move sensitive or unrelated notes in without intent.
 
-**You are not the only writer.** A node here may have been created or last edited by your teammate. Don't assume a node is yours or that its content is stable across your session. Search at session start to pull what your teammate has already saved.
+**Attribute what you save, and prefer additive writes.** Put provenance in the content — who wrote it and when — since a human-readable marker is easier to scan than the per-node creator NodeSpace records. Add a new node rather than rewriting one your teammate authored; when you must update a shared node, pass the `version` you read via `nodespace node batch-update`, so a concurrent edit surfaces as an OCC conflict instead of silently overwriting. (`node update` without a version bypasses that check.)
 
-**Attribute what you save.** Put the provenance in the content — who wrote it and when — so a teammate can tell where a note came from (e.g. begin a session summary with your name and the date). NodeSpace records a creator per node, but a human-readable marker helps a teammate scan.
+**Recall is eventually consistent, and semantic search lags further.** A teammate's write appears after sync latency. For immediate cross-engineer recall use structured queries — `nodespace query`, or `nodespace node query --content-contains "..."` — which see a peer's node as soon as it syncs. Semantic `nodespace search` works only after your machine has embedded it: embeddings are generated locally, not synced, so fall back to `nodespace query` for a recent teammate note.
 
-**Prefer additive writes over editing a teammate's node.** Add a new node (a child, or a fresh note) rather than rewriting one your teammate authored. When you must update a shared node, pass the `version` you read via `nodespace node batch-update`, so a concurrent edit surfaces as an OCC conflict instead of silently overwriting it. (`node update` without a version bypasses that check — avoid it for shared nodes.)
-
-**Recall is eventually consistent, and semantic search lags.** A teammate's write appears after sync latency, not instantly. Two caveats are specific to shared sync:
-- **For immediate cross-engineer recall, use structured queries** — `nodespace query` or `nodespace node query --content-contains "..."`. A peer's node is queryable as soon as it syncs.
-- **Semantic `nodespace search` over a teammate's node works only after your machine has embedded it.** Embeddings are generated locally, not synced, so there is a lag and it needs the local inference model loaded. If a recent teammate note isn't in `search` yet, fall back to `nodespace query`.
-
-**Don't file shared memory under date nodes.** The single-user pattern of attaching findings under `--parent "YYYY-MM-DD"` does **not** round-trip through sync yet — date-container nodes stay local. In a shared workspace, save findings as regular nodes (optionally organized under a shared project or collection node), not under a date node, or your teammate won't see them.
-
-**It's private and opt-in.** The shared collection is readable only by its members and syncs only after each engineer has signed in and enabled sync. Don't move sensitive or unrelated notes into it without intent.
+**Don't file shared memory under date nodes.** Attaching findings under `--parent "YYYY-MM-DD"` does **not** round-trip through sync yet — date-container nodes stay local. Save findings as regular nodes (optionally under a shared project or collection node) or your teammate won't see them.
 
 ## Preflight Check
 
@@ -243,11 +235,18 @@ nodespace relationship create --from <ticket-id> --type belongs_to_sprint --to <
 
 ### Organize a node into a collection
 
-Use a relationship with `--type member_of` against the collection node. If the collection doesn't exist as a node yet, ask the user to create it first.
+Collections are how NodeSpace tags and groups things — a flat label and a nested `:`-delimited path (`docs:rust`) are one mechanism at two depths, the same syntax `import` and `search` take. Crucially, **collection membership is an argument to the create call**, not a follow-up write: pass `--collection` and every missing segment is created for you. Never look a collection up first or ask the user to pre-create one.
 
 ```bash
-nodespace relationship create --from <node-id> --type member_of --to <collection-id>
+# One call: creates the node, creates `docs` and `rust`, files the node under `rust`
+nodespace node create --type text --content "Pin tokio to 1.40" --collection docs:rust
+
+# Repeatable, and it works on an existing node too
+nodespace node create --type text --content "Retry budget" --collection docs:rust --collection decisions
+nodespace node update <node-id> --collection docs:rust
 ```
+
+A collection costs the same one flag as a single `tags` array element, so prefer it for any durable grouping: don't add a `tags`/`categories`/`topics`/`labels` field to a schema for something collections already model. Unlike an array value, a collection shows in the UI, is renamed once not per member, nests, and needs no schema change to join — `member_of` is structural, legal between any two nodes undeclared.
 
 ### Delete a node, or a whole node type
 

@@ -133,6 +133,17 @@ pub const RELATIONSHIP_VS_FIELD: SchemaRule = SchemaRule {
     prose: "**Relationships vs. fields:** use a relationship (not a field) when a value references another node type.",
 };
 
+/// The write-cost argument against collections was, in practice, the argument
+/// for a `tags: []` field: an agent priced a collection at a lookup, a create
+/// and a link per node, against one property write for an array element. A
+/// collection path is now a single argument on the create call, so the two
+/// cost the same and only the durable differences remain.
+pub const GROUPING_IS_COLLECTIONS: SchemaRule = SchemaRule {
+    id: "grouping-is-collections",
+    imperative: "GROUPING FIELDS: Do NOT declare a tags, categories, topics, labels, areas or groups field. NodeSpace already has one mechanism for tagging and grouping — collections — and a flat label and a nested path (\"docs:rust\") are that same mechanism at two depths. COST: a collection is not more expensive to write than an array element. Both are one argument on the create call: node create --collection docs:rust, repeatable for several collections, with every missing path segment created for you and no lookup first. So there is no cheap-versus-thorough tradeoff to weigh. What differs is durability: an array value renders in no UI, must be edited on every member to rename, cannot nest, and is invisible to collection queries; a collection does all four. member_of is structural, so joining one needs no schema change and no relationship declaration. ESCAPE HATCH: if the user explicitly asks for a plain tags field, give them one without arguing.",
+    prose: "**Grouping is collections, not an array field.** Don't declare a `tags`, `categories`, `topics`, `labels`, `areas` or `groups` field — collections already are the tagging and grouping mechanism, with a flat label and a nested path (`docs:rust`) as the same mechanism at two depths. They also cost the same to write: `node create --collection docs:rust` is one argument, repeatable, with missing path segments created for you and no lookup first — exactly the cost of setting one array element. What differs is what you get. An array value renders in no UI, has to be edited on every member to rename, cannot nest, and is invisible to collection queries; a collection does all four, and `member_of` is structural so joining one needs no schema change. If the user explicitly asks for a plain tags field, give them one without arguing.",
+};
+
 pub const TARGET_TYPE_MUST_EXIST: SchemaRule = SchemaRule {
     id: "target-type-must-exist",
     imperative: "The targetType MUST be an existing schema ID from the EXISTING SCHEMAS list in the system prompt, or the schema ID of the type you are creating in this same call — do NOT invent types that aren't listed. If the target type doesn't exist yet, omit the relationship entirely. reverseName and reverseCardinality are REQUIRED on every relationship — a declaration missing either is rejected. One edge is stored and read from BOTH ends, so name it from both: reverseName is what the edge is called read from the target (plural where that end may hold many — \"invoices\", not \"Invoice (Customer)\"), and reverseCardinality is \"one\" or \"many\", saying how many sources may point at one target. Examples:\n- ADR supersedes adr (one), read back as superseded_by: `{\"name\": \"supersedes\", \"targetType\": \"adr\", \"direction\": \"out\", \"cardinality\": \"one\", \"reverseName\": \"superseded_by\", \"reverseCardinality\": \"one\"}`\n- Ticket has_task task (many), read back as ticket: `{\"name\": \"has_task\", \"targetType\": \"task\", \"direction\": \"out\", \"cardinality\": \"many\", \"reverseName\": \"ticket\", \"reverseCardinality\": \"one\"}`\n- ADR decided_by person, readable back as the person's decisions: `{\"name\": \"decided_by\", \"targetType\": \"person\", \"direction\": \"out\", \"cardinality\": \"one\", \"reverseName\": \"decisions\", \"reverseCardinality\": \"many\"}`\n\nSELF-REFERENCE: a type may point at itself in the same schema create call — use its own schema ID (the snake_case form of the name), no second call needed. The required reverseName is what names the other direction, so never declare a second relationship for it: one stored edge, readable from both ends. Example, on `schema create` for ADR: `{\"name\": \"supersedes\", \"targetType\": \"adr\", \"direction\": \"out\", \"cardinality\": \"one\", \"reverseName\": \"superseded_by\", \"reverseCardinality\": \"one\"}`. Same for `blocks`/`blocked_by` on a task or `parent`/`child` on a category.",
@@ -170,6 +181,7 @@ pub const SCHEMA_RULES: &[SchemaRule] = &[
     NAME_PLACEHOLDER_EXCEPTION,
     ENUM_FORMAT,
     RELATIONSHIP_VS_FIELD,
+    GROUPING_IS_COLLECTIONS,
     TARGET_TYPE_MUST_EXIST,
     ENUM_EDGE_FIELDS,
     TITLE_TEMPLATE_PLACEHOLDERS,
@@ -218,11 +230,16 @@ pub const SINGLE_ITEM_PER_CALL: InteractionRule = InteractionRule {
     skill_md_key_phrase: "Delete one node per call; confirm each deletion before moving to the next",
 };
 
-pub const ORG_NEEDS_EXISTING_COLLECTION: InteractionRule = InteractionRule {
-    id: "org-needs-existing-collection",
-    imperative: "If the collection doesn't exist as a node yet, ask the user to create it first using the Node Creation skill.",
-    prose: "if the target collection doesn't exist as a node yet, ask the user to create it first rather than creating it implicitly.",
-    skill_md_key_phrase: "If the collection doesn't exist as a node yet, ask the user to create it first",
+/// Collection assignment is a create-time argument, not a follow-up write.
+/// The path resolves and auto-creates every missing segment in one call, so
+/// the lookup-create-link sequence agents reach for by default is pure cost —
+/// and so is the `tags: []` array they choose instead when they price that
+/// sequence into the decision.
+pub const COLLECTION_AT_CREATE_TIME: InteractionRule = InteractionRule {
+    id: "collection-at-create-time",
+    imperative: "COLLECTIONS: Pass the collection when you create the node — create_node takes a collection path directly. Never look the collection up first, and never ask the user to pre-create it: a path is resolved in one call and every missing segment is created for you, including nested ones (\"docs:rust\" creates both `docs` and `rust`). The parameter is repeatable, so one call can file a node under several collections. Because of that, a collection costs no more to write than one element of a tags/categories/topics array — and unlike an array it is visible in the UI, renamed once instead of per member, and needs no schema change to join. Prefer a collection for any durable grouping.",
+    prose: "collection membership is an argument to the create call, not a follow-up write — pass `--collection <path>` and every missing segment of the path is created for you.",
+    skill_md_key_phrase: "collection membership is an argument to the create call",
 };
 
 /// A relationship is declared once, on the source type, but is legitimately
@@ -253,7 +270,7 @@ pub const INTERACTION_RULES: &[InteractionRule] = &[
     SUCCESS_NO_REVERIFY,
     TASK_STATUS_DEDICATED_VERB,
     SINGLE_ITEM_PER_CALL,
-    ORG_NEEDS_EXISTING_COLLECTION,
+    COLLECTION_AT_CREATE_TIME,
     RELATIONSHIP_REVERSE_TRAVERSAL,
     BULK_IMPORT_NO_FOLLOWUP_SEARCH,
 ];

@@ -214,6 +214,16 @@ description: Create one new record of a type that already exists. Use for a sing
 parameters_schema:
 {
   "properties": {
+    "collection": {
+      "description": "Collection path(s) to file this record under, as a string or an array of them. Use ':' for hierarchy — \"docs:rust\" files it under `rust`, itself inside `docs`. Every missing collection in the path is created for you, so pass the path the user's own words imply; never look one up first, create one first, or ask the user to create one. This is how records are tagged and grouped: prefer it over recording a topic, tag or category as a field_values entry.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "array"
+      ]
+    },
     "content": {
       "description": "The record's title and nothing else: the shortest phrase naming what this record IS. Facts ABOUT it — who owns it, what state it is in, what it depends on — are field_values entries, never appended to the title.",
       "type": "string"

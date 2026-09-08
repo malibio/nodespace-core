@@ -145,8 +145,10 @@ message CreateNodeRequest {
   // unset = root node (no parent); prost generates Option<String>.
   optional string parent_id = 3;
   string properties = 4;       // JSON-encoded, may be empty string or "{}"
-  // unset = no collection; present = collection path, e.g. "hr:policy".
-  optional string collection = 5;
+  // Collection paths to add the new node to, e.g. "hr:policy". Repeated: a
+  // node may join several collections in one create. Missing path segments
+  // are created. Mutually exclusive with `collection_ids`.
+  repeated string collections = 5;
   // unset = default "active"; present = explicit lifecycle status.
   optional string lifecycle_status = 6;
   // unset = server generates a new ID; present = caller-supplied UUID.
@@ -166,6 +168,9 @@ message CreateNodeRequest {
     bool end = 9;          // insert after all existing children (default when unset)
     string after = 10;     // insert after this sibling ID
   }
+  // Collection IDs to add the new node to. Repeated. The ID-based counterpart
+  // of `collections`; the two are mutually exclusive on one request.
+  repeated string collection_ids = 11;
 }
 
 message NodeResponse {
@@ -211,12 +216,17 @@ message UpdateNodeRequest {
   // "no change" (field absent) from "clear the value" (field present, empty/"{}")
   optional string content = 4;       // unset = no change; "" is a legitimate value (clear content)
   optional string properties = 5;    // unset = no change; "{}" is a legitimate value (clear props)
-  // unset = no collection change; present = collection path to add node to.
-  optional string add_to_collection = 6;
-  // unset = no collection change; present = collection_id to remove node from.
-  optional string remove_from_collection = 7;
+  // Collection paths to add the node to. Repeated: a node may join several
+  // collections in one update. Missing path segments are created. Mutually
+  // exclusive with `add_to_collection_ids`.
+  repeated string add_to_collections = 6;
+  // Collection IDs to remove the node from. Repeated.
+  repeated string remove_from_collections = 7;
   // unset = no change; "" is not a legitimate lifecycle_status.
   optional string lifecycle_status = 8;
+  // Collection IDs to add the node to. Repeated. The ID-based counterpart of
+  // `add_to_collections`; the two are mutually exclusive on one request.
+  repeated string add_to_collection_ids = 9;
 }
 
 // UpdateNode returns NodeResponse.

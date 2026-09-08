@@ -344,6 +344,8 @@ Two scoping notes. Only declarations *between schemas* block the delete — rela
 
 **Self-referential relationships:** a type may point at itself in the same `schema create` call — give its own schema ID (the snake_case form of the name); no follow-up `schema update` is needed. The required `reverseName` is what names the other direction, so never declare a second relationship for it — one stored edge, readable from both ends: `{"name":"supersedes","targetType":"adr","direction":"out","cardinality":"one","reverseName":"superseded_by","reverseCardinality":"one"}`. The same shape covers `blocks`/`blocked_by` on a task and `parent`/`child` on a category.
 
+**Grouping is collections, not an array field.** Don't declare a `tags`, `categories`, `topics`, `labels`, `areas` or `groups` field — collections already are the tagging and grouping mechanism, with a flat label and a nested path (`docs:rust`) as the same mechanism at two depths. They also cost the same to write: `node create --collection docs:rust` is one argument, repeatable, with missing path segments created for you and no lookup first — exactly the cost of setting one array element. What differs is what you get. An array value renders in no UI, has to be edited on every member to rename, cannot nest, and is invisible to collection queries; a collection does all four, and `member_of` is structural so joining one needs no schema change. If the user explicitly asks for a plain tags field, give them one without arguing.
+
 **Edge fields.** A relationship can carry attributes on the edge itself via `edgeFields` — facts about the *connection*, not about either node (an access level on a membership, a billing date on an invoice link). Give an edge field a fixed vocabulary by declaring it as an enum with `coreValues`, the same shape a node field uses:
 
 ```json
@@ -425,12 +427,17 @@ Operate on individual nodes (get, create, update, delete, children, query, expor
 - `--type <NODE_TYPE>` — Node type, e.g. `text`, `task`, `date` (required)
 - `--content <CONTENT>` — Content (plain text or markdown) (required)
 - `--parent <PARENT>` — Parent node ID (omit to create a root node)
+- `--collection <PATH>` — Collection path to file the node under, `:`-delimited for hierarchy (e.g. `docs:rust`) — the same syntax `import` and `search` take. Missing segments are created. Repeatable to join several collections in one call. Mutually exclusive with --collection-id
+- `--collection-id <ID>` — Collection ID to file the node under (repeatable). Prefer --collection, which takes a readable path and needs no lookup
 
 **`nodespace node update`** — Update an existing node's content and/or properties
 
 - `<ID>` — Node ID to update (required)
 - `--content <CONTENT>` — New content. Omit to leave content unchanged (e.g. when only setting properties)
 - `--property <PROPERTIES>` — Set one or more properties: `--property key=value` (repeatable). Values are parsed as JSON when possible (numbers, booleans, `null`, arrays, objects), otherwise treated as a plain string. Deep-merged into the node's existing properties (unspecified keys are left untouched). Do NOT use this to change a task's status; use `node set-status` instead
+- `--collection <PATH>` — Collection path to add the node to, `:`-delimited for hierarchy (e.g. `docs:rust`). Missing segments are created. Repeatable. Mutually exclusive with --collection-id
+- `--collection-id <ID>` — Collection ID to add the node to (repeatable). Prefer --collection
+- `--remove-collection-id <ID>` — Collection ID to remove the node from (repeatable)
 
 **`nodespace node set-status`** — Set a task node's status (dedicated verb — do not use `update` for this)
 

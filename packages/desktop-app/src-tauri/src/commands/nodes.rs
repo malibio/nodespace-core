@@ -314,7 +314,8 @@ pub async fn create_node(
             parent_id: node.parent_id,
             position,
             properties: properties_str,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         }))
         .await
@@ -341,7 +342,8 @@ pub async fn create_root_node(
             parent_id: None,
             position: None,
             properties: properties_str,
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         }))
         .await
@@ -533,8 +535,9 @@ pub async fn update_node(
         node_type: update.node_type,
         content: update.content,
         properties: update.properties.map(|p| p.to_string()),
-        add_to_collection: None,
-        remove_from_collection: None,
+        add_to_collections: Vec::new(),
+        add_to_collection_ids: Vec::new(),
+        remove_from_collections: Vec::new(),
         lifecycle_status: update.lifecycle_status,
     };
 

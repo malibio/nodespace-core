@@ -87,7 +87,8 @@ async fn persists_values_for_declared_schema_fields() -> Result<(), Box<dyn std:
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: json!({ "status": "checked out", "replacement_cost": 2400 }),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )
@@ -125,7 +126,8 @@ async fn persists_values_for_fields_the_schema_never_declared(
             position: InsertPositionOwned::End,
             // `replacement_cost` is absent from the schema above.
             properties: json!({ "replacement_cost": 2400 }),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )
@@ -158,7 +160,8 @@ async fn reports_zero_only_when_given_no_properties() -> Result<(), Box<dyn std:
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: json!({}),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )
@@ -196,7 +199,8 @@ async fn rejects_node_type_with_no_schema_and_no_core_behavior(
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: json!({ "replacement_cost": 2400 }),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )
@@ -227,7 +231,8 @@ async fn accepts_core_node_type_with_no_schema_node() -> Result<(), Box<dyn std:
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: json!({}),
-            collection: None,
+            collections: Vec::new(),
+            collection_ids: Vec::new(),
             lifecycle_status: None,
         },
     )
