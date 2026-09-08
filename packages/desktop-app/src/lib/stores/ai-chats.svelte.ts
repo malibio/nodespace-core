@@ -140,6 +140,21 @@ class AiChatsStore {
   }
 
   /**
+   * Patch a chat's content in the local list after a rename, so the sidebar
+   * reflects it immediately without a full reload. Mirrors `createChat`'s
+   * optimistic local update. No-op if the chat isn't in the loaded list (e.g.
+   * it fell outside `DISPLAY_LIMIT`) — the next `loadAiChats` will pick up
+   * the persisted value regardless.
+   */
+  updateChatContent(id: string, content: string): void {
+    const index = this.state.chats.findIndex((chat) => chat.id === id);
+    if (index === -1) return;
+    const chats = [...this.state.chats];
+    chats[index] = { ...chats[index], content };
+    this.state = { ...this.state, chats };
+  }
+
+  /**
    * Invalidate any create issued against a database this store no longer
    * represents, and drop a stale create-error banner left over from it. Call
    * before reloading for a newly-active database (mirrors

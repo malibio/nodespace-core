@@ -76,16 +76,21 @@ describe('computeTabTitle', () => {
     expect(pluginRegistry.getNodeTitle).toHaveBeenCalledWith(node);
   });
 
-  it('falls back to tab.title when pluginRegistry.getNodeTitle returns undefined', () => {
+  it('falls back to "Untitled" — not the stale placeholder — once the node is hydrated but titleless', () => {
+    // A hydrated node that resolves to no title (e.g. a brand-new ai-chat with
+    // no content yet) must NOT keep showing the tab's opening placeholder —
+    // "Loading..." would then never clear, since a genuinely titleless node
+    // never makes getNodeTitle return truthy. This is distinct from the
+    // "no node found yet" case above, which correctly keeps tab.title.
     const node = createTestNode({ nodeType: 'date', content: '' });
     const tab = createTestTab({
       content: { nodeId: node.id, nodeType: 'date' },
-      title: 'Fallback Title'
+      title: 'Loading...'
     });
     const getNode = vi.fn().mockReturnValue(node);
     vi.spyOn(pluginRegistry, 'getNodeTitle').mockReturnValue(undefined);
 
-    expect(computeTabTitle(tab, getNode)).toBe('Fallback Title');
+    expect(computeTabTitle(tab, getNode)).toBe('Untitled');
   });
 
   it('truncates and strips markdown header syntax via formatTabTitle', () => {

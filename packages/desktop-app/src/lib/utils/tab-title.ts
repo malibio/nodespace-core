@@ -28,8 +28,15 @@ export function computeTabTitle(tab: Tab, getNode: (nodeId: string) => Node | un
   }
 
   const node = getNode(tab.content.nodeId);
+  // Not yet hydrated: keep whatever placeholder the tab opened with (e.g.
+  // "Loading...") until the node actually arrives in the store.
   if (!node) return tab.title;
 
-  const title = pluginRegistry.getNodeTitle(node);
-  return title ? formatTabTitle(title) : tab.title;
+  // Once hydrated, the title is ALWAYS derived from the node — never from the
+  // tab's own (possibly stale) placeholder. formatTabTitle's own 'Untitled'
+  // default covers a node that resolves to no title of its own (e.g. a
+  // brand-new ai-chat with no content yet); falling back to tab.title here
+  // instead would leave "Loading..." showing forever, since a genuinely
+  // titleless node never makes getNodeTitle return truthy.
+  return formatTabTitle(pluginRegistry.getNodeTitle(node) ?? '');
 }

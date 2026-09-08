@@ -330,6 +330,35 @@ describe('aiChatsData', () => {
     });
   });
 
+  describe('updateChatContent', () => {
+    it('patches the matching chat in place, leaving its position and other fields untouched', async () => {
+      mockQueryNodes.mockResolvedValue([
+        makeChat('a', 'Chat A', '2026-01-02T00:00:00.000Z'),
+        makeChat('b', 'Chat B', '2026-01-01T00:00:00.000Z')
+      ]);
+      await aiChatsData.loadAiChats();
+
+      aiChatsData.updateChatContent('b', 'Renamed chat B');
+
+      expect(aiChatsData.state.chats).toEqual([
+        { id: 'a', content: 'Chat A', modifiedAt: '2026-01-02T00:00:00.000Z' },
+        { id: 'b', content: 'Renamed chat B', modifiedAt: '2026-01-01T00:00:00.000Z' }
+      ]);
+    });
+
+    it('is a no-op when the id is not in the loaded list', async () => {
+      const original = [makeChat('a', 'Chat A', '2026-01-01T00:00:00.000Z')];
+      mockQueryNodes.mockResolvedValue(original);
+      await aiChatsData.loadAiChats();
+
+      aiChatsData.updateChatContent('missing-id', 'Should not appear');
+
+      expect(aiChatsData.state.chats).toEqual([
+        { id: 'a', content: 'Chat A', modifiedAt: '2026-01-01T00:00:00.000Z' }
+      ]);
+    });
+  });
+
   describe('reset', () => {
     it('clears chats, createBusy, and createError back to initial state', async () => {
       mockQueryNodes.mockResolvedValue([makeChat('a', 'A', '2026-01-01T00:00:00.000Z')]);

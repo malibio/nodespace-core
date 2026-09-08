@@ -52,8 +52,8 @@ export interface NavigationTarget {
  * The three fields exist because the call sites genuinely differ, not to be
  * general: a schema opens under `nodeType: 'query'` so the tab routes to
  * QueryNodeViewer, the Daily Journal must not focus a non-date tab that happens
- * to share today's id, and most callers let their viewer set the real title on
- * mount while the collection viewer already knows it.
+ * to share today's id, and most callers leave the title at its default while
+ * the collection viewer already knows it.
  */
 export interface FocusOrOpenOptions {
   /**
@@ -63,8 +63,10 @@ export interface FocusOrOpenOptions {
    */
   nodeType: string;
   /**
-   * Title for a newly created tab. Defaults to `'Loading...'`, which viewers
-   * replace on mount; pass a value only when the caller already knows it.
+   * Title for a newly created tab. Defaults to `'Loading...'`, a placeholder
+   * that `computeTabTitle` (tab-title.ts) replaces once the node is present in
+   * the store — pass a value only when the caller already knows the real
+   * title (skipping that placeholder flash), not as a substitute for it.
    */
   title?: string;
   /**

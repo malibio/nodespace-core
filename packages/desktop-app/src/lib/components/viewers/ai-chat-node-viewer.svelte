@@ -45,6 +45,12 @@
   import { browserSyncService } from '$lib/services/browser-sync-service';
   import { statusBar } from '$lib/stores/status-bar.svelte';
   import { createLogger } from '$lib/utils/logger';
+  import { aiChatsData } from '$lib/stores/ai-chats.svelte';
+  import {
+    aiChatDisplayTitle,
+    resolveChatTitleCommit,
+    UNTITLED_CHAT_LABEL
+  } from '$lib/utils/ai-chat-title';
 
   const log = createLogger('AiChatNodeViewer');
 
@@ -75,6 +81,13 @@
    * model — a flat "preparing model" spinner over that reads as a hang.
    */
   let ensuringModelPhase = $state<'verifying' | 'loading' | null>(null);
+
+  // --- Title editing ---------------------------------------------------
+  /** True while the header title is an editable input rather than static text. */
+  let editingTitle = $state(false);
+  /** The in-progress edit. Only meaningful while editingTitle is true. */
+  let titleDraft = $state('');
+  let titleInputEl: HTMLInputElement | undefined = $state();
 
   const SOFT_MESSAGE_CAP = 500;
 
@@ -301,6 +314,57 @@
     }
   }
 
+  // --- Title editing --------------------------------------------------------
+
+  /** Enter edit mode, seeded with the node's raw (untrimmed, possibly empty)
+   *  content — never the "Untitled chat" placeholder, which is a display
+   *  fallback, not a value to edit. */
+  function startEditingTitle(): void {
+    if (editingTitle) return;
+    titleDraft = node?.content ?? '';
+    editingTitle = true;
+  }
+
+  /** Persist the edit if it actually changed anything, then leave edit mode. */
+  function commitTitle(): void {
+    if (!editingTitle) return;
+    editingTitle = false;
+    const toPersist = resolveChatTitleCommit(node?.content ?? '', titleDraft);
+    if (toPersist === null) return;
+    sharedNodeStore.updateNode(
+      nodeId,
+      { content: toPersist },
+      { type: 'viewer', viewerId: 'ai-chat-viewer' }
+    );
+    // Keep the sidebar's chat list in sync without a full reload — mirrors
+    // how `aiChatsData.createChat` already prepends optimistically.
+    aiChatsData.updateChatContent(nodeId, toPersist);
+  }
+
+  /** Leave edit mode without persisting — the draft is simply discarded. */
+  function cancelEditingTitle(): void {
+    editingTitle = false;
+  }
+
+  function onTitleKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitTitle();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelEditingTitle();
+    }
+  }
+
+  // Focus (and select) the input the moment it mounts, so entering edit mode
+  // drops the user straight into typing rather than requiring a second click.
+  $effect(() => {
+    if (editingTitle && titleInputEl) {
+      titleInputEl.focus();
+      titleInputEl.select();
+    }
+  });
+
   // --- Lifecycle ---
 
   let destroyed = false;
@@ -430,7 +494,30 @@
   <!-- Header (shown in every mode): title + unified model selector. -->
   <div class="chat-viewer-header">
     <div class="chat-viewer-header-left">
-      <h2 class="chat-viewer-title">{node?.content ?? 'AI Chat'}</h2>
+      {#if editingTitle}
+        <input
+          bind:this={titleInputEl}
+          class="chat-viewer-title-input"
+          type="text"
+          value={titleDraft}
+          oninput={(e) => (titleDraft = e.currentTarget.value)}
+          onblur={commitTitle}
+          onkeydown={onTitleKeydown}
+          aria-label="Chat title"
+          placeholder={UNTITLED_CHAT_LABEL}
+        />
+      {:else}
+        <h2 class="chat-viewer-title">
+          <button
+            type="button"
+            class="chat-viewer-title-button"
+            onclick={startEditingTitle}
+            aria-label="Rename chat"
+          >
+            {aiChatDisplayTitle(node?.content)}
+          </button>
+        </h2>
+      {/if}
     </div>
     <div class="chat-viewer-header-right">
       {#if provider !== 'pty'}
@@ -599,6 +686,47 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
+  }
+
+  .chat-viewer-title-button {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    padding: 0.125rem 0.25rem;
+    margin: -0.125rem -0.25rem;
+    border: none;
+    border-radius: 0.25rem;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: text;
+  }
+
+  .chat-viewer-title-button:hover {
+    background: hsl(var(--muted) / 0.6);
+  }
+
+  .chat-viewer-title-input {
+    width: 100%;
+    max-width: 100%;
+    padding: 0.125rem 0.25rem;
+    margin: -0.125rem -0.25rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.25rem;
+    background: hsl(var(--background));
+    font-size: 1rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .chat-viewer-title-input:focus {
+    outline: none;
+    border-color: hsl(var(--primary));
   }
 
   .provider-prompt {
