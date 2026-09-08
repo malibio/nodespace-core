@@ -13,8 +13,8 @@ async function checkProject() {
   console.log('Total items in project:', projectItems.length);
   console.log('\nIssue numbers in project:');
   const issueNumbers = projectItems
-    .filter(item => item.content?.number)
-    .map(item => item.content.number)
+    .map(item => item.content?.number)
+    .filter((number): number is number => number !== undefined)
     .sort((a, b) => a - b);
 
   console.log(issueNumbers.join(', '));

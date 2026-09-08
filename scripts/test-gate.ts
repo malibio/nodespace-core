@@ -70,6 +70,7 @@ try {
 // build of them takes minutes, too much for every push — so `rust:test` checks
 // every required path up front and names the command that produces each.
 await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
+await run("bun run quality:scripts:check (scripts/ lint + typecheck)", () => $`bun run quality:scripts:check`);
 await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
 await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);
 await run("bun run test:e2e (headless daemon round-trip)", () => {

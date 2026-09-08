@@ -7,15 +7,14 @@
  * Authentication via gh CLI token automatically detected
  */
 
-import { Octokit } from "@octokit/rest";
+import { Octokit, type RestEndpointMethodTypes } from "@octokit/rest";
 import { readFileSync, existsSync, statSync } from "fs";
 import { homedir } from "os";
 import path from "path";
-import { $ } from "bun";
 
 interface ProjectItem {
   id: string;
-  content: {
+  content?: {
     number: number;
     title: string;
   };
@@ -30,6 +29,20 @@ interface ProjectItem {
         name: string;
       };
     }>;
+  };
+}
+
+interface ProjectItemsQueryResponse {
+  organization: {
+    projectV2: {
+      items: {
+        pageInfo: {
+          hasNextPage: boolean;
+          endCursor: string | null;
+        };
+        nodes: ProjectItem[];
+      };
+    };
   };
 }
 
@@ -118,7 +131,7 @@ export class GitHubClient {
           return token;
         }
       }
-    } catch (error) {
+    } catch {
       // Continue trying other methods
     }
 
@@ -137,7 +150,7 @@ export class GitHubClient {
           if (tokenMatch) {
             return tokenMatch[1];
           }
-        } catch (error) {
+        } catch {
           // Continue trying other methods
         }
       }
@@ -196,19 +209,7 @@ export class GitHubClient {
         }
       `;
 
-      const response = await this.octokit.graphql<{
-        organization: {
-          projectV2: {
-            items: {
-              pageInfo: {
-                hasNextPage: boolean;
-                endCursor: string | null;
-              };
-              nodes: ProjectItem[];
-            };
-          };
-        };
-      }>(query, {
+      const response: ProjectItemsQueryResponse = await this.octokit.graphql<ProjectItemsQueryResponse>(query, {
         owner: this.projectOwner,
         projectNumber: this.projectNumber,
         cursor,
@@ -291,11 +292,11 @@ export class GitHubClient {
 
         results.push({ issueNumber, success: true });
         
-      } catch (error) {
-        results.push({ 
-          issueNumber, 
-          success: false, 
-          error: error.message 
+      } catch (error: unknown) {
+        results.push({
+          issueNumber,
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
         });
       }
     }
@@ -338,11 +339,11 @@ export class GitHubClient {
           results.push({ issueNumber, success: true });
         }
 
-      } catch (error) {
+      } catch (error: unknown) {
         results.push({
           issueNumber,
           success: false,
-          error: error.message
+          error: error instanceof Error ? error.message : String(error)
         });
       }
     }
@@ -384,11 +385,11 @@ export class GitHubClient {
           results.push({ issueNumber, success: true });
         }
 
-      } catch (error) {
+      } catch (error: unknown) {
         results.push({
           issueNumber,
           success: false,
-          error: error.message
+          error: error instanceof Error ? error.message : String(error)
         });
       }
     }
@@ -404,7 +405,7 @@ export class GitHubClient {
     labels?: string[];
     assignee?: string;
   } = {}): Promise<GitHubIssue[]> {
-    const params: any = {
+    const params: RestEndpointMethodTypes["issues"]["listForRepo"]["parameters"] = {
       owner: this.owner,
       repo: this.repo,
       state: options.state || "open",
@@ -426,7 +427,7 @@ export class GitHubClient {
       title: issue.title,
       state: issue.state,
       assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
-      labels: issue.labels?.map(l => ({ name: typeof l === 'string' ? l : l.name })) || [],
+      labels: issue.labels?.map(l => ({ name: (typeof l === 'string' ? l : l.name) || "" })) || [],
       body: issue.body || ""
     }));
   }
@@ -447,7 +448,7 @@ export class GitHubClient {
       title: issue.title,
       state: issue.state,
       assignees: issue.assignees?.map(a => ({ login: a.login })) || [],
-      labels: issue.labels?.map(l => ({ name: typeof l === 'string' ? l : l.name })) || [],
+      labels: issue.labels?.map(l => ({ name: (typeof l === 'string' ? l : l.name) || "" })) || [],
       body: issue.body || ""
     };
   }
@@ -544,7 +545,7 @@ export class GitHubClient {
       state?: "open" | "closed";
     }
   ): Promise<void> {
-    const params: any = {
+    const params: RestEndpointMethodTypes["issues"]["update"]["parameters"] = {
       owner: this.owner,
       repo: this.repo,
       issue_number: issueNumber
@@ -599,7 +600,7 @@ export class GitHubClient {
       });
 
       return prs.length > 0 ? prs[0].number : null;
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -617,7 +618,7 @@ export class GitHubClient {
       body: string;
     }>
   ): Promise<{ id: number; url: string }> {
-    const params: any = {
+    const params: RestEndpointMethodTypes["pulls"]["createReview"]["parameters"] = {
       owner: this.owner,
       repo: this.repo,
       pull_number: prNumber,
@@ -790,8 +791,8 @@ export class GitHubClient {
 
       // Detached HEAD state
       return headContent.substring(0, 7);
-    } catch (error) {
-      throw new Error(`Failed to get current branch: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`Failed to get current branch: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

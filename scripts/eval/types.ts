@@ -480,6 +480,21 @@ export interface RepSummary {
    */
   excludedSetup?: number;
   /**
+   * Scenarios excluded because the tool their assertion names was never
+   * offered to the model this rep, not scored either way. Reported
+   * separately from `excludedEmptyGenerations`: an empty generation is an
+   * inference bug, this is a routing miss — the two need separate lines so a
+   * shrunken denominator says which one caused it.
+   */
+  excludedToolNotOffered?: number;
+  /**
+   * Scenarios excluded because their group's fixture setup (`seedGroup`)
+   * failed, not scored either way. Reported separately again: this names the
+   * fixture's own precondition as the cause, neither an inference bug nor a
+   * routing miss.
+   */
+  excludedSetupFailed?: number;
+  /**
    * How many scored scenarios' trajectory diagnostic DISAGREED with the
    * outcome score. Not a failure count — it is the number worth looking at
    * after a rep, because each disagreement is either a scenario whose
