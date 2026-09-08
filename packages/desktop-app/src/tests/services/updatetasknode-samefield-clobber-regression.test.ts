@@ -111,7 +111,6 @@ describe('updateTaskNode success-path clobber — same-field concurrent-write re
               status: 'in-progress',
               priority: 'low',
               dueDate: undefined,
-              assignee: undefined,
               startedAt: undefined,
               completedAt: undefined
             };
@@ -182,7 +181,6 @@ describe('updateTaskNode success-path clobber — same-field concurrent-write re
               status: 'in-progress',
               priority: 'low',
               dueDate: undefined,
-              assignee: undefined,
               startedAt: undefined,
               completedAt: undefined
             };
@@ -199,7 +197,6 @@ describe('updateTaskNode success-path clobber — same-field concurrent-write re
             status: updateArg.status ?? 'open',
             priority: 'low',
             dueDate: undefined,
-            assignee: undefined,
             startedAt: undefined,
             completedAt: undefined
           };
@@ -244,7 +241,6 @@ describe('updateTaskNode success-path clobber — same-field concurrent-write re
               status: 'in-progress',
               priority: 'high',
               dueDate: undefined,
-              assignee: undefined,
               startedAt: undefined,
               completedAt: undefined
             };

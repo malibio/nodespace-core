@@ -209,7 +209,6 @@ export interface TaskNodeUpdatePatch {
   status?: string;
   priority: ClearableField<string>;
   dueDate: ClearableField<string>;
-  assignee: ClearableField<string>;
   startedAt: ClearableField<string>;
   completedAt: ClearableField<string>;
   content?: string;
@@ -232,7 +231,6 @@ export function buildTaskNodeUpdatePatch(update: TaskNodeUpdate): TaskNodeUpdate
     status: update.status,
     priority: clearable(update.priority),
     dueDate: clearable(update.dueDate),
-    assignee: clearable(update.assignee),
     startedAt: clearable(update.startedAt),
     completedAt: clearable(update.completedAt),
     content: update.content,

@@ -210,30 +210,10 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     unique: None,
                     unique_case_insensitive: None,
                 },
-                SchemaField {
-                    name: "assignee".to_string(),
-                    friendly_name: "Assignee".to_string(),
-                    field_type: "text".to_string(),
-                    local_only: false,
-                    protection: SchemaProtectionLevel::User,
-                    core_values: None,
-                    user_values: None,
-                    indexed: true,
-                    required: Some(false),
-                    extensible: None,
-                    default: None,
-                    description: Some(
-                        "Person responsible for the task, as a free-text name or identifier — \
-                         not a relationship to a person node. Absent means unassigned."
-                            .to_string(),
-                    ),
-                    item_type: None,
-                    fields: None,
-                    item_fields: None,
-                    unique: None,
-                    unique_case_insensitive: None,
-                },
             ],
+            // A task's assignee is the derived inverse of person's `tasks`
+            // relationship declaration below (mirrors project ↔ task); task
+            // carries no relationships entry of its own.
             relationships: vec![],
             title_template: None,
             properties_header_summary_template: None,
@@ -1374,7 +1354,20 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     unique_case_insensitive: None,
                 },
             ],
-            relationships: vec![],
+            // A person has many tasks; the inverse (a task's single assignee)
+            // is derived from this declaration, so `task` needs no entry of
+            // its own. Mirrors project's `tasks` relationship below.
+            relationships: vec![SchemaRelationship {
+                name: "tasks".to_string(),
+                target_type: Some("task".to_string()),
+                direction: RelationshipDirection::Out,
+                cardinality: RelationshipCardinality::Many,
+                required: None,
+                reverse_name: "assignee".to_string(),
+                reverse_cardinality: RelationshipCardinality::One,
+                edge_fields: None,
+                description: Some("Tasks assigned to this person".to_string()),
+            }],
             title_template: None,
             properties_header_summary_template: None,
         },
@@ -1620,7 +1613,7 @@ mod tests {
         let schemas = get_core_schemas();
         let task = schemas.iter().find(|s| s.id == "task").unwrap();
 
-        assert_eq!(task.fields.len(), 6);
+        assert_eq!(task.fields.len(), 5);
         assert!(task.get_field("status").is_some());
         assert!(task.get_field("priority").is_some());
         assert!(task.get_field("due_date").is_some());
@@ -1645,6 +1638,29 @@ mod tests {
         assert!(
             task.relationships.is_empty(),
             "task's project link is the derived inverse, not its own declaration"
+        );
+    }
+
+    #[test]
+    fn test_person_declares_tasks_assignee_relationship() {
+        let schemas = get_core_schemas();
+        let person = schemas.iter().find(|s| s.id == "person").unwrap();
+
+        // person has-many tasks (as assignee); the task-side inverse is derived
+        // from this one declaration (task carries no relationships entry of its
+        // own — mirrors project's `tasks` relationship).
+        assert_eq!(person.relationships.len(), 1);
+        let rel = &person.relationships[0];
+        assert_eq!(rel.name, "tasks");
+        assert_eq!(rel.target_type.as_deref(), Some("task"));
+        assert_eq!(rel.cardinality, RelationshipCardinality::Many);
+        assert_eq!(rel.reverse_name, "assignee");
+        assert_eq!(rel.reverse_cardinality, RelationshipCardinality::One);
+
+        let task = schemas.iter().find(|s| s.id == "task").unwrap();
+        assert!(
+            task.relationships.is_empty(),
+            "task's assignee link is the derived inverse, not its own declaration"
         );
     }
 

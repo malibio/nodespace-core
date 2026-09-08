@@ -49,7 +49,7 @@ function taskSchema(): SchemaNode {
         indexed: false,
         // Mirrors the real task schema (packages/core/src/models/core_schemas.rs):
         // `status` is required — a task's `TaskStatus` is non-nullable on the
-        // backend, with no clear semantics (unlike priority/dueDate/assignee).
+        // backend, with no clear semantics (unlike priority/dueDate).
         required: true,
         coreValues: [
           { value: 'open', label: 'Open' },

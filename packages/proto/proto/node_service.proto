@@ -739,7 +739,6 @@ message UpdateTaskNodeRequest {
   optional string status = 3;            // TaskStatus serialized as string
   optional OptionalStringClear priority = 4;
   optional OptionalTimestampClear due_date = 5;
-  optional OptionalStringClear assignee = 6;
   optional OptionalTimestampClear started_at = 7;
   optional OptionalTimestampClear completed_at = 8;
   // Generic content/properties updates also accepted; mirrors the

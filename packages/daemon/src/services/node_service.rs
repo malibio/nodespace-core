@@ -1119,7 +1119,6 @@ impl GrpcNodeService for NodeServiceImpl {
             req.status,
             req.priority,
             req.due_date,
-            req.assignee,
             req.started_at,
             req.completed_at,
             req.content,
@@ -2160,7 +2159,6 @@ fn build_task_node_update(
     status: Option<String>,
     priority: Option<OptionalStringClear>,
     due_date: Option<OptionalTimestampClear>,
-    assignee: Option<OptionalStringClear>,
     started_at: Option<OptionalTimestampClear>,
     completed_at: Option<OptionalTimestampClear>,
     content: Option<String>,
@@ -2179,12 +2177,6 @@ fn build_task_node_update(
         Some(w) => Some(Some(parse_task_priority(&w.value)?)),
     };
 
-    let assignee = match assignee {
-        None => None,
-        Some(w) if w.clear => Some(None),
-        Some(w) => Some(Some(w.value)),
-    };
-
     let due_date = parse_optional_timestamp(due_date, "due_date")?;
     let started_at = parse_optional_timestamp(started_at, "started_at")?;
     let completed_at = parse_optional_timestamp(completed_at, "completed_at")?;
@@ -2193,7 +2185,6 @@ fn build_task_node_update(
         status,
         priority,
         due_date,
-        assignee,
         started_at,
         completed_at,
         content,
@@ -2889,12 +2880,12 @@ mod tests {
             status: Some("done".to_string()),
             priority: None,
             due_date: None,
-            assignee: None,
             started_at: None,
             completed_at: None,
             content: None,
             properties: None,
         });
+
         let err = svc
             .update_task_node(conflict_req)
             .await

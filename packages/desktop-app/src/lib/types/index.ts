@@ -51,8 +51,6 @@ export {
   setTaskPriority,
   getTaskDueDate,
   setTaskDueDate,
-  getTaskAssignee,
-  setTaskAssignee,
   TaskNodeHelpers
 } from './task-node';
 
