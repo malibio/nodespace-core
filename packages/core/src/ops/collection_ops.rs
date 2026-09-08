@@ -336,6 +336,7 @@ pub async fn create_collection(
             parent_id: None,
             position: InsertPositionOwned::End,
             properties,
+            lifecycle_status: None,
         })
         .await
         .map_err(|e| OpsError::Internal(format!("Failed to create collection node: {}", e)))?;

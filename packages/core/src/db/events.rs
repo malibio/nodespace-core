@@ -214,6 +214,27 @@ pub enum DomainEvent {
         /// Relationship type hint for handlers that need it
         relationship_type: String,
     },
+
+    /// A fire-and-forget background import (currently: the async branch of
+    /// `handle_create_nodes_from_markdown`) failed after the caller had
+    /// already been told the operation succeeded.
+    ///
+    /// ADR-069 §5/F16: the bulk insert itself is a single atomic
+    /// transaction (`bulk_create_hierarchy_root_notify`) — this event does
+    /// not change that. What it fixes is that a failure there previously
+    /// surfaced only via `tracing::error!`, invisible to anything but log
+    /// inspection. `root_id` names the (empty) root container the caller
+    /// already received an id for, so a subscriber can at least flag that
+    /// specific node as failed-to-populate rather than the user discovering
+    /// an empty container with no explanation.
+    BackgroundImportFailed {
+        /// The root node id the caller was already given before the
+        /// background task started (and that the caller believes has content).
+        root_id: String,
+        /// Human-readable failure detail, already formatted for display —
+        /// not a machine-parsed error code.
+        error: String,
+    },
 }
 
 #[cfg(test)]

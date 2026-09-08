@@ -169,6 +169,13 @@ pub async fn create_node(
         ));
     }
 
+    // ADR-069 §5/F6: lifecycle_status is passed into the create itself
+    // rather than applied via a separate update afterward. The old
+    // two-write shape had a real gap — a failure on the second write left a
+    // node the caller asked to be archived/draft live and visible as
+    // active, while the caller was told the operation failed. Setting it on
+    // the initial insert makes that window impossible: the status is part
+    // of the one write that creates the row.
     let node_id = node_service
         .create_node_with_parent(crate::services::CreateNodeParams {
             id: input.id,
@@ -177,6 +184,7 @@ pub async fn create_node(
             parent_id: input.parent_id,
             position: input.position,
             properties: input.properties,
+            lifecycle_status: input.lifecycle_status,
         })
         .await?;
 
@@ -199,26 +207,6 @@ pub async fn create_node(
                 .add_to_collection(&node_id, collection_id)
                 .await?;
             collection_ids.push(collection_id.clone());
-        }
-    }
-
-    // Apply non-default lifecycle status
-    if let Some(ref lifecycle_status) = input.lifecycle_status {
-        if lifecycle_status != "active" {
-            let current_node = node_service
-                .get_node(&node_id)
-                .await
-                .map_err(|e| OpsError::Internal(format!("Failed to get node: {}", e)))?
-                .ok_or_else(|| OpsError::Internal("Created node not found".to_string()))?;
-
-            let update = NodeUpdate {
-                lifecycle_status: Some(lifecycle_status.clone()),
-                ..Default::default()
-            };
-
-            node_service
-                .update_node(&node_id, current_node.version, update)
-                .await?;
         }
     }
 

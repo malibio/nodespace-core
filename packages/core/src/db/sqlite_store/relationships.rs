@@ -1655,6 +1655,113 @@ impl SqliteStore {
         Ok(changes)
     }
 
+    /// `_in_tx` twin of [`Self::set_schema_declarations`] (ADR-069 §1a/S3).
+    /// Identical upsert/delete logic, run against the caller's `tx` instead
+    /// of opening its own — this is what lets `handle_create_schema` and
+    /// `handle_update_schema` compose the relationship-declaration write
+    /// into the same transaction as the schema node and description
+    /// subtree writes.
+    pub(crate) async fn set_schema_declarations_in_tx(
+        tx: &super::tx::Tx<'_>,
+        schema_id: &str,
+        relationships: &[SchemaRelationship],
+    ) -> Result<SchemaDeclarationChanges> {
+        let mut seen_names: HashSet<&str> = HashSet::new();
+        for rel in relationships {
+            if crate::models::schema::is_builtin_relationship(&rel.name) {
+                return Err(anyhow::anyhow!(
+                    "relationship name '{}' is reserved for a built-in structural relationship",
+                    rel.name
+                ));
+            }
+            if !seen_names.insert(rel.name.as_str()) {
+                return Err(anyhow::anyhow!(
+                    "duplicate relationship declaration name '{}' on schema '{}'",
+                    rel.name,
+                    schema_id
+                ));
+            }
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let conn = tx.conn();
+
+        let select_sql = format!(
+            "SELECT id, out_node, relationship_type, properties FROM relationship \
+             WHERE in_node = ?1 AND {}",
+            builtin_exclusion_sql("relationship_type")
+        );
+        let mut rows = conn
+            .query(&select_sql, libsql::params![schema_id.to_string()])
+            .await
+            .context("Failed to read existing schema declarations")?;
+        let mut existing: HashMap<String, (String, String, String)> = HashMap::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            let out_node: String = row.get(1)?;
+            let rel_type: String = row.get(2)?;
+            let props: String = row.get(3)?;
+            existing.insert(rel_type, (id, out_node, props));
+        }
+
+        let mut changes = SchemaDeclarationChanges::default();
+
+        for rel in relationships {
+            let out_node = rel.target_type.as_deref().unwrap_or(schema_id).to_string();
+            let props_json = serde_json::to_string(rel)
+                .context("Failed to serialize schema relationship declaration")?;
+
+            match existing.remove(&rel.name) {
+                Some((_, ref old_out, ref old_props))
+                    if *old_out == out_node && *old_props == props_json =>
+                {
+                    // Unchanged — keep the row as-is.
+                }
+                Some((id, _, _)) => {
+                    conn.execute(
+                        "UPDATE relationship SET out_node = ?1, properties = ?2, \
+                         version = version + 1, modified_at = ?3 WHERE id = ?4",
+                        libsql::params![out_node.clone(), props_json, now.clone(), id.clone()],
+                    )
+                    .await
+                    .context("Failed to update schema declaration edge")?;
+                    changes.updated.push((id, out_node, rel.clone()));
+                }
+                None => {
+                    let rel_id = uuid::Uuid::new_v4().to_string();
+                    conn.execute(
+                        "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
+                        libsql::params![
+                            rel_id.clone(),
+                            schema_id.to_string(),
+                            out_node.clone(),
+                            rel.name.clone(),
+                            props_json,
+                            now.clone(),
+                            now.clone()
+                        ],
+                    )
+                    .await
+                    .context("Failed to insert schema declaration edge")?;
+                    changes.created.push((rel_id, out_node, rel.clone()));
+                }
+            }
+        }
+
+        for (name, (id, out_node, _)) in existing {
+            conn.execute(
+                "DELETE FROM relationship WHERE id = ?1",
+                libsql::params![id.clone()],
+            )
+            .await
+            .context("Failed to delete schema declaration edge")?;
+            changes.deleted.push((id, out_node, name));
+        }
+
+        Ok(changes)
+    }
+
     /// Count the INSTANCE-level edges written under a declaration: edges whose
     /// `relationship_type` is the declared name and whose source node is an
     /// instance of the declaring type. The declaring schema node itself has

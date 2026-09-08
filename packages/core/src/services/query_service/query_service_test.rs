@@ -40,6 +40,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let task2 = CreateNodeParams {
             id: None,
@@ -48,6 +49,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "done"}}),
+            lifecycle_status: None,
         };
         let text1 = CreateNodeParams {
             id: None,
@@ -56,6 +58,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task1).await.unwrap();
@@ -91,6 +94,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let task2 = CreateNodeParams {
             id: None,
@@ -99,6 +103,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "done"}}),
+            lifecycle_status: None,
         };
         let task3 = CreateNodeParams {
             id: None,
@@ -107,6 +112,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task1).await.unwrap();
@@ -200,6 +206,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": status}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -252,6 +259,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -305,6 +313,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -346,6 +355,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
         let parent_id = node_service.create_node_with_parent(parent).await.unwrap();
 
@@ -357,6 +367,7 @@ mod tests {
             parent_id: Some(parent_id.clone()),
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
         let child2 = CreateNodeParams {
             id: None,
@@ -365,6 +376,7 @@ mod tests {
             parent_id: Some(parent_id.clone()),
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(child1).await.unwrap();
@@ -410,6 +422,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -447,6 +460,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -489,6 +503,7 @@ mod tests {
                         "priority": priority
                     }
                 }),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -543,6 +558,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let text = CreateNodeParams {
             id: None,
@@ -551,6 +567,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task).await.unwrap();
@@ -614,6 +631,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let task2 = CreateNodeParams {
             id: None,
@@ -622,6 +640,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task1).await.unwrap();
@@ -661,6 +680,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -710,6 +730,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"custom_field": "value"}),
+            lifecycle_status: None,
         };
         node_service
             .create_node_with_parent(custom_node)
@@ -743,6 +764,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
         let parent_id = node_service.create_node_with_parent(parent).await.unwrap();
 
@@ -753,6 +775,7 @@ mod tests {
             parent_id: Some(parent_id.clone()),
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
         let child_id = node_service.create_node_with_parent(child).await.unwrap();
 
@@ -793,6 +816,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let text = CreateNodeParams {
             id: None,
@@ -801,6 +825,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task).await.unwrap();
@@ -838,6 +863,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let text = CreateNodeParams {
             id: None,
@@ -846,6 +872,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task).await.unwrap();
@@ -885,6 +912,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -1037,6 +1065,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -1070,6 +1099,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let text = CreateNodeParams {
             id: None,
@@ -1078,6 +1108,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task).await.unwrap();
@@ -1115,6 +1146,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task).await.unwrap();
@@ -1155,6 +1187,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         node_service.create_node_with_parent(task).await.unwrap();
 
@@ -1194,6 +1227,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "open"}}),
+            lifecycle_status: None,
         };
         let task2 = CreateNodeParams {
             id: None,
@@ -1202,6 +1236,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({"task": {"status": "done"}}),
+            lifecycle_status: None,
         };
 
         node_service.create_node_with_parent(task1).await.unwrap();
@@ -1292,6 +1327,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": status}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -1328,6 +1364,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": "open"}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -1367,6 +1404,7 @@ mod tests {
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({"task": {"status": status}}),
+                lifecycle_status: None,
             };
             node_service.create_node_with_parent(task).await.unwrap();
         }
@@ -1408,6 +1446,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
         node_service.create_node_with_parent(node).await.unwrap();
 
@@ -1418,6 +1457,7 @@ mod tests {
             parent_id: None,
             position: crate::services::InsertPositionOwned::End,
             properties: json!({}),
+            lifecycle_status: None,
         };
         node_service
             .create_node_with_parent(unrelated)

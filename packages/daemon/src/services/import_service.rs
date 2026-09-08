@@ -1211,6 +1211,7 @@ async fn import_markdown_content(
                 parent_id: None,
                 position: nodespace_core::services::InsertPositionOwned::End,
                 properties,
+                lifecycle_status: None,
             })
             .await
             .map_err(|e| format!("Failed to create root node: {}", e))?;

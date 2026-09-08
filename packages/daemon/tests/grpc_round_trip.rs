@@ -510,6 +510,7 @@ async fn search_nodes_include_markdown_attaches_subtree_content() {
             parent_id: Some(root_id.clone()),
             position: nodespace_core::services::InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .expect("out-of-band create child failed");

@@ -212,6 +212,111 @@ impl SqliteStore {
         Ok(node)
     }
 
+    /// `_in_tx` twin of [`Self::create_node`] (ADR-069 §1a). Inserts the node
+    /// row against `tx` and returns the inserted `Node` directly from its
+    /// inputs, rather than reading it back — a read-back through `self.read()`
+    /// would use a pooled connection that cannot see this transaction's
+    /// uncommitted insert.
+    ///
+    /// Does **not** call `self.notify` — an event fired here would announce a
+    /// write that may still roll back. The caller buffers the equivalent
+    /// `StoreChange`/`DomainEvent` and emits it only after the transaction
+    /// housing this call commits (ADR-069 §2). Also skips the
+    /// collection-name-collision marker `create_node` writes post-insert:
+    /// that marker uses `set_property_bool`, which is deliberately excluded
+    /// from the transaction boundary (ADR-069 §4) — a caller composing this
+    /// method is responsible for calling `mark_collection_name_collision`'s
+    /// equivalent itself, after commit, if it needs that behavior.
+    pub(crate) async fn create_node_in_tx(tx: &Tx<'_>, node: &Node) -> Result<()> {
+        Self::validate_lifecycle_status(&node.lifecycle_status)?;
+
+        let properties = if node.properties.is_null() {
+            serde_json::json!({})
+        } else {
+            node.properties.clone()
+        };
+        let props_json =
+            serde_json::to_string(&properties).context("Failed to serialize properties")?;
+        let now = Utc::now().to_rfc3339();
+
+        tx.conn()
+            .execute(
+                "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                libsql::params![
+                    node.id.clone(),
+                    node.node_type.clone(),
+                    node.content.clone(),
+                    props_json,
+                    node.title.clone(),
+                    node.lifecycle_status.clone(),
+                    node.version,
+                    now.clone(),
+                    now,
+                ],
+            )
+            .await
+            .context("Failed to create node")?;
+
+        Ok(())
+    }
+
+    /// `_in_tx` twin of the has_child edge insert inside
+    /// [`Self::create_child_node_atomic`] (ADR-069 §1a/S2), generalized to
+    /// accept an insert position the way the store's `move_node` does for
+    /// its new-parent branch. Assumes `child_id` has no existing `has_child`
+    /// edge (true for every caller — a brand-new node) so, unlike
+    /// `move_node`, there is nothing to DELETE first: this is an insert-only
+    /// analogue of `move_node`'s cross-parent branch.
+    ///
+    /// `insert_after_sibling_id`: `None` inserts first; `Some(id)` inserts
+    /// immediately after that sibling, falling back to last if `id` is not a
+    /// current child of `parent_id` (mirrors `move_node`'s same fallback).
+    pub(crate) async fn create_has_child_edge_in_tx(
+        tx: &Tx<'_>,
+        parent_id: &str,
+        child_id: &str,
+        insert_after_sibling_id: Option<&str>,
+    ) -> Result<f64> {
+        let mut rows = tx.conn().query(
+            "SELECT out_node, json_extract(properties, '$.order') as ord FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child' ORDER BY json_extract(properties, '$.order') ASC",
+            libsql::params![parent_id.to_string()],
+        ).await.context("Failed to get sibling relationships")?;
+
+        let mut siblings: Vec<(String, f64)> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let sibling_id: String = row.get(0)?;
+            let ord: Option<f64> = row.get(1)?;
+            siblings.push((sibling_id, ord.unwrap_or(0.0)));
+        }
+
+        let new_order = if let Some(after_id) = insert_after_sibling_id {
+            if let Some(after_index) = siblings.iter().position(|(id, _)| id == after_id) {
+                let prev_order = siblings[after_index].1;
+                let next_order = siblings.get(after_index + 1).map(|(_, o)| *o);
+                FractionalOrderCalculator::calculate_order(Some(prev_order), next_order)
+            } else {
+                let last = siblings.last().map(|(_, o)| *o);
+                FractionalOrderCalculator::calculate_order(last, None)
+            }
+        } else {
+            let first = siblings.first().map(|(_, o)| *o);
+            FractionalOrderCalculator::calculate_order(None, first)
+        };
+
+        let rel_id = uuid::Uuid::new_v4().to_string();
+        let rel_props = serde_json::json!({"order": new_order}).to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.conn()
+            .execute(
+                "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                libsql::params![rel_id, parent_id.to_string(), child_id.to_string(), rel_props, now.clone(), now],
+            )
+            .await
+            .context("Failed to insert parent-child relationship")?;
+
+        Ok(new_order)
+    }
+
     pub async fn get_node(&self, id: &str) -> Result<Option<Node>> {
         let mut rows = self
             .read()
@@ -447,6 +552,109 @@ impl SqliteStore {
         Ok(updated_node)
     }
 
+    /// `_in_tx` twin of [`Self::update_node`] (ADR-069 §1a/S3). No OCC — same
+    /// contract as the non-`_in_tx` method. Run against the caller's `tx`
+    /// instead of opening its own, so `update_node_unchecked_in_tx` (the
+    /// `NodeService`-level caller) can land this write in the same
+    /// transaction as `rename_schema_field_in_tx`'s data migration (closing
+    /// F3: a failure in either step now rolls back both). Does not notify or
+    /// mark collection-name collisions; the caller buffers the equivalent
+    /// event and handles the marker post-commit.
+    pub(crate) async fn update_node_in_tx(tx: &Tx<'_>, id: &str, update: NodeUpdate) -> Result<()> {
+        if let Some(ref status) = update.lifecycle_status {
+            Self::validate_lifecycle_status(status)?;
+        }
+
+        let mut rows = tx
+            .conn()
+            .query(
+                "SELECT * FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to query node")?;
+        let current = match rows.next().await? {
+            Some(row) => Self::row_to_node(&row)?,
+            None => return Err(anyhow::anyhow!("Node not found: {}", id)),
+        };
+
+        let updated_content = update.content.unwrap_or_else(|| current.content.clone());
+        let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+
+        let properties_update = if let Some(ref updated_props) = update.properties {
+            let mut merged = current.properties.as_object().cloned().unwrap_or_default();
+            if let Some(new_props) = updated_props.as_object() {
+                for (key, value) in new_props {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+            Some(serde_json::Value::Object(merged))
+        } else {
+            None
+        };
+
+        let now = Utc::now().to_rfc3339();
+
+        if let Some(ref props) = properties_update {
+            let props_json =
+                serde_json::to_string(props).context("Failed to serialize properties")?;
+            tx.conn()
+                .execute(
+                    "UPDATE node SET content = ?1, node_type = ?2, properties = ?3 WHERE id = ?4",
+                    libsql::params![
+                        updated_content.clone(),
+                        updated_node_type.clone(),
+                        props_json,
+                        id.to_string()
+                    ],
+                )
+                .await
+                .context("Failed to update node")?;
+        } else {
+            tx.conn()
+                .execute(
+                    "UPDATE node SET content = ?1, node_type = ?2 WHERE id = ?3",
+                    libsql::params![
+                        updated_content.clone(),
+                        updated_node_type.clone(),
+                        id.to_string()
+                    ],
+                )
+                .await
+                .context("Failed to update node")?;
+        }
+
+        if let Some(title) = update.title {
+            tx.conn()
+                .execute(
+                    "UPDATE node SET title = ?1 WHERE id = ?2",
+                    libsql::params![title, id.to_string()],
+                )
+                .await
+                .context("Failed to update title")?;
+        }
+
+        if let Some(status) = update.lifecycle_status {
+            tx.conn()
+                .execute(
+                    "UPDATE node SET lifecycle_status = ?1 WHERE id = ?2",
+                    libsql::params![status, id.to_string()],
+                )
+                .await
+                .context("Failed to update lifecycle_status")?;
+        }
+
+        tx.conn()
+            .execute(
+                "UPDATE node SET version = version + 1, modified_at = ?1 WHERE id = ?2",
+                libsql::params![now, id.to_string()],
+            )
+            .await
+            .context("Failed to bump node version")?;
+
+        Ok(())
+    }
+
     pub async fn switch_node_type_atomic(
         &self,
         node_id: &str,
@@ -590,6 +798,99 @@ impl SqliteStore {
         }
 
         Ok(Some(node))
+    }
+
+    /// `_in_tx` twin of [`Self::update_node_with_version_check`] (ADR-069
+    /// §1a/§3). The pre-read and the version-gated `UPDATE` both run against
+    /// `tx`, so the OCC check is sound against this transaction's own view —
+    /// no TOCTOU window between reading `current` and writing, since nothing
+    /// else can observe or mutate this row mid-transaction.
+    ///
+    /// Returns `Ok(None)` on a version mismatch (rows_affected == 0), exactly
+    /// like the non-`_in_tx` method — this is a normal, expected outcome the
+    /// caller surfaces as `NodeServiceError::VersionConflict`, never as
+    /// `TransactionFailed` (ADR-069 §2a). Does not notify or mark
+    /// collection-name collisions; the caller buffers the equivalent event
+    /// and handles the marker post-commit, same posture as
+    /// `create_node_in_tx`.
+    /// `Ok(Ok(node))` on success, `Ok(Err(actual_version))` on an OCC
+    /// mismatch — the real persisted version at the time of the check, not
+    /// a guess, so a caller building `NodeServiceError::VersionConflict` can
+    /// report a genuine value instead of fabricating one (e.g.
+    /// `expected_version + 1`, which is wrong the instant more than one
+    /// concurrent writer has landed since `expected_version`).
+    pub(crate) async fn update_node_with_version_check_in_tx(
+        tx: &Tx<'_>,
+        id: &str,
+        expected_version: i64,
+        update: NodeUpdate,
+    ) -> Result<std::result::Result<Node, i64>> {
+        if let Some(ref status) = update.lifecycle_status {
+            Self::validate_lifecycle_status(status)?;
+        }
+
+        let mut rows = tx
+            .conn()
+            .query(
+                "SELECT * FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to query node")?;
+        let current = match rows.next().await? {
+            Some(row) => Self::row_to_node(&row)?,
+            None => return Err(anyhow::anyhow!("Node not found: {}", id)),
+        };
+
+        if current.version != expected_version {
+            return Ok(Err(current.version));
+        }
+
+        let new_version = expected_version + 1;
+        let updated_content = update.content.unwrap_or(current.content);
+        let updated_node_type = update.node_type.unwrap_or(current.node_type.clone());
+        let updated_props = match update.properties {
+            Some(p) => serde_json::to_string(&p).context("Failed to serialize properties")?,
+            None => serde_json::to_string(&current.properties)
+                .context("Failed to serialize current properties")?,
+        };
+        let updated_title = match update.title {
+            Some(t) => t,
+            None => current.title,
+        };
+        let updated_status = update
+            .lifecycle_status
+            .unwrap_or(current.lifecycle_status.clone());
+        let now = Utc::now().to_rfc3339();
+
+        let rows_affected = tx.conn().execute(
+            "UPDATE node SET content = ?1, node_type = ?2, properties = ?3, title = ?4, lifecycle_status = ?5, version = ?6, modified_at = ?7 WHERE id = ?8 AND version = ?9",
+            libsql::params![updated_content, updated_node_type, updated_props, updated_title, updated_status, new_version, now, id.to_string(), expected_version],
+        ).await.context("Failed to update node with version check")?;
+
+        if rows_affected == 0 {
+            // Lost a race between the read above and this UPDATE, inside the
+            // same transaction — vanishingly unlikely (nothing else can
+            // observe or mutate this row mid-transaction) but report the
+            // pre-write snapshot's version rather than fabricate one, since
+            // it is at least a real value this call observed.
+            return Ok(Err(current.version));
+        }
+
+        let mut rows = tx
+            .conn()
+            .query(
+                "SELECT * FROM node WHERE id = ?1 LIMIT 1",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .context("Failed to query node after update")?;
+        let node = match rows.next().await? {
+            Some(row) => Self::row_to_node(&row)?,
+            None => return Err(anyhow::anyhow!("Node not found after update")),
+        };
+
+        Ok(Ok(node))
     }
 
     pub async fn update_lifecycle_status(&self, id: &str, status: &str) -> Result<()> {
@@ -884,6 +1185,33 @@ impl SqliteStore {
     pub async fn delete_children_subtree_unchecked(&self, parent_id: &str) -> Result<()> {
         self.write()
             .await
+            .execute(
+                r#"WITH RECURSIVE subtree(node_id) AS (
+                    SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
+                    UNION ALL
+                    SELECT r.out_node FROM relationship r
+                    JOIN subtree s ON r.in_node = s.node_id
+                    WHERE r.relationship_type = 'has_child'
+                )
+                DELETE FROM node WHERE id IN (SELECT DISTINCT node_id FROM subtree)"#,
+                libsql::params![parent_id.to_string()],
+            )
+            .await
+            .context("Failed to delete children subtree")?;
+        Ok(())
+    }
+
+    /// `_in_tx` twin of [`Self::delete_children_subtree_unchecked`] (ADR-069
+    /// §1a/S3, closing F4). Run against the caller's `tx` instead of opening
+    /// its own — this is what lets `replace_description_subtree` compose the
+    /// delete and the recreate that follows into one transaction, so a
+    /// failure recreating the subtree rolls back the delete instead of
+    /// leaving the schema's description gone with nothing replacing it.
+    pub(crate) async fn delete_children_subtree_unchecked_in_tx(
+        tx: &Tx<'_>,
+        parent_id: &str,
+    ) -> Result<()> {
+        tx.conn()
             .execute(
                 r#"WITH RECURSIVE subtree(node_id) AS (
                     SELECT out_node FROM relationship WHERE in_node = ?1 AND relationship_type = 'has_child'
@@ -2173,6 +2501,83 @@ impl SqliteStore {
         Ok(affected)
     }
 
+    /// `_in_tx` twin of [`Self::rename_schema_field`] (ADR-069 §1a/S3,
+    /// closing F3). Identical migration logic, run against the caller's `tx`
+    /// instead of opening its own — this is what lets `rename_schema_field`'s
+    /// data migration and the schema-definition rewrite that follows it
+    /// (`update_node_unchecked_in_tx`) land in one `NodeService`-level
+    /// transaction, so a failure in the second step rolls back the first
+    /// instead of leaving instance data rekeyed under a name the schema no
+    /// longer declares.
+    pub(crate) async fn rename_schema_field_in_tx(
+        tx: &Tx<'_>,
+        type_id: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<u64> {
+        if from.is_empty() || to.is_empty() {
+            return Err(anyhow::anyhow!("Field names must not be empty"));
+        }
+        if from == to {
+            return Err(anyhow::anyhow!(
+                "Source and destination field names are the same: '{}'",
+                from
+            ));
+        }
+
+        let mut rows = tx
+            .conn()
+            .query(
+                "SELECT id, properties FROM node WHERE node_type = ?1",
+                libsql::params![type_id.to_string()],
+            )
+            .await
+            .context("Failed to fetch nodes for field rename")?;
+
+        let mut nodes: Vec<(String, Value)> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let id: String = row.get(0)?;
+            let props_str: String = row.get(1)?;
+            let props: Value = serde_json::from_str(&props_str).unwrap_or(serde_json::json!({}));
+            nodes.push((id, props));
+        }
+
+        let mut affected = 0u64;
+        let now = Utc::now().to_rfc3339();
+
+        for (node_id, mut properties) in nodes {
+            let had_field = if let Some(ns_obj) = properties
+                .as_object_mut()
+                .and_then(|p| p.get_mut(type_id))
+                .and_then(|ns| ns.as_object_mut())
+            {
+                if let Some(value) = ns_obj.remove(from) {
+                    ns_obj.insert(to.to_string(), value);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if had_field {
+                let props_json =
+                    serde_json::to_string(&properties).context("Failed to serialize properties")?;
+                tx.conn()
+                    .execute(
+                        "UPDATE node SET properties = ?1, modified_at = ?2 WHERE id = ?3",
+                        libsql::params![props_json, now.clone(), node_id],
+                    )
+                    .await
+                    .context("Failed to update node during field rename")?;
+                affected += 1;
+            }
+        }
+
+        Ok(affected)
+    }
+
     /// Atomically update a batch of nodes in a single transaction.
     ///
     /// **OCC contract:** This is an intentional last-write-wins fast-path for trusted internal
@@ -2350,6 +2755,9 @@ impl SqliteStore {
 
         let ids: Vec<String> = nodes.into_iter().map(|(id, ..)| id).collect();
 
+        // `_in_tx` twin below reuses this same insert logic against the
+        // caller's transaction — see its own doc comment.
+
         // Notify for each created node
         for id in &ids {
             if let Ok(Some(node)) = self.get_node(id).await {
@@ -2364,6 +2772,63 @@ impl SqliteStore {
         }
 
         Ok(ids)
+    }
+
+    /// `_in_tx` twin of [`Self::bulk_create_hierarchy`] (ADR-069 §1a/S3).
+    /// Identical insert logic, run against the caller's `tx` instead of
+    /// opening its own — this is what lets `handle_create_schema`'s
+    /// description-subtree creation (via `create_description_subtree`,
+    /// which calls this) land in the same transaction as the schema node
+    /// and its relationship declarations. Returns the ids without
+    /// notifying; the caller buffers the equivalent `Created` events.
+    pub(crate) async fn bulk_create_hierarchy_in_tx(
+        &self,
+        tx: &Tx<'_>,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
+    ) -> Result<Vec<String>> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = Utc::now().to_rfc3339();
+
+        for (id, node_type, content, parent_id, order, properties) in &nodes {
+            self.validate_node_type(node_type)?;
+
+            let properties = if properties.is_null() {
+                serde_json::json!({})
+            } else {
+                properties.clone()
+            };
+            let props_json =
+                serde_json::to_string(&properties).context("Failed to serialize properties")?;
+
+            let title =
+                Self::compute_title_for_bulk_insert(node_type, parent_id.as_deref(), content);
+
+            tx.conn().execute(
+                "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, 'active', 1, ?6, ?7)",
+                libsql::params![id.clone(), node_type.clone(), content.clone(), props_json, title, now.clone(), now.clone()],
+            ).await.context("Failed to insert node in bulk hierarchy")?;
+
+            if let Some(parent) = parent_id {
+                let rel_id = uuid::Uuid::new_v4().to_string();
+                let rel_props = serde_json::json!({"order": order}).to_string();
+                tx.conn().execute(
+                    "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'has_child', ?4, 1, ?5, ?6)",
+                    libsql::params![rel_id, parent.clone(), id.clone(), rel_props, now.clone(), now.clone()],
+                ).await.context("Failed to insert relationship in bulk hierarchy")?;
+            }
+        }
+
+        Ok(nodes.into_iter().map(|(id, ..)| id).collect())
     }
 
     pub async fn bulk_create_hierarchy_root_notify(

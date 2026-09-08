@@ -160,6 +160,7 @@ fn bench_occ_overhead(c: &mut Criterion) {
                         parent_id: None,
                         position: nodespace_core::services::InsertPositionOwned::End,
                         properties: json!({}),
+                        lifecycle_status: None,
                     })
                     .await
                     .unwrap();
@@ -241,6 +242,7 @@ fn bench_batch_get(c: &mut Criterion) {
                                 parent_id: None,
                                 position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
+                                lifecycle_status: None,
                             })
                             .await
                             .unwrap();
@@ -279,6 +281,7 @@ fn bench_batch_get(c: &mut Criterion) {
                                 parent_id: None,
                                 position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
+                                lifecycle_status: None,
                             })
                             .await
                             .unwrap();
@@ -330,6 +333,7 @@ fn bench_batch_update(c: &mut Criterion) {
                             parent_id: None,
                             position: nodespace_core::services::InsertPositionOwned::End,
                             properties: json!({}),
+                            lifecycle_status: None,
                         })
                         .await
                         .unwrap();
@@ -345,6 +349,7 @@ fn bench_batch_update(c: &mut Criterion) {
                                 parent_id: Some(root.clone()),
                                 position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
+                                lifecycle_status: None,
                             })
                             .await
                             .unwrap();
@@ -395,6 +400,7 @@ fn bench_batch_update(c: &mut Criterion) {
                             parent_id: None,
                             position: nodespace_core::services::InsertPositionOwned::End,
                             properties: json!({}),
+                            lifecycle_status: None,
                         })
                         .await
                         .unwrap();
@@ -410,6 +416,7 @@ fn bench_batch_update(c: &mut Criterion) {
                                 parent_id: Some(root.clone()),
                                 position: nodespace_core::services::InsertPositionOwned::End,
                                 properties: json!({}),
+                                lifecycle_status: None,
                             })
                             .await
                             .unwrap();

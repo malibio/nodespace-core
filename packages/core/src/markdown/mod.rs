@@ -982,6 +982,7 @@ pub async fn handle_create_nodes_from_markdown(
                     parent_id: None, // Root node
                     position: crate::services::InsertPositionOwned::End,
                     properties: container.properties.clone(),
+                    lifecycle_status: None,
                 })
                 .await
                 .map_err(|e| {
@@ -1167,6 +1168,20 @@ pub async fn handle_create_nodes_from_markdown(
                                     error = %e,
                                     duration_ms = insert_start.elapsed().as_millis(),
                                     "Background bulk import failed"
+                                );
+                                // ADR-069 §5/F16: the caller was already told
+                                // this import succeeded (it returned before
+                                // this task even started) and has no other
+                                // way to learn it did not — a
+                                // `tracing::error!` alone is invisible to
+                                // anything but log inspection. Emit a domain
+                                // event naming the (now-empty) root so a
+                                // subscriber has a chance to flag it.
+                                ns.emit_event(
+                                    crate::db::events::DomainEvent::BackgroundImportFailed {
+                                        root_id: root_id_for_log.clone(),
+                                        error: e.to_string(),
+                                    },
                                 );
                             }
                         }
@@ -1707,6 +1722,7 @@ async fn create_node(
             parent_id,
             position,
             properties,
+            lifecycle_status: None,
         })
         .await
         .map_err(|e| {

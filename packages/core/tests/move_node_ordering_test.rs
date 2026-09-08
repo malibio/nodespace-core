@@ -148,27 +148,39 @@ mod move_node_ordering_tests {
         // Subscribe to capture orders for parent and next_sibling placement
         let mut rx = service.subscribe_to_events();
 
+        // Read events defensively (loop until the wanted variant arrives)
+        // rather than assuming the very next event on the channel is a
+        // `RelationshipUpdated` — ADR-069 §2/S4 made `move_node` bump the
+        // node's version BEFORE emitting its relationship event, so a
+        // `NodeUpdated` from that bump now legitimately arrives first on
+        // every one of these moves. This mirrors the sibling test
+        // (`test_move_node_after_sibling_emits_order_in_relationship_updated`),
+        // which already used this pattern.
+        async fn next_order_event(
+            rx: &mut tokio::sync::broadcast::Receiver<nodespace_core::db::EventEnvelope>,
+        ) -> f64 {
+            loop {
+                let envelope = timeout(Duration::from_secs(2), rx.recv())
+                    .await
+                    .expect("RelationshipUpdated event should arrive within 2 seconds")
+                    .expect("channel should not close");
+                if let Some(order) = extract_order_from_event(&envelope.event) {
+                    return order;
+                }
+            }
+        }
+
         service
             .with_client(TEST_CLIENT_ID)
             .move_node_unchecked(&parent.id, Some(&grandparent.id), InsertPosition::End)
             .await?;
-        let parent_order_envelope = timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("timeout")
-            .expect("event");
-        let parent_order = extract_order_from_event(&parent_order_envelope.event)
-            .expect("parent placement must emit order");
+        let parent_order = next_order_event(&mut rx).await;
 
         service
             .with_client(TEST_CLIENT_ID)
             .move_node_unchecked(&next_sibling.id, Some(&grandparent.id), InsertPosition::End)
             .await?;
-        let next_sibling_order_envelope = timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("timeout")
-            .expect("event");
-        let next_sibling_order = extract_order_from_event(&next_sibling_order_envelope.event)
-            .expect("next_sibling placement must emit order");
+        let next_sibling_order = next_order_event(&mut rx).await;
 
         // Place child under parent
         service
@@ -176,10 +188,7 @@ mod move_node_ordering_tests {
             .move_node_unchecked(&child.id, Some(&parent.id), InsertPosition::End)
             .await?;
         // drain child-placement event
-        timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("timeout")
-            .expect("event");
+        next_order_event(&mut rx).await;
 
         // Outdent: move child to grandparent After(parent)
         let child_node = service
@@ -196,13 +205,7 @@ mod move_node_ordering_tests {
             )
             .await?;
 
-        let outdent_envelope = timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("timeout")
-            .expect("event");
-
-        let outdent_order = extract_order_from_event(&outdent_envelope.event)
-            .expect("outdent move must emit order");
+        let outdent_order = next_order_event(&mut rx).await;
 
         // Contract: parent_order < outdent_order < next_sibling_order
         assert!(

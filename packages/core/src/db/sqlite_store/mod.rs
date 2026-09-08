@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tx::Tx;
 
 /// Normalise a stored date string to YYYY-MM-DD on read.
 /// Accepts YYYY-MM-DD (pass-through) or RFC 3339 (extract date portion).
@@ -415,6 +416,7 @@ mod embeddings;
 mod nodes;
 mod relationships;
 mod search;
+pub(crate) mod tx;
 
 #[cfg(test)]
 mod tests {

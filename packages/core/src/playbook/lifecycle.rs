@@ -386,6 +386,8 @@ pub fn trigger_keys_for_event(event: &crate::db::events::DomainEvent) -> Vec<Tri
         }
         DomainEvent::RelationshipUpdated { .. } => vec![], // No playbook triggers for updates
         DomainEvent::RelationshipDeleted { .. } => vec![], // TODO(phase2): same as RelationshipCreated above
+        // Infrastructure-failure signal, not a content change — no playbook trigger keys.
+        DomainEvent::BackgroundImportFailed { .. } => vec![],
     }
 }
 

@@ -166,6 +166,65 @@ impl NodeService {
         Ok(node.id)
     }
 
+    /// `_in_tx` twin of [`Self::create_node`] (ADR-069 §1b/S2). Identical
+    /// validation/title pipeline; the insert lands on `tx.store_tx()` instead
+    /// of opening its own transaction, and the `NodeCreated` event is
+    /// buffered via `self.emit_event` (routed to the transaction buffer by
+    /// `BatchState::Transactional` — see `NodeService::with_transaction`)
+    /// instead of relying on the store notifier, since `create_node_in_tx`
+    /// (the store method) deliberately does not call `notify`.
+    ///
+    /// Does not handle the `database-settings` singleton short-circuit or
+    /// collection-name-collision marking that `create_node` does — no
+    /// composed caller (`create_node_with_parent`) creates either of those
+    /// node shapes through this path today; if one ever does, add the
+    /// missing behavior here rather than silently diverging.
+    pub(crate) async fn create_node_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        mut node: Node,
+    ) -> Result<String, NodeServiceError> {
+        if is_date_node_id(&node.id) {
+            node.node_type = "date".to_string();
+        }
+
+        self.behaviors.validate_node(&node)?;
+
+        if node.node_type != "schema" {
+            node.properties =
+                Self::normalize_flat_properties_to_namespace(&node.node_type, &node.properties);
+            if let Some(schema_json) = self.get_schema_for_type(&node.node_type).await? {
+                if let Some(fields_json) = schema_json.get("fields") {
+                    if let Ok(fields) = serde_json::from_value::<Vec<crate::models::SchemaField>>(
+                        fields_json.clone(),
+                    ) {
+                        self.apply_schema_defaults_with_fields(&mut node, &fields)?;
+                        self.validate_node_with_fields(&node, &fields)?;
+                    }
+                }
+            }
+        }
+
+        if node.title.is_none() {
+            node.title = self.compute_title(&node, None).await?;
+        }
+
+        if node.node_type == "playbook" {
+            self.validate_playbook_rules(&node.properties).await?;
+        }
+
+        crate::db::SqliteStore::create_node_in_tx(tx.store_tx(), &node)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(format!("Failed to insert node: {}", e)))?;
+
+        self.emit_event(DomainEvent::NodeCreated {
+            node_id: node.id.clone(),
+            node_type: node.node_type.clone(),
+        });
+
+        Ok(node.id)
+    }
+
     /// Create a node with parent relationship in a single operation
     ///
     /// This is the primary node creation API that enforces all business rules:
@@ -213,6 +272,7 @@ impl NodeService {
     ///     parent_id: Some("2025-01-15".to_string()),
     ///     position: InsertPositionOwned::Beginning,
     ///     properties: json!({}),
+    ///     lifecycle_status: None,
     /// }).await?;
     /// # Ok(())
     /// # }
@@ -221,6 +281,83 @@ impl NodeService {
         &self,
         params: CreateNodeParams,
     ) -> Result<String, NodeServiceError> {
+        let (node, parent, node_type) = self.prepare_create_node_with_parent(params).await?;
+        let has_parent = parent.is_some();
+
+        let created_id = if let Some((parent_id, position)) = parent {
+            let service = self.clone();
+            let service_for_tx = service.clone();
+            service
+                .with_transaction(move |tx| {
+                    Box::pin(async move {
+                        let created_id = service_for_tx.create_node_in_tx(tx, node).await?;
+                        service_for_tx
+                            .create_parent_edge_in_tx(
+                                tx,
+                                &created_id,
+                                &parent_id,
+                                position.as_ref(),
+                            )
+                            .await?;
+                        Ok(created_id)
+                    })
+                })
+                .await?
+        } else {
+            self.create_node(node).await?
+        };
+
+        self.queue_created_root_for_embedding(&created_id, &node_type, has_parent)
+            .await;
+
+        Ok(created_id)
+    }
+
+    /// `_in_tx` twin of [`Self::create_node_with_parent`] (ADR-069 §1b/S3),
+    /// composable into a caller's own transaction — e.g. `handle_create_schema`
+    /// composing the schema node create with its relationship declarations and
+    /// description subtree. Shares the same validation/preparation pipeline;
+    /// the node insert and parent edge (when there is a parent) land on the
+    /// same `tx` the caller is already holding. Embedding-marker queueing is
+    /// intentionally NOT reproduced here — it is derived state outside the
+    /// boundary by design (ADR-069 §5); a caller needing it should queue
+    /// after its own `with_transaction` commits, the way `handle_create_schema`
+    /// does not need to (schema nodes are not embedded root content).
+    pub(crate) async fn create_node_with_parent_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        params: CreateNodeParams,
+    ) -> Result<String, NodeServiceError> {
+        let (node, parent, _node_type) = self.prepare_create_node_with_parent(params).await?;
+
+        let created_id = self.create_node_in_tx(tx, node).await?;
+        if let Some((parent_id, position)) = parent {
+            self.create_parent_edge_in_tx(tx, &created_id, &parent_id, position.as_ref())
+                .await?;
+        }
+
+        Ok(created_id)
+    }
+
+    /// Shared validation/preparation pipeline for
+    /// [`Self::create_node_with_parent`] and
+    /// [`Self::create_node_with_parent_in_tx`] (steps 1-6 of the original
+    /// method): date-container bootstrap, node_type/parent/sibling
+    /// validation, ID generation, and title computation. Returns the fully
+    /// constructed `Node` plus, when a parent was requested, its resolved
+    /// `(parent_id, position)` — everything the caller needs to perform
+    /// steps 6+7 either standalone or composed into an outer transaction.
+    async fn prepare_create_node_with_parent(
+        &self,
+        params: CreateNodeParams,
+    ) -> Result<
+        (
+            Node,
+            Option<(String, crate::services::InsertPositionOwned)>,
+            String,
+        ),
+        NodeServiceError,
+    > {
         // Make params mutable so we can resolve InsertPositionOwned::End
         let mut params = params;
         let start = std::time::Instant::now();
@@ -365,6 +502,25 @@ impl NodeService {
                 .await?
         };
 
+        let parent = params
+            .parent_id
+            .clone()
+            .map(|parent_id| (parent_id, params.position.clone()));
+
+        let lifecycle_status = match params.lifecycle_status {
+            Some(status) => {
+                if !crate::models::is_valid_lifecycle_status(&status) {
+                    return Err(NodeServiceError::invalid_update(format!(
+                        "Invalid lifecycle_status '{}'. Valid values: {:?}",
+                        status,
+                        crate::models::LIFECYCLE_STATUSES
+                    )));
+                }
+                status
+            }
+            None => "active".to_string(),
+        };
+
         let node = Node {
             id: node_id,
             node_type: params.node_type,
@@ -376,45 +532,53 @@ impl NodeService {
             created_at: chrono::Utc::now(),
             modified_at: chrono::Utc::now(),
             title,
-            lifecycle_status: "active".to_string(),
+            lifecycle_status,
         };
 
         tracing::debug!(
-            "create_node_with_parent: about to call create_node at {}ms",
-            start.elapsed().as_millis()
-        );
-        let created_id = self.create_node(node).await?;
-        tracing::debug!(
-            node_id = %created_id,
-            "create_node_with_parent: create_node completed at {}ms",
+            "create_node_with_parent: prepared node{} at {}ms",
+            if parent.is_some() {
+                " + parent edge"
+            } else {
+                ""
+            },
             start.elapsed().as_millis()
         );
 
-        // Step 7: Create parent relationship if parent specified
-        if let Some(parent_id) = params.parent_id {
-            self.create_parent_edge(&created_id, &parent_id, params.position.as_ref())
-                .await?;
+        Ok((node, parent, node_type))
+    }
 
-            // Step 8a: Child node created - queue root for embedding regeneration
-            // The new child's content should be included in the root's aggregate embedding
-            // (root-aggregate model)
+    /// Post-commit follow-up for [`Self::create_node_with_parent`]: queue the
+    /// created node's aggregate root for embedding regeneration. Deliberately
+    /// outside the transaction boundary (ADR-069 §5) — embedding markers are
+    /// derived state with their own reconciliation loop, and a queueing
+    /// failure must never fail or roll back a create that already committed.
+    async fn queue_created_root_for_embedding(
+        &self,
+        created_id: &str,
+        node_type: &str,
+        has_parent: bool,
+    ) {
+        if has_parent {
+            // Child node created - queue root for embedding regeneration.
+            // The new child's content should be included in the root's
+            // aggregate embedding (root-aggregate model).
             #[cfg(feature = "nlp")]
-            self.queue_root_for_embedding(&created_id).await;
+            self.queue_root_for_embedding(created_id).await;
         } else {
-            // Step 8b: Root node created - queue for embedding if embeddable type
-            // (root-aggregate model)
-            // Stale markers are written unconditionally (even without the `nlp` feature) so
-            // that a build re-enabled with NLP picks up existing roots without a manual resync.
-            if self.is_embeddable_type(&node_type) {
-                if let Err(e) = self.store.create_stale_embedding_marker(&created_id).await {
-                    // Log warning but don't fail the creation - embedding will be regenerated later
+            // Root node created - queue for embedding if embeddable type
+            // (root-aggregate model). Stale markers are written
+            // unconditionally (even without the `nlp` feature) so a build
+            // re-enabled with NLP picks up existing roots without a manual
+            // resync.
+            if self.is_embeddable_type(node_type) {
+                if let Err(e) = self.store.create_stale_embedding_marker(created_id).await {
                     tracing::warn!(
                         "Failed to create embedding marker for new root {}: {}",
                         created_id,
                         e
                     );
                 } else {
-                    // Wake the embedding processor to process the new root
                     tracing::debug!(
                         "Queued new root {} for embedding (direct creation)",
                         created_id
@@ -426,8 +590,6 @@ impl NodeService {
                 }
             }
         }
-
-        Ok(created_id)
     }
 
     /// Auto-create date container if it doesn't exist in the database
@@ -698,6 +860,117 @@ impl NodeService {
                 tracing::warn!("Failed to sync mentions for node {}: {}", id, e);
             }
         }
+
+        Ok(())
+    }
+
+    /// `_in_tx` twin of [`Self::update_node_unchecked`] (ADR-069 §1b/S3).
+    /// Identical validation/merge pipeline; the write lands on
+    /// `tx.store_tx()` and the `NodeUpdated` event is buffered via
+    /// `self.emit_event` instead of relying on the store notifier. Mention
+    /// sync is intentionally NOT reproduced here — it stays outside the
+    /// transaction boundary by design (ADR-069 §5, derived state that
+    /// self-heals); the only current caller (`rename_schema_field_in_tx`)
+    /// updates a schema node's `fields` JSON, whose content mention sync is
+    /// a no-op in practice, and a future caller updating real content
+    /// through this path should call `sync_mentions` itself after `commit`.
+    pub(crate) async fn update_node_unchecked_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        id: &str,
+        update: NodeUpdate,
+    ) -> Result<(), NodeServiceError> {
+        if update.is_empty() {
+            return Err(NodeServiceError::invalid_update(
+                "Update contains no changes",
+            ));
+        }
+
+        let existing = self
+            .get_node(id)
+            .await?
+            .ok_or_else(|| NodeServiceError::node_not_found(id))?;
+
+        let mut updated = existing.clone();
+        let mut node_type_changed = false;
+        let mut content_changed = false;
+        let mut properties_changed = false;
+
+        if let Some(node_type) = update.node_type {
+            node_type_changed = updated.node_type != node_type;
+            updated.node_type = node_type;
+        }
+
+        if let Some(content) = update.content {
+            if updated.content != content {
+                content_changed = true;
+            }
+            updated.content = content;
+        }
+
+        if let Some(properties) = update.properties {
+            properties_changed = true;
+            if updated.node_type == "schema" {
+                Self::deep_merge_namespaced_properties(&mut updated.properties, properties);
+            } else {
+                let normalized_properties =
+                    Self::normalize_flat_properties_to_namespace(&updated.node_type, &properties);
+                Self::deep_merge_namespaced_properties(
+                    &mut updated.properties,
+                    normalized_properties,
+                );
+            }
+        }
+
+        self.behaviors.validate_node(&updated)?;
+
+        if node_type_changed && updated.node_type != "schema" {
+            if let Some(schema_json) = self.get_schema_for_type(&updated.node_type).await? {
+                if let Some(fields_json) = schema_json.get("fields") {
+                    if let Ok(fields) = serde_json::from_value::<Vec<crate::models::SchemaField>>(
+                        fields_json.clone(),
+                    ) {
+                        self.apply_schema_defaults_with_fields(&mut updated, &fields)?;
+                        self.validate_node_with_fields(&updated, &fields)?;
+                    }
+                }
+            }
+        } else if updated.node_type != "schema" {
+            self.validate_node_against_schema(&updated).await?;
+        }
+
+        let title_update = if content_changed || node_type_changed || properties_changed {
+            Some(self.compute_title(&updated, None).await?)
+        } else {
+            None
+        };
+        if let Some(ref new_title) = title_update {
+            updated.title = new_title.clone();
+        }
+
+        let node_update = crate::models::NodeUpdate {
+            node_type: Some(updated.node_type.clone()),
+            content: Some(updated.content.clone()),
+            properties: Some(updated.properties.clone()),
+            title: title_update,
+            lifecycle_status: None,
+        };
+
+        crate::db::SqliteStore::update_node_in_tx(tx.store_tx(), id, node_update)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Reflects the store's unconditional version bump — see
+        // `SqliteStore::update_node_in_tx` (mirrors `update_node`'s own
+        // "exactly one version bump per call" statement).
+        updated.version += 1;
+
+        self.emit_event(DomainEvent::NodeUpdated {
+            node_id: id.to_string(),
+            node_type: updated.node_type.clone(),
+            node: updated,
+            changed_properties: vec![],
+        });
 
         Ok(())
     }
@@ -1342,6 +1615,44 @@ impl NodeService {
         })?;
 
         // NOTE: NodeUpdated event is now automatically emitted by store notifier
+
+        Ok(updated_node)
+    }
+
+    /// `_in_tx` twin of [`Self::update_node_with_version_bump`] (ADR-069
+    /// §1b/S4). Same no-op content/properties, version-checked bump; the
+    /// read of current values and the checked write both land on
+    /// `tx.store_tx()` (ADR-069 §3: the OCC re-check is sound inside the
+    /// transaction, closing the TOCTOU window the standalone method's
+    /// pre-read leaves open). A version mismatch surfaces as
+    /// `NodeServiceError::VersionConflict` — an expected outcome of
+    /// concurrent writes, never `TransactionFailed` (ADR-069 §2a) — which
+    /// rolls back the whole unit of work via the caller's `?`.
+    pub(crate) async fn update_node_with_version_bump_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        node_id: &str,
+        expected_version: i64,
+    ) -> Result<Node, NodeServiceError> {
+        let result = crate::db::SqliteStore::update_node_with_version_check_in_tx(
+            tx.store_tx(),
+            node_id,
+            expected_version,
+            NodeUpdate::default(),
+        )
+        .await
+        .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        let updated_node = result.map_err(|actual_version| {
+            NodeServiceError::version_conflict(node_id, expected_version, actual_version)
+        })?;
+
+        self.emit_event(DomainEvent::NodeUpdated {
+            node_id: updated_node.id.clone(),
+            node_type: updated_node.node_type.clone(),
+            node: updated_node.clone(),
+            changed_properties: vec![],
+        });
 
         Ok(updated_node)
     }

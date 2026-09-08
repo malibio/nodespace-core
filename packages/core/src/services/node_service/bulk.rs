@@ -100,8 +100,67 @@ impl NodeService {
             serde_json::Value,
         )>,
     ) -> Result<Vec<String>, NodeServiceError> {
-        if nodes.is_empty() {
+        let Some(nodes_normalized) = self.prepare_bulk_hierarchy_nodes(nodes).await? else {
             return Ok(Vec::new());
+        };
+
+        // Find the root ID once - all nodes in a bulk import share the same root
+        // Performance optimization: Single DB query instead of N queries
+        let root_id = if let Some((_, _, _, Some(first_parent), _, _)) = nodes_normalized.first() {
+            self.get_root_id(first_parent).await.ok()
+        } else {
+            None
+        };
+
+        // Delegate to store for atomic batch insert
+        let result = self
+            .store
+            .bulk_create_hierarchy(nodes_normalized)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        // Queue root for embedding regeneration once
+        // All nodes share the same root, so we only need one queue operation
+        #[cfg(feature = "nlp")]
+        if let Some(root_id) = root_id {
+            self.queue_root_for_embedding(&root_id).await;
+        }
+
+        Ok(result)
+    }
+
+    /// Shared preamble for [`Self::bulk_create_hierarchy`] and
+    /// [`Self::bulk_create_hierarchy_in_tx`]: caches each unique node
+    /// type's schema fields, normalizes flat properties to namespaced
+    /// format, and validates every node against behaviors and (where
+    /// applicable) its cached schema. Returns `Ok(None)` for an empty
+    /// input (both callers treat that as "nothing to do"), otherwise the
+    /// normalized, validated node tuples ready for insertion.
+    async fn prepare_bulk_hierarchy_nodes(
+        &self,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
+    ) -> Result<
+        Option<
+            Vec<(
+                String,
+                String,
+                String,
+                Option<String>,
+                f64,
+                serde_json::Value,
+            )>,
+        >,
+        NodeServiceError,
+    > {
+        if nodes.is_empty() {
+            return Ok(None);
         }
 
         // Performance optimization: Cache schema lookups by node_type
@@ -169,26 +228,55 @@ impl NodeService {
             }
         }
 
-        // Find the root ID once - all nodes in a bulk import share the same root
-        // Performance optimization: Single DB query instead of N queries
-        let root_id = if let Some((_, _, _, Some(first_parent), _, _)) = nodes_normalized.first() {
-            self.get_root_id(first_parent).await.ok()
-        } else {
-            None
+        Ok(Some(nodes_normalized))
+    }
+
+    /// `_in_tx` twin of [`Self::bulk_create_hierarchy`] (ADR-069 §1b/S3).
+    /// Shares the same schema-cache/validation preamble via
+    /// [`Self::prepare_bulk_hierarchy_nodes`]; the insert lands on
+    /// `tx.store_tx()` via the store's own `bulk_create_hierarchy_in_tx`
+    /// instead of opening a new transaction — this is what lets
+    /// `create_description_subtree` compose into `handle_create_schema`'s
+    /// outer transaction alongside the schema node and its relationship
+    /// declarations. Root embedding-queueing is intentionally NOT
+    /// reproduced here: it is derived state outside the boundary by design
+    /// (ADR-069 §5) and the one current caller's root here is a schema
+    /// node's description subtree, which is not itself embedded — a future
+    /// caller that needs it should queue after `with_transaction` commits.
+    /// Emits one `NodeCreated` event per inserted node, buffered the same
+    /// way `create_node_in_tx` buffers its own.
+    pub(crate) async fn bulk_create_hierarchy_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
+    ) -> Result<Vec<String>, NodeServiceError> {
+        let Some(nodes_normalized) = self.prepare_bulk_hierarchy_nodes(nodes).await? else {
+            return Ok(Vec::new());
         };
 
-        // Delegate to store for atomic batch insert
+        let node_types: Vec<String> = nodes_normalized
+            .iter()
+            .map(|(_, node_type, ..)| node_type.clone())
+            .collect();
+
         let result = self
             .store
-            .bulk_create_hierarchy(nodes_normalized)
+            .bulk_create_hierarchy_in_tx(tx.store_tx(), nodes_normalized)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Queue root for embedding regeneration once
-        // All nodes share the same root, so we only need one queue operation
-        #[cfg(feature = "nlp")]
-        if let Some(root_id) = root_id {
-            self.queue_root_for_embedding(&root_id).await;
+        for (id, node_type) in result.iter().zip(node_types.iter()) {
+            self.emit_event(DomainEvent::NodeCreated {
+                node_id: id.clone(),
+                node_type: node_type.clone(),
+            });
         }
 
         Ok(result)

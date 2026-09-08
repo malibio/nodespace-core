@@ -2028,6 +2028,20 @@ async fn convert_domain_event(
                 relationship_type: relationship_type.clone(),
             },
         )),
+        // ADR-069 §5/F16: not yet wired to a proto payload — this event
+        // exists so a future gRPC/frontend consumer CAN be added (the
+        // infrastructure gap the ADR calls out), not because `WatchNodes`
+        // already surfaces it. Logged so it is at least visible in the
+        // daemon's own logs until a wire type is added, same posture as the
+        // NodeCreated fetch-failure arms above.
+        DomainEvent::BackgroundImportFailed { root_id, error } => {
+            tracing::warn!(
+                root_id = %root_id,
+                error = %error,
+                "background import failed (not yet surfaced to WatchNodes clients)"
+            );
+            None
+        }
     }
 }
 

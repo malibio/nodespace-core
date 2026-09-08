@@ -21,7 +21,7 @@
 
 use crate::behaviors::NodeBehaviorRegistry;
 use crate::db::events::DomainEvent;
-use crate::db::{SqliteStore, StoreChange, StoreOperation};
+use crate::db::{SqliteStore, StoreChange, StoreOperation, Tx};
 use crate::models::{FilterOperator, Node, NodeFilter, NodeUpdate, PropertyFilter};
 use crate::services::error::NodeServiceError;
 use crate::services::NodeAccessor;
@@ -29,6 +29,8 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use tokio::sync::broadcast;
 
@@ -405,6 +407,7 @@ pub type SubtreeData = (
 ///     parent_id: Some("parent-123".to_string()),
 ///     position: InsertPositionOwned::Beginning,
 ///     properties: json!({}),
+///     lifecycle_status: None,
 /// };
 ///
 /// // Frontend-provided UUID (Tauri path)
@@ -416,6 +419,7 @@ pub type SubtreeData = (
 ///     parent_id: None,
 ///     position: InsertPositionOwned::Beginning,
 ///     properties: json!({}),
+///     lifecycle_status: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -433,6 +437,14 @@ pub struct CreateNodeParams {
     pub position: crate::services::InsertPositionOwned,
     /// Additional node properties as JSON
     pub properties: Value,
+    /// Lifecycle status to create the node with. `None` defaults to
+    /// `"active"`. Set this instead of creating the node and then calling a
+    /// separate update — the latter (ADR-069 §5/F6) can fail after the
+    /// create has already committed, leaving a node the caller wanted
+    /// archived/draft live and visible as active. Setting it here makes the
+    /// status part of the single create write, so there is no window where
+    /// the wrong status is observable.
+    pub lifecycle_status: Option<String>,
 }
 
 /// Broadcast channel capacity for domain events — the LIVE channel `emit_event`
@@ -455,9 +467,18 @@ const DOMAIN_EVENT_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// `Immediate` — every event is broadcast as it arrives (default).
 /// `Batching` — events accumulate in the map; last-write-wins per node_id.
+/// `Transactional` — events accumulate in emission order for the duration of
+/// a `NodeService::with_transaction` call (ADR-069 §2); flushed in order on
+/// commit, discarded outright on rollback. A `Vec`, not a coalescing map:
+/// in-transaction order is semantically required (e.g. `move_node` must
+/// flush its new-parent-edge event before its old-parent-removal event), and
+/// relationship events — which are not node-keyed — must buffer here too,
+/// unlike `Batching`, which relationship events bypass entirely (see
+/// `emit_event`'s match below).
 pub(crate) enum BatchState {
     Immediate,
     Batching(HashMap<String, crate::db::events::EventEnvelope>),
+    Transactional(Vec<crate::db::events::EventEnvelope>),
 }
 
 /// Whether an event envelope should be forwarded to the origin-filtered push
@@ -515,6 +536,155 @@ impl Drop for BatchEmitGuard {
         }
     }
 }
+
+/// Send every buffered envelope, in order, mirroring to the push channel the
+/// same way immediate emission and `BatchEmitGuard::drop` do. Shared by both
+/// so the mirror/send logic exists in exactly one place.
+fn flush_envelopes(
+    envelopes: Vec<crate::db::events::EventEnvelope>,
+    tx: &broadcast::Sender<crate::db::events::EventEnvelope>,
+    push_tx: &broadcast::Sender<crate::db::events::EventEnvelope>,
+    push_excluded_origin: &RwLock<Option<String>>,
+) {
+    for envelope in envelopes {
+        if push_forward_allowed(push_excluded_origin, &envelope) {
+            let _ = push_tx.send(envelope.clone());
+        }
+        let _ = tx.send(envelope);
+    }
+}
+
+/// A `NodeService`-level unit of work in progress (ADR-069 §1b). Wraps the
+/// store's own [`Tx`] plus this transaction's event buffer, and is the only
+/// way an `_in_tx` `NodeService` method may reach either. It exposes
+/// `store_tx()` for calling store `_in_tx` methods and, indirectly,
+/// `emit_event` for buffering domain events (see `BatchState::Transactional`)
+/// — it does not expose `self.store` or anything that could open a second
+/// transaction, the same "unrepresentable by construction" discipline `Tx`
+/// itself applies one layer down.
+pub(crate) struct NodeServiceTx<'t> {
+    store_tx: &'t Tx<'t>,
+}
+
+impl<'t> NodeServiceTx<'t> {
+    /// The store-level transaction handle, for calling store `_in_tx`
+    /// methods. Not exposed as `self.store.write()` or any store method that
+    /// opens its own transaction — see the type's own doc comment.
+    pub(crate) fn store_tx(&self) -> &Tx<'t> {
+        self.store_tx
+    }
+}
+
+impl NodeService {
+    /// Run `f` inside one `NodeService`-level transaction (ADR-069 §1b):
+    /// opens one store-level transaction via `self.store.with_transaction`,
+    /// switches event emission to `BatchState::Transactional` for the
+    /// closure's duration, and on success flushes the buffered events in
+    /// order — on failure discards them, since an event is a statement about
+    /// committed state (ADR-069 §2) and nothing in the buffer committed.
+    ///
+    /// Methods composed inside `f` must be their `_in_tx` variants, taking
+    /// `&NodeServiceTx`. Calling a non-`_in_tx` method (which opens its own
+    /// `with_transaction`) from inside `f` deadlocks, for the same reason
+    /// calling a non-`_in_tx` store method from inside a store transaction
+    /// does: the write guard is already held.
+    pub(crate) async fn with_transaction<T, F>(&self, f: F) -> Result<T, NodeServiceError>
+    where
+        F: for<'t> FnOnce(
+                &'t NodeServiceTx<'t>,
+            )
+                -> Pin<Box<dyn Future<Output = Result<T, NodeServiceError>> + Send + 't>>
+            + Send
+            + 'static,
+        T: Send,
+    {
+        // Nesting guard mirrors `begin_batch_emit`'s: an outer transaction's
+        // buffer would be silently discarded if an inner one reset the
+        // state on either its own commit or its own rollback.
+        {
+            let state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
+            debug_assert!(
+                matches!(*state, BatchState::Immediate),
+                "with_transaction called while a batch or transaction is already active"
+            );
+        }
+
+        let batch_state = Arc::clone(&self.batch_state);
+        *batch_state.lock().unwrap_or_else(|e| e.into_inner()) =
+            BatchState::Transactional(Vec::new());
+
+        // If the closure itself panics, restore `Immediate` on unwind so a
+        // later caller doesn't inherit a stuck `Transactional` state.
+        struct ResetOnDrop<'a>(&'a Mutex<BatchState>, bool);
+        impl Drop for ResetOnDrop<'_> {
+            fn drop(&mut self) {
+                if !self.1 {
+                    *self.0.lock().unwrap_or_else(|e| e.into_inner()) = BatchState::Immediate;
+                }
+            }
+        }
+        let mut reset_guard = ResetOnDrop(&batch_state, false);
+
+        let result: Result<T, NodeServiceError> = self
+            .store
+            .with_transaction(move |store_tx| {
+                Box::pin(async move {
+                    let ns_tx = NodeServiceTx { store_tx };
+                    f(&ns_tx)
+                        .await
+                        .map_err(|e| anyhow::anyhow!(NodeServiceTxError(e)))
+                })
+            })
+            .await
+            .map_err(|e| match e.downcast::<NodeServiceTxError>() {
+                Ok(NodeServiceTxError(service_err)) => service_err,
+                // Not a re-wrapped closure error — the transaction machinery
+                // itself failed (begin/commit/rollback). This is exactly
+                // `TransactionFailed`'s reserved scope (ADR-069 §2a): the
+                // failure originates from the seam, not from business logic.
+                Err(e) => NodeServiceError::transaction_failed(e.to_string()),
+            });
+
+        // Commit already happened (or didn't) inside `self.store.with_transaction`
+        // by the time we get here — this only decides what to do with the
+        // buffered events.
+        let prev = std::mem::replace(
+            &mut *batch_state.lock().unwrap_or_else(|e| e.into_inner()),
+            BatchState::Immediate,
+        );
+        reset_guard.1 = true; // already reset above; skip the Drop's redundant reset
+
+        if result.is_ok() {
+            if let BatchState::Transactional(buf) = prev {
+                flush_envelopes(
+                    buf,
+                    &self.event_tx,
+                    &self.push_event_tx,
+                    &self.push_excluded_origin,
+                );
+            }
+        }
+        // On error, `prev`'s buffer (if any) is simply dropped — discarded,
+        // per ADR-069 §2: nothing in it describes committed state.
+
+        result
+    }
+}
+
+/// Wraps a `NodeServiceError` so it can round-trip through
+/// `SqliteStore::with_transaction`'s `anyhow::Result`, then be told apart
+/// from a genuine transaction-machinery failure on the way back out. See
+/// `NodeService::with_transaction`.
+#[derive(Debug)]
+struct NodeServiceTxError(NodeServiceError);
+
+impl std::fmt::Display for NodeServiceTxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for NodeServiceTxError {}
 
 /// Check if a string matches date node format: YYYY-MM-DD
 ///
@@ -979,7 +1149,14 @@ impl NodeService {
                     },
                 };
 
-                // In batch mode, accumulate last-write-wins per node.
+                // In batch mode, accumulate last-write-wins per node. In
+                // transactional mode, accumulate in order (ADR-069 §2) — but
+                // this path is store-`notify`-driven, and every `_in_tx`
+                // store method deliberately skips `notify` (see e.g.
+                // `create_node_in_tx`'s doc comment), so in practice this
+                // arm is unreached today. Handled anyway so the match stays
+                // exhaustive and correct if a future in-tx store method ever
+                // does call `notify`.
                 // In immediate mode (default), broadcast directly.
                 let mut state = batch_state_ref.lock().unwrap_or_else(|e| e.into_inner());
                 match &mut *state {
@@ -994,6 +1171,9 @@ impl NodeService {
                     BatchState::Batching(buf) => {
                         // Batched events flush (and mirror) in BatchEmitGuard::drop.
                         buf.insert(change.node.id.clone(), envelope);
+                    }
+                    BatchState::Transactional(buf) => {
+                        buf.push(envelope);
                     }
                 }
             });
@@ -1062,26 +1242,66 @@ impl NodeService {
     /// PersonNode to this node (role `owner`, status `active`). Must run after the
     /// local person seed so the owner edge always has a person to attach to.
     async fn seed_database_settings_if_needed(&self) -> Result<(), NodeServiceError> {
-        if !self
+        // ADR-069 §1a/S5, closing F13: the idempotency guard checks the
+        // owner EDGE, not merely the settings node's existence. The node and
+        // its owner edge are two separate writes below; if the edge write
+        // ever failed after the node had already been created, checking
+        // node-existence alone would treat the singleton as "already seeded"
+        // on every subsequent open and the edge would never be retried,
+        // leaving the database permanently ownerless. Checking the edge
+        // means a partial prior failure is detected and the create_node
+        // call below is then a no-op via `create_node`'s own singleton
+        // short-circuit (`node.node_type == "database-settings"`), so only
+        // the missing edge gets (re)created.
+        let existing_settings = self
             .query_nodes_by_type("database-settings", None)
             .await?
-            .is_empty()
-        {
-            return Ok(());
+            .into_iter()
+            .next();
+
+        if let Some(ref settings) = existing_settings {
+            let local_person_id = self
+                .query_nodes_by_type("person", None)
+                .await?
+                .into_iter()
+                .next()
+                .map(|p| p.id);
+            if let Some(ref local_person_id) = local_person_id {
+                let has_owner_edge = self
+                    .store()
+                    .get_relationship_record(local_person_id, &settings.id, "has_role")
+                    .await
+                    .map_err(|e| NodeServiceError::query_failed(e.to_string()))?
+                    .is_some();
+                if has_owner_edge {
+                    return Ok(());
+                }
+                // Node exists, edge does not — fall through and repair it.
+            } else {
+                // No local person yet to own the edge; nothing to repair
+                // until seeding order creates one. Existing behavior: do
+                // not error, just skip until a later open can retry.
+                return Ok(());
+            }
         }
 
-        let settings = Node::new_with_id(
-            DATABASE_SETTINGS_NODE_ID.to_string(),
-            "database-settings".to_string(),
-            String::new(),
-            serde_json::json!({
-                "database-settings": {
-                    "sync_enabled": false,
-                    "auth_status": "local"
-                }
-            }),
-        );
-        let settings_id = self.create_node(settings).await?;
+        let settings_id = match existing_settings {
+            Some(settings) => settings.id,
+            None => {
+                let settings = Node::new_with_id(
+                    DATABASE_SETTINGS_NODE_ID.to_string(),
+                    "database-settings".to_string(),
+                    String::new(),
+                    serde_json::json!({
+                        "database-settings": {
+                            "sync_enabled": false,
+                            "auth_status": "local"
+                        }
+                    }),
+                );
+                self.create_node(settings).await?
+            }
+        };
 
         // Attach the owner role edge from the local PersonNode. Seeding order
         // guarantees exactly one local person exists at this point.
@@ -1694,6 +1914,7 @@ impl NodeService {
                 properties: root.properties.clone(),
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
+                lifecycle_status: None,
             })
             .await?;
             created_roots += 1;
@@ -1874,11 +2095,13 @@ impl NodeService {
     ///
     pub fn begin_batch_emit(&self) -> BatchEmitGuard {
         let mut state = self.batch_state.lock().unwrap_or_else(|e| e.into_inner());
-        // Nested batch guards are not supported: the outer guard's buffered events
+        // Nested batch guards are not supported: the outer buffer's events
         // would be silently discarded when the inner guard resets the state.
+        // Same hazard applies to a `with_transaction` call active while a
+        // batch guard is requested — one buffer, not two (ADR-069 §2).
         debug_assert!(
             matches!(*state, BatchState::Immediate),
-            "begin_batch_emit called while a batch is already active"
+            "begin_batch_emit called while a batch or transaction is already active"
         );
         *state = BatchState::Batching(HashMap::new());
         drop(state);
@@ -1919,6 +2142,14 @@ impl NodeService {
             (BatchState::Batching(buf), Some(id)) => {
                 // Batched events flush (and mirror) in BatchEmitGuard::drop.
                 buf.insert(id, envelope);
+            }
+            // Matches regardless of node-id extraction, unlike `Batching`'s
+            // arm above: a transaction buffer must hold node-keyed AND
+            // relationship events in one ordered sequence (ADR-069 §2), so
+            // relationship events cannot fall through to the immediate arm
+            // below the way they do for `Batching`.
+            (BatchState::Transactional(buf), _) => {
+                buf.push(envelope);
             }
             _ => {
                 // Mirror to the push channel unless this envelope's origin is
@@ -2293,6 +2524,7 @@ mod tests {
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: serde_json::json!({ "collection": { "restrictedToMembers": true } }),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2303,6 +2535,7 @@ mod tests {
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2323,6 +2556,7 @@ mod tests {
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2333,6 +2567,7 @@ mod tests {
             parent_id: Some("11111111-1111-1111-1111-1111111111c3".into()),
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2366,6 +2601,7 @@ mod tests {
             parent_id: Some("11111111-1111-1111-1111-1111111111c3".into()),
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -3138,6 +3374,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3165,6 +3402,7 @@ mod tests {
                 parent_id: Some("2025-06-15".to_string()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3337,6 +3575,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3545,6 +3784,65 @@ mod tests {
         assert!(result.is_ok(), "move_node should accept a container parent");
     }
 
+    /// ADR-069 §2/S4 regression test: `move_node` must bump the node's
+    /// version BEFORE emitting any relationship event, not after. Before
+    /// this fix, `RelationshipUpdated`/`RelationshipDeleted` were emitted
+    /// first and the version bump — the write that makes the move
+    /// OCC-safe — ran last, so a consumer could observe "the node moved"
+    /// before that was durably true. Asserts the events arrive on the
+    /// broadcast channel in the corrected order: `NodeUpdated` (the bump,
+    /// emitted by the store notifier) before `RelationshipUpdated`.
+    #[tokio::test]
+    async fn test_move_node_bumps_version_before_emitting_relationship_event() {
+        let (service, _temp) = create_test_service().await;
+
+        let container = Node::new("text".to_string(), "container".to_string(), json!({}));
+        let container_id = service.create_node(container).await.unwrap();
+
+        let child = Node::new("text".to_string(), "child".to_string(), json!({}));
+        let child_id = service.create_node(child).await.unwrap();
+        let child_node = service.get_node(&child_id).await.unwrap().unwrap();
+
+        let mut rx = service.subscribe_to_events();
+
+        service
+            .move_node(
+                &child_id,
+                child_node.version,
+                Some(&container_id),
+                crate::services::InsertPosition::End,
+            )
+            .await
+            .unwrap();
+
+        // Drain events in arrival order and record their kinds up to the
+        // RelationshipUpdated we care about.
+        let mut saw_node_updated_first = false;
+        let mut saw_relationship_updated = false;
+        while let Ok(envelope) = rx.try_recv() {
+            match envelope.event {
+                DomainEvent::NodeUpdated { node_id, .. } if node_id == child_id => {
+                    if !saw_relationship_updated {
+                        saw_node_updated_first = true;
+                    }
+                }
+                DomainEvent::RelationshipUpdated { .. } => {
+                    saw_relationship_updated = true;
+                    assert!(
+                        saw_node_updated_first,
+                        "RelationshipUpdated must not arrive before the version-bump \
+                         NodeUpdated event — the move must be OCC-safe before it is announced"
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_relationship_updated,
+            "expected a RelationshipUpdated event for the move"
+        );
+    }
+
     #[tokio::test]
     async fn test_reparenting_a_collection_member_is_rejected() {
         // ADR-059 §2 (reparent side): a content node that holds a `member_of` edge
@@ -3643,6 +3941,7 @@ mod tests {
                 parent_id: Some(leaf_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await;
 
@@ -3668,6 +3967,7 @@ mod tests {
                 parent_id: Some(container_id),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await;
 
@@ -3675,6 +3975,67 @@ mod tests {
             result.is_ok(),
             "create_node_with_parent should accept a container parent"
         );
+    }
+
+    /// ADR-069 S2 regression test: an induced failure between the node
+    /// insert and the parent-edge insert must leave NO node row and add NO
+    /// `get_roots()` entry — the orphaned-root hazard `create_node_with_parent`
+    /// used to have when the two writes were separate transactions. Exercises
+    /// the real `NodeService::with_transaction` seam and the same
+    /// `create_node_in_tx` primitive `create_node_with_parent` composes,
+    /// returning an error after the node insert instead of calling
+    /// `create_parent_edge_in_tx` — this is exactly the failure-after-
+    /// validation case a doomed second write represents.
+    #[tokio::test]
+    async fn test_create_node_with_parent_rolls_back_node_on_edge_failure() {
+        let (service, _temp) = create_test_service().await;
+
+        let container = Node::new("text".to_string(), "container".to_string(), json!({}));
+        let container_id = service.create_node(container).await.unwrap();
+
+        let node_id = uuid::Uuid::new_v4().to_string();
+        let node = Node::new(
+            "text".to_string(),
+            "orphan-candidate".to_string(),
+            json!({}),
+        );
+        let node = Node {
+            id: node_id.clone(),
+            ..node
+        };
+
+        let service_for_tx = service.clone();
+        let result: Result<String, NodeServiceError> = service
+            .with_transaction(move |tx| {
+                let service = service_for_tx.clone();
+                let node = node.clone();
+                Box::pin(async move {
+                    let created_id = service.create_node_in_tx(tx, node).await?;
+                    // Simulate the edge write failing (constraint violation,
+                    // I/O error, crash) — same failure class as F5 in the
+                    // write-atomicity survey. Must roll back the insert above.
+                    Err(NodeServiceError::query_failed(
+                        "simulated parent-edge write failure",
+                    ))?;
+                    Ok::<String, NodeServiceError>(created_id)
+                })
+            })
+            .await;
+
+        assert!(result.is_err(), "the induced failure must propagate");
+
+        assert!(
+            service.get_node(&node_id).await.unwrap().is_none(),
+            "node row must not exist after the transaction rolled back"
+        );
+
+        let roots = service.get_roots(None, None).await.unwrap();
+        assert!(
+            !roots.iter().any(|n| n.id == node_id),
+            "a rolled-back create must never appear as a spurious root"
+        );
+        // The unrelated, already-committed container must be unaffected.
+        assert!(service.get_node(&container_id).await.unwrap().is_some());
     }
 
     // C3c: atomic child-transfer tests
@@ -3697,6 +4058,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3709,6 +4071,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3763,6 +4126,7 @@ mod tests {
                 parent_id: Some(old_parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3775,6 +4139,7 @@ mod tests {
                 parent_id: Some(old_parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3816,6 +4181,66 @@ mod tests {
         assert!(
             new_children.is_empty(),
             "new_parent should have no children after rollback"
+        );
+    }
+
+    /// ADR-069 S4 regression test for F9: before this fix, the version-bump
+    /// loop that follows `move_children_to_parent`'s atomic edge swap was
+    /// NOT itself atomic — a failure bumping child k left children 0..k
+    /// bumped (and their `RelationshipUpdated` events already broadcast)
+    /// while k..N were neither, contradicting the method's own doc comment
+    /// ("If any child has a version mismatch the entire batch is rolled
+    /// back — nothing moves"), which covered only the edge swap. This
+    /// exercises the fix directly: run the same bump-loop body the
+    /// production method uses (`update_node_with_version_bump_in_tx` per
+    /// child) inside `NodeService::with_transaction`, inducing a failure
+    /// after the first child's bump has already run inside the closure, and
+    /// asserts that child's version reverts on rollback — proving the loop
+    /// is now one unit rather than N independent ones.
+    #[tokio::test]
+    async fn test_move_children_to_parent_bump_loop_rolls_back_as_one_unit() {
+        let (service, _temp) = create_test_service().await;
+
+        let child1 = Node::new("text".to_string(), "Child 1".to_string(), json!({}));
+        let child1_id = service.create_node(child1).await.unwrap();
+        let child1_before = service.get_node(&child1_id).await.unwrap().unwrap();
+        let version_before = child1_before.version;
+
+        let service_for_tx = service.clone();
+        let child1_id_for_tx = child1_id.clone();
+        let result: Result<(), NodeServiceError> = service
+            .with_transaction(move |tx| {
+                let service = service_for_tx.clone();
+                let child1_id = child1_id_for_tx.clone();
+                Box::pin(async move {
+                    // First bump in the "loop" — succeeds, same as production.
+                    service
+                        .update_node_with_version_bump_in_tx(tx, &child1_id, version_before)
+                        .await?;
+
+                    // Simulated failure on a later item in the same batch —
+                    // the exact shape F9 describes (bump k succeeds, k+1
+                    // fails). Must roll back the bump above too.
+                    Err(NodeServiceError::version_conflict(
+                        "child2-placeholder",
+                        0,
+                        1,
+                    ))?;
+                    Ok(())
+                })
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "the induced mid-loop failure must propagate"
+        );
+
+        let child1_after = service.get_node(&child1_id).await.unwrap().unwrap();
+        assert_eq!(
+            child1_after.version, version_before,
+            "child1's bump must have rolled back along with the rest of the batch, \
+             not persisted just because it ran first in the loop"
         );
     }
 
@@ -3862,6 +4287,7 @@ mod tests {
                     parent_id: Some(old_parent_id.clone()),
                     position: crate::services::InsertPositionOwned::End,
                     properties: json!({}),
+                    lifecycle_status: None,
                 })
                 .await
                 .unwrap();
@@ -3925,6 +4351,7 @@ mod tests {
                     parent_id: Some(parent_id.clone()),
                     position: crate::services::InsertPositionOwned::End,
                     properties: json!({}),
+                    lifecycle_status: None,
                 })
                 .await
                 .unwrap();
@@ -3937,6 +4364,7 @@ mod tests {
                     parent_id: Some(parent_id.clone()),
                     position: crate::services::InsertPositionOwned::End,
                     properties: json!({}),
+                    lifecycle_status: None,
                 })
                 .await
                 .unwrap();
@@ -4970,6 +5398,63 @@ mod tests {
             .expect("owner has_role edge exists");
         assert_eq!(edge.properties["role"], "owner");
         assert_eq!(edge.properties["status"], "active");
+    }
+
+    /// ADR-069 §1a/S5 regression test for F13: the seeding guard must check
+    /// the owner EDGE's existence, not merely the settings node's. Before
+    /// this fix, once the singleton node existed, the guard short-circuited
+    /// unconditionally and a missing owner edge (e.g. from a prior failed
+    /// seed) was never retried — the database was permanently ownerless.
+    /// Simulates that prior partial failure by deleting the edge the normal
+    /// seeding path already created, then re-running the seeding step
+    /// directly (as a fresh app open would) and asserting the edge is
+    /// repaired rather than silently skipped.
+    #[tokio::test]
+    async fn test_seed_database_settings_repairs_missing_owner_edge() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let person_id = people[0].id.clone();
+
+        // Simulate the F13 partial-failure state: settings node exists, but
+        // its owner edge does not (as if the edge write had failed on a
+        // prior seed attempt).
+        service
+            .store()
+            .delete_generic_relationship(&person_id, DATABASE_SETTINGS_NODE_ID, "has_role")
+            .await
+            .unwrap();
+        assert!(
+            service
+                .store()
+                .get_relationship_record(&person_id, DATABASE_SETTINGS_NODE_ID, "has_role")
+                .await
+                .unwrap()
+                .is_none(),
+            "precondition: owner edge must be gone before the repair runs"
+        );
+
+        // Re-run the seeding step directly, as a fresh app open would.
+        service.seed_database_settings_if_needed().await.unwrap();
+
+        let repaired_edge = service
+            .store()
+            .get_relationship_record(&person_id, DATABASE_SETTINGS_NODE_ID, "has_role")
+            .await
+            .unwrap();
+        assert!(
+            repaired_edge.is_some(),
+            "the missing owner edge must be repaired, not silently left missing \
+             just because the settings node already existed"
+        );
+
+        // Still exactly one settings node — the repair must not have
+        // duplicated it via a second create.
+        let settings = service
+            .query_nodes_by_type("database-settings", None)
+            .await
+            .unwrap();
+        assert_eq!(settings.len(), 1);
     }
 
     // --- get_local_person / set_local_person_identity (ADR-037) ---
@@ -6193,6 +6678,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6238,6 +6724,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6299,6 +6786,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6339,6 +6827,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6802,6 +7291,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: serde_json::json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6813,6 +7303,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: serde_json::json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();

@@ -7,6 +7,7 @@ use crate::behaviors::SchemaNodeBehavior;
 use crate::markdown::MarkdownError;
 use crate::models::schema::SchemaField;
 use crate::models::{Node, NodeUpdate, SchemaNode};
+use crate::services::error::NodeServiceError;
 use crate::services::{CreateNodeParams, NodeService};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -867,37 +868,68 @@ pub async fn handle_create_schema(
         parent_id: None,
         position: crate::services::InsertPositionOwned::End,
         properties,
+        lifecycle_status: None,
     };
 
-    // Store the schema node
-    let created_schema_id = node_service
-        .create_node_with_parent(schema_node_params)
+    // ADR-069 §1b/S3: the schema node, its relationship declarations, and its
+    // description subtree land in ONE transaction. Previously three
+    // independent atomic writes — a failure on the second left a schema node
+    // live with zero relationship rows; a failure on the third left it with
+    // no description subtree, semantically undiscoverable via embedding
+    // search until someone re-ran update_schema with a description. Both are
+    // now impossible: any failure here rolls back the whole create.
+    let relationships_for_tx = relationships.clone();
+    let description_text_for_tx = description_text.clone();
+    let node_service_for_tx = Arc::clone(node_service);
+    // Same id `schema_id` above already computed (schema nodes derive their id
+    // from content) — kept as its own binding because it's the value the
+    // transaction closure actually produced, not merely asserted in advance.
+    let _created_schema_id: String = node_service
+        .with_transaction(move |tx| {
+            let node_service = Arc::clone(&node_service_for_tx);
+            let relationships = relationships_for_tx.clone();
+            let description_text = description_text_for_tx.clone();
+            Box::pin(async move {
+                // create_node_with_parent_in_tx already returns
+                // NodeServiceError directly — propagate it as-is rather than
+                // flattening to transaction_failed, so a genuine validation
+                // failure (InvalidUpdate, UnknownNodeType, ...) stays
+                // distinguishable from the transaction machinery itself
+                // breaking (ADR-069 §2a). The outer map_err below
+                // discriminates on this.
+                let created_schema_id = node_service
+                    .create_node_with_parent_in_tx(tx, schema_node_params)
+                    .await?;
+
+                if !relationships.is_empty() {
+                    node_service
+                        .set_schema_relationships_in_tx(tx, &created_schema_id, &relationships)
+                        .await?;
+                }
+
+                create_description_subtree_in_tx(
+                    &node_service,
+                    tx,
+                    &created_schema_id,
+                    &description_text,
+                )
+                .await
+                .map_err(|e| match e {
+                    MarkdownError::InvalidParams(msg) => NodeServiceError::invalid_update(msg),
+                    other => NodeServiceError::transaction_failed(other.to_string()),
+                })?;
+
+                Ok(created_schema_id)
+            })
+        })
         .await
-        .map_err(|e| {
-            MarkdownError::internal_error(format!(
-                "Failed to create schema node for '{}': {}",
-                schema_id, e
-            ))
+        .map_err(|e| match e {
+            NodeServiceError::InvalidUpdate(_) => MarkdownError::invalid_params(e.to_string()),
+            other => MarkdownError::internal_error(format!(
+                "Failed to create schema '{}': {}",
+                schema_id, other
+            )),
         })?;
-
-    // Write relationship declarations as relationship-table rows. Runs after
-    // the node create so the declaring-schema FK endpoint exists (targets were
-    // validated to exist above).
-    if !relationships.is_empty() {
-        node_service
-            .set_schema_relationships(&created_schema_id, &relationships)
-            .await
-            .map_err(|e| {
-                MarkdownError::internal_error(format!(
-                    "Failed to store relationship declarations for '{}': {}",
-                    created_schema_id, e
-                ))
-            })?;
-    }
-
-    // Store the description as a child node subtree so it is included in the
-    // schema's embedding and enables synonym-based semantic discovery.
-    create_description_subtree(node_service, &created_schema_id, &description_text).await?;
 
     let output = CreateSchemaOutput {
         schema_id: schema_id.clone(),
@@ -1416,39 +1448,98 @@ pub async fn handle_update_schema(
         .validate_schema_node(&updated_schema)
         .map_err(|e| MarkdownError::invalid_params(format!("Schema validation failed: {}", e)))?;
 
-    // Persist declarations FIRST: this is where the live-instance-edge guard
-    // runs (removing/retargeting a declaration with edges under it is
-    // rejected), and a rejection must leave the schema fully untouched —
-    // fields included.
-    if relationships_added > 0 || relationships_removed > 0 {
-        node_service
-            .set_schema_relationships(&params.schema_id, &relationships)
-            .await
-            .map_err(|e| match e {
-                crate::services::NodeServiceError::InvalidUpdate(_) => {
-                    MarkdownError::invalid_params(e.to_string())
-                }
-                other => MarkdownError::internal_error(format!(
-                    "Failed to update relationship declarations: {}",
-                    other
-                )),
-            })?;
-    }
-
-    let update = NodeUpdate {
-        properties: Some(properties),
-        ..Default::default()
-    };
-
+    // ADR-069 §1b/S3, closing F2's most damaging step: relationship
+    // declarations, the fields/templates update, and the description
+    // subtree replace land in ONE transaction. Previously up to three
+    // independent atomic writes — a failure updating fields after
+    // declarations had already changed left `get_schema_with_relationships`
+    // returning an internally inconsistent `SchemaNode` (new relationships,
+    // old fields). Any failure in this group now rolls back all of it.
+    //
+    // Declarations still go first within the group: this is where the
+    // live-instance-edge guard runs (removing/retargeting a declaration with
+    // edges under it is rejected), and a rejection must leave the schema
+    // fully untouched — fields included. That ordering guarantee is now
+    // backed by the transaction rather than by hoping nothing fails after it.
+    //
+    // Phase 1 (per-rename field renames above) is NOT included in this
+    // boundary — each rename is its own already-atomic unit (S3's
+    // `rename_schema_field` fix), and merging N independent renames plus this
+    // group into one transaction is a larger composition than this pass
+    // covers. The existing "Do NOT retry with the original pair" guidance
+    // for a friendly_name failure after a successful rename (Phase 1 above)
+    // therefore still applies — that compensation-by-error-message is
+    // unchanged by this fix.
+    let schema_id_for_tx = params.schema_id.clone();
+    let relationships_for_tx = relationships.clone();
+    let description_for_tx = params.description.clone();
+    let node_service_for_tx = Arc::clone(node_service);
     node_service
-        .update_node_unchecked(&params.schema_id, update)
-        .await
-        .map_err(|e| MarkdownError::internal_error(format!("Failed to update schema: {}", e)))?;
+        .with_transaction(move |tx| {
+            let node_service = Arc::clone(&node_service_for_tx);
+            let schema_id = schema_id_for_tx.clone();
+            let relationships = relationships_for_tx.clone();
+            let description = description_for_tx.clone();
+            let properties = properties.clone();
+            Box::pin(async move {
+                if relationships_added > 0 || relationships_removed > 0 {
+                    node_service
+                        .set_schema_relationships_in_tx(tx, &schema_id, &relationships)
+                        .await?;
+                }
 
-    // If a new description was provided, replace the description child subtree
-    if let Some(ref new_description) = params.description {
-        replace_description_subtree(node_service, &params.schema_id, new_description).await?;
-    }
+                let update = NodeUpdate {
+                    properties: Some(properties),
+                    ..Default::default()
+                };
+                node_service
+                    .update_node_unchecked_in_tx(tx, &schema_id, update)
+                    .await?;
+
+                if let Some(ref new_description) = description {
+                    crate::db::SqliteStore::delete_children_subtree_unchecked_in_tx(
+                        tx.store_tx(),
+                        &schema_id,
+                    )
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::transaction_failed(format!(
+                            "Failed to delete description subtree for schema '{schema_id}': {e}"
+                        ))
+                    })?;
+                    create_description_subtree_in_tx(
+                        &node_service,
+                        tx,
+                        &schema_id,
+                        new_description,
+                    )
+                    .await
+                    .map_err(|e| {
+                        // Preserve InvalidParams as InvalidUpdate rather than
+                        // flattening to transaction_failed: the outer match
+                        // below discriminates InvalidUpdate -> invalid_params
+                        // (a client mistake) from everything else ->
+                        // internal_error, and TransactionFailed is reserved
+                        // for the commit/rollback machinery itself breaking
+                        // (ADR-069 §2a), not a validation failure surfaced
+                        // through a different error type at this boundary.
+                        match e {
+                            MarkdownError::InvalidParams(msg) => {
+                                NodeServiceError::invalid_update(msg)
+                            }
+                            other => NodeServiceError::transaction_failed(other.to_string()),
+                        }
+                    })?;
+                }
+
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|e| match e {
+            NodeServiceError::InvalidUpdate(_) => MarkdownError::invalid_params(e.to_string()),
+            other => MarkdownError::internal_error(format!("Failed to update schema: {}", other)),
+        })?;
 
     let output = SchemaUpdateOutput {
         schema_id: params.schema_id,
@@ -1495,8 +1586,15 @@ pub async fn handle_update_schema(
 /// inserts them as children of the schema node via bulk insert. The subtree
 /// is then included in the schema's embedding via `get_aggregated_content`,
 /// enabling synonym-based semantic discovery of schemas.
-async fn create_description_subtree(
+///
+/// `_in_tx`-only (ADR-069 §1b/S3): both callers (`handle_create_schema`,
+/// `handle_update_schema`) compose this into an outer transaction via
+/// `NodeService::bulk_create_hierarchy_in_tx` — there is deliberately no
+/// standalone non-`_in_tx` version, since nothing calls this outside a
+/// transaction.
+async fn create_description_subtree_in_tx(
     node_service: &Arc<NodeService>,
+    tx: &crate::services::node_service::NodeServiceTx<'_>,
     schema_id: &str,
     description: &str,
 ) -> Result<(), MarkdownError> {
@@ -1533,42 +1631,33 @@ async fn create_description_subtree(
         .collect();
 
     node_service
-        .bulk_create_hierarchy(bulk_nodes)
+        .bulk_create_hierarchy_in_tx(tx, bulk_nodes)
         .await
         .map_err(|e| {
-            MarkdownError::internal_error(format!(
-                "Failed to create description subtree for schema '{}': {}",
-                schema_id, e
-            ))
+            // Preserve the client-mistake/server-fault distinction rather
+            // than flattening everything to `internal_error`: a genuinely
+            // invalid description (e.g. content failing behavior or schema
+            // field validation) is a client mistake, not a server fault,
+            // and callers one layer up (`handle_update_schema`) discriminate
+            // on this to decide invalid_params vs. internal_error.
+            // `prepare_bulk_hierarchy_nodes` can surface either variant
+            // depending on which validator rejects first (behaviors ->
+            // ValidationFailed, schema field checks -> InvalidUpdate).
+            match e {
+                NodeServiceError::InvalidUpdate(msg) => MarkdownError::invalid_params(format!(
+                    "Failed to create description subtree for schema '{schema_id}': {msg}"
+                )),
+                NodeServiceError::ValidationFailed(msg) => MarkdownError::invalid_params(format!(
+                    "Failed to create description subtree for schema '{schema_id}': {msg}"
+                )),
+                other => MarkdownError::internal_error(format!(
+                    "Failed to create description subtree for schema '{}': {}",
+                    schema_id, other
+                )),
+            }
         })?;
 
     Ok(())
-}
-
-/// Replace the description child subtree of a schema node with new content.
-///
-/// Atomically deletes the entire existing subtree (all descendants, not just direct children),
-/// then creates a fresh subtree from the new markdown description.
-async fn replace_description_subtree(
-    node_service: &Arc<NodeService>,
-    schema_id: &str,
-    new_description: &str,
-) -> Result<(), MarkdownError> {
-    // Delete the entire descendant subtree in one statement (recursive CTE).
-    // This correctly handles nested markdown structures (e.g. header → text children).
-    node_service
-        .store()
-        .delete_children_subtree_unchecked(schema_id)
-        .await
-        .map_err(|e| {
-            MarkdownError::internal_error(format!(
-                "Failed to delete description subtree for schema '{}': {}",
-                schema_id, e
-            ))
-        })?;
-
-    // Create new description subtree
-    create_description_subtree(node_service, schema_id, new_description).await
 }
 
 #[cfg(test)]

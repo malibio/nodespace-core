@@ -588,59 +588,96 @@ impl NodeService {
             )));
         }
 
-        // Step 1: Migrate all node property data
-        let affected = self
-            .store
-            .rename_schema_field(type_id, from, to)
-            .await
-            .map_err(|e| {
-                NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
-                    context: format!(
-                        "Failed to migrate field data '{}' -> '{}' for type '{}': {}",
-                        from, to, type_id, e
-                    ),
+        // ADR-069 §1b/S3, closing F3: the data migration and the schema
+        // definition rewrite land in ONE transaction. Previously two
+        // independent atomic writes — a failure rewriting the definition
+        // left every instance's property data rekeyed to `to` while the
+        // schema still declared `from`, breaking `compute_title`, CEL
+        // expressions, and query filters for the whole type. Any failure now
+        // rolls back both.
+        let type_id_owned = type_id.to_string();
+        let from_owned = from.to_string();
+        let to_owned = to.to_string();
+        let service = self.clone();
+        let service_for_tx = service.clone();
+        let affected: u64 = service
+            .with_transaction(move |tx| {
+                let service = service_for_tx.clone();
+                let type_id = type_id_owned.clone();
+                let from = from_owned.clone();
+                let to = to_owned.clone();
+                let schema = schema.clone();
+                Box::pin(async move {
+                    // Step 1: Migrate all node property data
+                    let affected = crate::db::SqliteStore::rename_schema_field_in_tx(
+                        tx.store_tx(),
+                        &type_id,
+                        &from,
+                        &to,
+                    )
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::DatabaseError(
+                            crate::db::DatabaseError::SqlExecutionError {
+                                context: format!(
+                                    "Failed to migrate field data '{}' -> '{}' for type '{}': {}",
+                                    from, to, type_id, e
+                                ),
+                            },
+                        )
+                    })?;
+
+                    // Step 2: Update schema definition — rename field in the fields list
+                    let updated_fields: Vec<crate::models::schema::SchemaField> = schema
+                        .fields
+                        .into_iter()
+                        .map(|mut f| {
+                            if f.name == from {
+                                f.name = to.clone();
+                            }
+                            f
+                        })
+                        .collect();
+
+                    // Declarations live in the relationship table, not in
+                    // properties — the rebuilt properties carry fields only.
+                    let mut properties = serde_json::json!({
+                        "isCore": schema.is_core,
+                        "schemaVersion": schema.schema_version,
+                        "fields": updated_fields,
+                    });
+                    if let Some(ref t) = schema.title_template {
+                        properties["titleTemplate"] = serde_json::Value::String(t.clone());
+                    }
+                    if let Some(ref t) = schema.properties_header_summary_template {
+                        properties["propertiesHeaderSummaryTemplate"] =
+                            serde_json::Value::String(t.clone());
+                    }
+
+                    let update = crate::models::NodeUpdate {
+                        properties: Some(properties),
+                        ..Default::default()
+                    };
+
+                    service
+                        .update_node_unchecked_in_tx(tx, &type_id, update)
+                        .await
+                        .map_err(|e| {
+                            NodeServiceError::DatabaseError(
+                                crate::db::DatabaseError::SqlExecutionError {
+                                    context: format!(
+                                        "Failed to update schema definition after field rename \
+                                         '{}' -> '{}' for type '{}': {}",
+                                        from, to, type_id, e
+                                    ),
+                                },
+                            )
+                        })?;
+
+                    Ok(affected)
                 })
-            })?;
-
-        // Step 2: Update schema definition — rename field in the fields list
-        let updated_fields: Vec<crate::models::schema::SchemaField> = schema
-            .fields
-            .into_iter()
-            .map(|mut f| {
-                if f.name == from {
-                    f.name = to.to_string();
-                }
-                f
             })
-            .collect();
-
-        // Declarations live in the relationship table, not in properties — the
-        // rebuilt properties carry fields only.
-        let mut properties = serde_json::json!({
-            "isCore": schema.is_core,
-            "schemaVersion": schema.schema_version,
-            "fields": updated_fields,
-        });
-        if let Some(ref t) = schema.title_template {
-            properties["titleTemplate"] = serde_json::Value::String(t.clone());
-        }
-        if let Some(ref t) = schema.properties_header_summary_template {
-            properties["propertiesHeaderSummaryTemplate"] = serde_json::Value::String(t.clone());
-        }
-
-        let update = crate::models::NodeUpdate {
-            properties: Some(properties),
-            ..Default::default()
-        };
-
-        self.update_node_unchecked(type_id, update)
-            .await
-            .map_err(|e| NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
-                context: format!(
-                    "Failed to update schema definition after field rename '{}' -> '{}' for type '{}': {}",
-                    from, to, type_id, e
-                ),
-            }))?;
+            .await?;
 
         Ok(affected)
     }
@@ -831,6 +868,100 @@ impl NodeService {
             .set_schema_declarations(schema_id, relationships)
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        for (rel_id, out_node, rel) in changes.created {
+            let props = serde_json::to_value(&rel).unwrap_or_else(|_| serde_json::json!({}));
+            self.emit_event(DomainEvent::RelationshipCreated {
+                relationship: crate::db::events::RelationshipEvent::new(
+                    rel_id, schema_id, &out_node, &rel.name, props,
+                ),
+            });
+        }
+        for (rel_id, out_node, rel) in changes.updated {
+            let props = serde_json::to_value(&rel).unwrap_or_else(|_| serde_json::json!({}));
+            self.emit_event(DomainEvent::RelationshipUpdated {
+                relationship: crate::db::events::RelationshipEvent::new(
+                    rel_id, schema_id, &out_node, &rel.name, props,
+                ),
+            });
+        }
+        for (rel_id, out_node, name) in changes.deleted {
+            self.emit_event(DomainEvent::RelationshipDeleted {
+                id: rel_id,
+                from_id: crate::db::events::node_thing(schema_id),
+                to_id: crate::db::events::node_thing(&out_node),
+                relationship_type: name,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// `_in_tx` twin of [`Self::set_schema_relationships`] (ADR-069 §1b/S3).
+    /// Identical reserved-name and live-instance-edge validation; the
+    /// declaration write lands on `tx.store_tx()` via the store's own
+    /// `set_schema_declarations_in_tx` instead of opening a new transaction
+    /// — this is what lets `handle_create_schema` compose it into the same
+    /// transaction as the schema node create and the description subtree.
+    /// The validation reads (`get_schema_declarations`,
+    /// `count_instance_edges_for_declaration`) run against the pooled
+    /// reader exactly as the standalone method does — safe here because
+    /// they read declarations that predate this transaction, not anything
+    /// it is concurrently writing.
+    pub(crate) async fn set_schema_relationships_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        schema_id: &str,
+        relationships: &[crate::models::schema::SchemaRelationship],
+    ) -> Result<(), NodeServiceError> {
+        for rel in relationships {
+            for (which, name) in [("name", &rel.name), ("reverseName", &rel.reverse_name)] {
+                if crate::models::schema::is_builtin_relationship(name) {
+                    return Err(NodeServiceError::invalid_update(format!(
+                        "Relationship {} '{}' is reserved for a built-in structural relationship \
+                         ({}); choose a different name",
+                        which,
+                        name,
+                        crate::models::schema::BUILTIN_RELATIONSHIP_NAMES.join(", ")
+                    )));
+                }
+            }
+        }
+
+        let existing = self
+            .store
+            .get_schema_declarations(schema_id)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+        for old in &existing {
+            let replacement = relationships.iter().find(|r| r.name == old.name);
+            let removed = replacement.is_none();
+            let retargeted = replacement.is_some_and(|r| r.target_type != old.target_type);
+            if !(removed || retargeted) {
+                continue;
+            }
+            let live = self
+                .store
+                .count_instance_edges_for_declaration(schema_id, &old.name)
+                .await
+                .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+            if live > 0 {
+                let action = if removed { "remove" } else { "retarget" };
+                return Err(NodeServiceError::invalid_update(format!(
+                    "Cannot {} relationship '{}' on schema '{}': {} instance edge(s) exist \
+                     under it. Delete those relationships first.",
+                    action, old.name, schema_id, live
+                )));
+            }
+        }
+
+        let changes = crate::db::SqliteStore::set_schema_declarations_in_tx(
+            tx.store_tx(),
+            schema_id,
+            relationships,
+        )
+        .await
+        .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
         for (rel_id, out_node, rel) in changes.created {
             let props = serde_json::to_value(&rel).unwrap_or_else(|_| serde_json::json!({}));

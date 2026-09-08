@@ -480,6 +480,24 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
+        // ADR-069 §2: bump the version BEFORE emitting any event, not after.
+        // The store's move_node and this bump remain two separate atomic
+        // writes (the store confirmed already-atomic for the move itself —
+        // merging them into one DB transaction is not what this fix needs),
+        // but a consumer must never be told about a move before the write
+        // that makes it OCC-safe has actually landed. The previous order
+        // announced the move first; a failed bump then left consumers
+        // believing a move that was not durably version-committed, with no
+        // way to tell from the event stream alone.
+        //
+        // Even though we're only modifying edge relationships, we bump the
+        // node version so that concurrent move operations will fail with
+        // version conflict. Returns the updated node with new version so
+        // frontend can sync its local state.
+        let updated_node = self
+            .update_node_with_version_bump(node_id, expected_version)
+            .await?;
+
         // Emit RelationshipUpdated event (unified relationship events).
         // Emit the NEW-parent edge first so a consumer that inserts-then-deletes
         // never sees the node parentless mid-move.
@@ -508,12 +526,7 @@ impl NodeService {
             }
         }
 
-        // Bump the node's version to support OCC
-        // Even though we're only modifying edge relationships, we bump the node version
-        // so that concurrent move operations will fail with version conflict
-        // Returns the updated node with new version so frontend can sync its local state
-        self.update_node_with_version_bump(node_id, expected_version)
-            .await
+        Ok(updated_node)
     }
 
     /// Reorder a node within its siblings with OCC
@@ -579,8 +592,11 @@ impl NodeService {
             )));
         }
 
-        // Use graph-native reordering
-        self.reorder_child(node_id, position).await?;
+        // Use graph-native reordering. ADR-069 §2/S4: the write happens here,
+        // but the event is deferred until after the version bump below — see
+        // `reorder_child_write`'s doc comment for why, mirroring the
+        // `move_node` fix.
+        let (parent_id, actual_order) = self.reorder_child_write(node_id, position).await?;
 
         // Bump the node's version to support OCC
         // Even though we're only modifying edge ordering, we bump the node version
@@ -589,6 +605,8 @@ impl NodeService {
         let _ = self
             .update_node_with_version_bump(node_id, expected_version)
             .await?;
+
+        self.emit_reorder_event(node_id, parent_id.as_deref(), actual_order);
 
         Ok(())
     }
@@ -699,26 +717,46 @@ impl NodeService {
                 }
             })?;
 
-        // Bump each child's version and emit RelationshipUpdated so hierarchy-sync
-        // can reconcile order idempotently (C3a-consistent path).
-        let mut updated = Vec::with_capacity(nodes.len());
-        for (node, order) in nodes.iter().zip(orders.iter()) {
-            let updated_node = self
-                .update_node_with_version_bump(&node.id, node.version)
-                .await?;
+        // ADR-069 §1b/S4, closing F9: the version-bump loop now runs in ONE
+        // transaction, so a version conflict on child k rolls back bumps
+        // 0..k too, instead of leaving them bumped+evented while k..N are
+        // neither — the doc comment's "nothing moves" guarantee previously
+        // covered only the edge swap above, not this loop. Events are
+        // buffered in per-child order and flushed only after the whole
+        // batch commits (ADR-069 §2).
+        let new_parent_id_owned = new_parent_id.to_string();
+        let nodes_and_orders: Vec<(Node, f64)> =
+            nodes.iter().cloned().zip(orders.iter().copied()).collect();
+        let service = self.clone();
+        let service_for_tx = service.clone();
+        let updated: Vec<Node> = service
+            .with_transaction(move |tx| {
+                let service = service_for_tx.clone();
+                let new_parent_id = new_parent_id_owned.clone();
+                let nodes_and_orders = nodes_and_orders.clone();
+                Box::pin(async move {
+                    let mut updated = Vec::with_capacity(nodes_and_orders.len());
+                    for (node, order) in &nodes_and_orders {
+                        let updated_node = service
+                            .update_node_with_version_bump_in_tx(tx, &node.id, node.version)
+                            .await?;
 
-            self.emit_event(crate::db::events::DomainEvent::RelationshipUpdated {
-                relationship: crate::db::events::RelationshipEvent::new(
-                    format!("relationship:{}:{}", new_parent_id, node.id),
-                    new_parent_id,
-                    &node.id,
-                    "has_child",
-                    serde_json::json!({"order": order}),
-                ),
-            });
+                        service.emit_event(crate::db::events::DomainEvent::RelationshipUpdated {
+                            relationship: crate::db::events::RelationshipEvent::new(
+                                format!("relationship:{}:{}", new_parent_id, node.id),
+                                &new_parent_id,
+                                &node.id,
+                                "has_child",
+                                serde_json::json!({"order": order}),
+                            ),
+                        });
 
-            updated.push(updated_node);
-        }
+                        updated.push(updated_node);
+                    }
+                    Ok(updated)
+                })
+            })
+            .await?;
 
         Ok(updated)
     }
@@ -818,6 +856,50 @@ impl NodeService {
         Ok(())
     }
 
+    /// `_in_tx` twin of [`Self::create_parent_edge`] (ADR-069 §1b/S2). Same
+    /// idempotency posture is NOT reproduced here — callers reach this only
+    /// from `create_node_with_parent_in_tx`, where `child_id` is a node this
+    /// same transaction just created via `create_node_in_tx`, so it can
+    /// never already have a parent edge to be idempotent against. The
+    /// sibling-position resolution runs against a pooled reader exactly like
+    /// `resolve_insert_position` does today (existing siblings under
+    /// `parent_id` are necessarily already-committed data, not something
+    /// this transaction is concurrently mutating), then the edge insert
+    /// itself lands on `tx.store_tx()`.
+    pub(crate) async fn create_parent_edge_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        child_id: &str,
+        parent_id: &str,
+        position: crate::services::InsertPosition<'_>,
+    ) -> Result<(), NodeServiceError> {
+        let resolved = self
+            .resolve_insert_position(position, Some(parent_id))
+            .await?;
+        let insert_after_id: Option<&str> = resolved.as_deref();
+
+        let actual_order = crate::db::SqliteStore::create_has_child_edge_in_tx(
+            tx.store_tx(),
+            parent_id,
+            child_id,
+            insert_after_id,
+        )
+        .await
+        .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        self.emit_event(DomainEvent::RelationshipCreated {
+            relationship: crate::db::events::RelationshipEvent::new(
+                format!("relationship:{}:{}", parent_id, child_id),
+                parent_id,
+                child_id,
+                "has_child",
+                serde_json::json!({"order": actual_order}),
+            ),
+        });
+
+        Ok(())
+    }
+
     /// Batched sibling of [`Self::create_parent_edge`] for the sync-apply cold-sweep's
     /// reconnect path: attach many genuinely-unparented children under their parents in
     /// ONE store transaction, then emit one `RelationshipCreated` per created edge —
@@ -892,6 +974,23 @@ impl NodeService {
         node_id: &str,
         position: crate::services::InsertPosition<'_>,
     ) -> Result<(), NodeServiceError> {
+        let (parent_id, actual_order) = self.reorder_child_write(node_id, position).await?;
+        self.emit_reorder_event(node_id, parent_id.as_deref(), actual_order);
+        Ok(())
+    }
+
+    /// The write half of [`Self::reorder_child`], with event emission split
+    /// out (ADR-069 §2/S4). [`Self::reorder_node`] calls this directly and
+    /// defers the emit until after its own version bump, so a consumer is
+    /// never told about a reorder before the write that makes it OCC-safe
+    /// has landed — the same ordering fix [`Self::move_node`] has. A
+    /// standalone call to `reorder_child` still emits immediately via the
+    /// wrapper above, unchanged from its existing public contract.
+    async fn reorder_child_write(
+        &self,
+        node_id: &str,
+        position: crate::services::InsertPosition<'_>,
+    ) -> Result<(Option<String>, f64), NodeServiceError> {
         // Verify node exists
         let _node = self
             .get_node(node_id)
@@ -924,9 +1023,13 @@ impl NodeService {
             .await
             .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
 
-        // Emit RelationshipUpdated event (unified relationship events)
-        // Reordering updates the hierarchy edge's order field
-        if let Some(ref parent_id) = parent_id {
+        Ok((parent_id, actual_order))
+    }
+
+    /// Emit the `RelationshipUpdated` event for a completed reorder.
+    /// Reordering updates the hierarchy edge's order field.
+    fn emit_reorder_event(&self, node_id: &str, parent_id: Option<&str>, actual_order: f64) {
+        if let Some(parent_id) = parent_id {
             self.emit_event(DomainEvent::RelationshipUpdated {
                 relationship: crate::db::events::RelationshipEvent::new(
                     format!("relationship:{}:{}", parent_id, node_id),
@@ -937,8 +1040,6 @@ impl NodeService {
                 ),
             });
         }
-
-        Ok(())
     }
 
     /// Check if potential_descendant is a descendant of node_id
