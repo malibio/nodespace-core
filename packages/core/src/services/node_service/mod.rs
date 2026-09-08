@@ -1993,6 +1993,14 @@ const MAX_TREE_DEPTH: usize = 100;
 /// nodes. Checked before the tree is built so an oversized subtree fails
 /// fast with an actionable error instead of a transport-level decode
 /// failure.
+///
+/// This is a heuristic node-count cap, not a guaranteed byte ceiling: a
+/// per-node `content`/`properties` size is not itself bounded, so a
+/// pathological document with 20,000 unusually large nodes could in
+/// principle still exceed the message-size limit even under this cap. That
+/// residual case is accepted deliberately — typical nodes are short
+/// text/task fragments — rather than adding an unbounded byte-accumulation
+/// pass over every node just to guard against it.
 const MAX_TREE_NODES: usize = 20_000;
 
 /// Recursively build a tree structure from flat node data

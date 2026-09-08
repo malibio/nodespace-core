@@ -103,10 +103,14 @@ impl NodeService {
         // Use shared subtree data fetching
         let (root_node, node_map, adjacency_list) = self.get_subtree_data(parent_id).await?;
 
-        // Checked before building the tree (and before the mention lookup below)
-        // so an oversized subtree fails fast with an actionable error rather than
-        // producing a JSON payload the gRPC transport then rejects at decode time
-        // with an opaque OutOfRange.
+        // Checked before the mention lookup and tree build/serialization below,
+        // so an oversized subtree fails fast without paying for that remaining
+        // work — rather than producing a JSON payload the gRPC transport then
+        // rejects at decode time with an opaque OutOfRange. This does NOT
+        // short-circuit the DB read above: get_subtree_with_relationships is a
+        // single consolidated query that already fetched the whole subtree by
+        // the time node_map.len() is known, since splitting "count first, fetch
+        // second" would need a separate query.
         if node_map.len() > MAX_TREE_NODES {
             return Err(NodeServiceError::tree_too_large(
                 parent_id,
