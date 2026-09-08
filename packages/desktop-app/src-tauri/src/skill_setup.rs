@@ -291,7 +291,37 @@ pub async fn revalidate_agents_installed(
     if agents_installed.is_empty() {
         return agents_installed;
     }
+    revalidate_agents_installed_inner(agents_installed, app).await
+}
 
+/// Same as [`revalidate_agents_installed`], but also takes [`INSTALL_LOCK`]
+/// first. For the standalone status-read call site
+/// (`get_skill_setup_status`), which -- unlike [`install_skill`] and
+/// [`uninstall_skill`] -- has no reason to already hold the lock itself.
+/// Without this, a status read landing concurrently with an in-flight
+/// [`uninstall_skill`] (deleting files, then resetting `setup.json`) could
+/// observe a transient intermediate filesystem state, e.g. a harness's
+/// directory mid-removal.
+///
+/// [`install_skill`] does NOT call this variant: it already holds
+/// `INSTALL_LOCK` for its own critical section before revalidating, and
+/// `tokio::sync::Mutex` is not reentrant -- taking the lock again on the same
+/// task would deadlock.
+pub async fn revalidate_agents_installed_locked(
+    agents_installed: Vec<String>,
+    app: &AppHandle,
+) -> Vec<String> {
+    if agents_installed.is_empty() {
+        return agents_installed;
+    }
+    let _guard = INSTALL_LOCK.lock().await;
+    revalidate_agents_installed_inner(agents_installed, app).await
+}
+
+async fn revalidate_agents_installed_inner(
+    agents_installed: Vec<String>,
+    app: &AppHandle,
+) -> Vec<String> {
     let installer = match resolve_installer(app) {
         Ok(installer) => installer,
         Err(e) => {
@@ -1257,16 +1287,18 @@ mod tests {
 
     /// End-to-end proof of the detected-but-skipped path, using a genuinely
     /// incomplete package rather than synthetic stdout: copies the real
-    /// `packages/skill` resource root into a scratch dir, then deletes
-    /// `SKILL.md` from it (the one file every agent's `shims` list requires)
-    /// before running the real installer binary against it -- so the agent's
+    /// `packages/skill` resource root into a scratch dir, then deletes every
+    /// shim source file (`SKILL.md`, `references/`, `shims/`) from it before
+    /// running the real installer binary against it -- so the agent's
     /// detection dir genuinely exists AND the package genuinely has nothing
     /// to install for it, the same way a truncated/corrupted app bundle
-    /// would. Asserts the resulting `SkillSetupResult.agents_skipped`-shaped
-    /// outcome (via `parse_installer_output`, exactly as `skill_setup.rs`
-    /// parses a real subprocess run) carries claude-code with the expected
-    /// reason -- closing the gap where only `fake_output`'s synthetic stdout
-    /// and a hand-trace covered this exact line format.
+    /// would. Asserts the resulting outcome (the same `Vec<SkippedAgent>`
+    /// shape that flows unchanged into `SkillSetupResult.agents_skipped` at
+    /// this module's `install_skill`, via `parse_installer_output` exactly as
+    /// `skill_setup.rs` parses a real subprocess run) carries claude-code
+    /// with the expected reason -- closing the gap where only
+    /// `fake_output`'s synthetic stdout and a hand-trace covered this exact
+    /// line format.
     #[test]
     fn run_skill_installer_reports_agents_skipped_for_a_genuinely_incomplete_package() {
         let app = tauri::test::mock_app();

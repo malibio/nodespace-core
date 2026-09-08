@@ -228,7 +228,7 @@ pub async fn get_skill_setup_status(
         .map_err(|e| e.to_string())?;
     let cli_on_path = skill_setup::check_cli_on_path();
     let agents_installed =
-        skill_setup::revalidate_agents_installed(state.agents_installed, &app_handle).await;
+        skill_setup::revalidate_agents_installed_locked(state.agents_installed, &app_handle).await;
     Ok(SkillSetupResult {
         success: state.skill_installed,
         agents_installed,
