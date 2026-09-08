@@ -545,7 +545,7 @@ describe("clarifyOk", () => {
     const diff: GraphDiff = {
       ...empty,
       addedNodes: [
-        { id: "n1", type: "planning_cycle", content: "Harbour", properties: {} },
+        { id: "n1", node_type: "planning_cycle", content: "Harbour", properties: {} },
       ],
     };
     const asked = turnAskedForClarification(["create_node"], "Created.", notAction);

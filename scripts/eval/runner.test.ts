@@ -774,7 +774,7 @@ describe("agent-matrix minProperties scoring (issue #1937)", () => {
       "[tool] update_node [content-only] {}\nassistant> ok",
       100,
     );
-    expect(turn.toolCalls[0]).toEqual({
+    expect(turn.toolCalls?.[0]).toEqual({
       name: "update_node",
       isError: false,
       contentOnly: true,

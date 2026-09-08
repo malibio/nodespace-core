@@ -72,8 +72,10 @@
     "rust:lint": "cargo clippy --all-targets -- -D warnings -D clippy::unused-async",
     "rust:quality": "bun run rust:format:check && bun run rust:lint",
     "rust:quality:fix": "bun run rust:format && bun run rust:lint",
-    "quality:fix": "bun run --cwd packages/desktop-app quality:fix && bun run --cwd packages/skill quality:fix && bun run rust:quality:fix",
-    "quality:check": "bun run --cwd packages/desktop-app quality && bun run --cwd packages/skill quality:fix && bun run rust:quality",
+    "quality:scripts:fix": "bunx eslint --fix 'scripts/**/*.ts' && bunx tsc --noEmit -p scripts/tsconfig.json",
+    "quality:scripts:check": "bunx eslint 'scripts/**/*.ts' && bunx tsc --noEmit -p scripts/tsconfig.json",
+    "quality:fix": "bun run quality:scripts:fix && bun run --cwd packages/desktop-app quality:fix && bun run --cwd packages/skill quality:fix && bun run rust:quality:fix",
+    "quality:check": "bun run quality:scripts:check && bun run --cwd packages/desktop-app quality && bun run --cwd packages/skill quality:fix && bun run rust:quality",
     "container:build": "bun run scripts/container.ts build",
     "container:run": "bun run scripts/container.ts run",
     "container:run:setup": "bun run scripts/container.ts run:setup",
@@ -97,10 +99,15 @@
     "audit": "bun scripts/audit-npm.ts"
   },
   "devDependencies": {
+    "@eslint/js": "^9.32.0",
     "@types/jsdom": "^21.1.7",
+    "@typescript-eslint/eslint-plugin": "^8.39.0",
+    "@typescript-eslint/parser": "^8.39.0",
     "bun-types": "latest",
+    "eslint": "^9.32.0",
     "husky": "^9.1.7",
-    "jsdom": "^26.1.0"
+    "jsdom": "^26.1.0",
+    "typescript": "~5.6.2"
   },
   "license": "MIT",
   "engines": {

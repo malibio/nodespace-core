@@ -18,10 +18,10 @@ const RESOLVED_LOGIN = "totally-unrelated-test-account";
 
 function makeStubClient() {
   const getAuthenticatedUser = mock(async () => RESOLVED_LOGIN);
-  const assignIssues = mock(async (issueNumbers: number[]) =>
+  const assignIssues = mock(async (issueNumbers: number[], _assignees: string[]) =>
     issueNumbers.map((issueNumber) => ({ issueNumber, success: true })),
   );
-  const unassignIssues = mock(async (issueNumbers: number[]) =>
+  const unassignIssues = mock(async (issueNumbers: number[], _assignees: string[]) =>
     issueNumbers.map((issueNumber) => ({ issueNumber, success: true })),
   );
 
@@ -104,9 +104,9 @@ describe("GitHubClient project-board membership", () => {
   const NEW_ITEM_ID = "PVTI_lADOnewitem";
 
   function makeClientWithStubbedOctokit(options: { alreadyOnBoard: boolean }) {
-    const graphqlCalls: Array<{ query: string; vars: any }> = [];
+    const graphqlCalls: Array<{ query: string; vars: Record<string, unknown> }> = [];
 
-    const graphql = mock(async (query: string, vars: any) => {
+    const graphql = mock(async (query: string, vars: Record<string, unknown>) => {
       graphqlCalls.push({ query, vars });
       if (query.includes("addProjectV2ItemById")) {
         return { addProjectV2ItemById: { item: { id: NEW_ITEM_ID } } };
@@ -135,7 +135,7 @@ describe("GitHubClient project-board membership", () => {
     const issuesGet = mock(async () => ({ data: { node_id: ISSUE_NODE_ID } }));
 
     const client = new GitHubClient("stub-token");
-    (client as any).octokit = {
+    (client as unknown as { octokit: unknown }).octokit = {
       graphql,
       rest: { issues: { create: issuesCreate, get: issuesGet } },
     };
@@ -158,7 +158,7 @@ describe("GitHubClient project-board membership", () => {
 
   test("a failed board add still returns the created issue", async () => {
     const { client } = makeClientWithStubbedOctokit({ alreadyOnBoard: false });
-    (client as any).octokit.graphql = mock(async () => {
+    (client as unknown as { octokit: { graphql: unknown } }).octokit.graphql = mock(async () => {
       throw new Error("board unreachable");
     });
 

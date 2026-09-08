@@ -69,7 +69,7 @@ export class ReviewManager {
       try {
         const content = readFileSync(this.stateFilePath, "utf-8");
         return JSON.parse(content);
-      } catch (error) {
+      } catch {
         console.warn("Failed to load review state, starting fresh");
       }
     }
@@ -207,7 +207,7 @@ export class ReviewManager {
   async postReviewToGitHub(
     prNumber: number,
     report: ReviewReport,
-    commitSha: string
+    _commitSha: string
   ): Promise<{ id: number; url: string }> {
     console.log(`\n📤 Posting review to PR #${prNumber}...`);
 
@@ -418,7 +418,6 @@ EXAMPLES:
   // Get diff content based on mode
   console.log(`\n🔍 Running ${mode} review...`);
 
-  const diff = await manager.getDiffForReview(mode);
   const files = await manager.getChangedFilesSinceLastReview();
   const commits = await manager.getCommitsSinceLastReview();
 

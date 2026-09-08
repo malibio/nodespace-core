@@ -886,6 +886,9 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
         throw new EnvironmentError(
           `Group seeding failed for: ${group.map((s) => s.id).join(", ")}\n  ` +
             `${e instanceof Error ? e.message : String(e)}`,
+          `Check whether the daemon on ${env.socket} is reachable and the fixture's ` +
+            `seedGroup logic matches the current schema — a failed seed leaves every ` +
+            `scenario in this group referring to nodes that were never created.`,
         );
       }
     }

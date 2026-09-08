@@ -200,7 +200,7 @@ async function main() {
 				if (created % 20 === 0) {
 					console.log(`  ${created} mentions created...`);
 				}
-			} catch (e) {
+			} catch {
 				// Skip duplicates or other errors
 				skipped++;
 			}

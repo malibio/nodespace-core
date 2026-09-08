@@ -8,17 +8,9 @@
 
 import { $ } from "bun";
 import { existsSync } from "fs";
-import { join } from "path";
 
 const CONTAINER_IMAGE = "claude-code-dev:authenticated";
 const CONTAINER_PREFIX = "nodespace-dev";
-
-interface ContainerInfo {
-  id: string;
-  name: string;
-  status: string;
-  image: string;
-}
 
 async function detectContainerRuntime(): Promise<{ runtime: string; available: boolean }> {
   // Check Colima first (preferred for macOS)
@@ -27,7 +19,9 @@ async function detectContainerRuntime(): Promise<{ runtime: string; available: b
     if (colimaResult.exitCode === 0) {
       return { runtime: "Colima", available: true };
     }
-  } catch {}
+  } catch {
+    // Colima not installed or not running — fall through to the next runtime.
+  }
 
   // Check Docker Desktop
   try {
@@ -35,7 +29,9 @@ async function detectContainerRuntime(): Promise<{ runtime: string; available: b
     if (dockerResult.exitCode === 0) {
       return { runtime: "Docker Desktop", available: true };
     }
-  } catch {}
+  } catch {
+    // Docker Desktop not installed or not running — fall through to the next runtime.
+  }
 
   // Check Podman
   try {
@@ -43,7 +39,9 @@ async function detectContainerRuntime(): Promise<{ runtime: string; available: b
     if (podmanResult.exitCode === 0) {
       return { runtime: "Podman", available: true };
     }
-  } catch {}
+  } catch {
+    // Podman not installed or not running — no supported runtime found.
+  }
 
   return { runtime: "none", available: false };
 }
