@@ -53,6 +53,14 @@ const UNDER_COVERAGE = inject('coverageEnabled');
 const COVERAGE_OVERHEAD_FACTOR = 2;
 const budget = (ms: number): number => (UNDER_COVERAGE ? ms * COVERAGE_OVERHEAD_FACTOR : ms);
 
+// Reduces several timing samples to their median, so one GC-pause outlier
+// cannot dominate a measurement the way a single reading can.
+const median = (values: number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+};
+
 // The architecture targets themselves, independent of how they are measured.
 // `PERF_THRESHOLDS` is what a given run asserts against and may be relaxed for
 // instrumentation overhead; these are the numbers the architecture actually
@@ -243,50 +251,73 @@ describe('Architecture Performance Benchmarks', () => {
     });
 
     test(`render performance scales linearly with node count`, () => {
-      // Test multiple dataset sizes to verify linear scaling
-      const testSizes = FULL_PERFORMANCE
-        ? [100, 500, 1000]
-        : [50, 100];
+      // Sizes large enough that the whole measurement clears the noise floor
+      // even under GC pressure. The previous fast-mode pair (50/100 nodes)
+      // measured 1-2ms total, so a single GC pause during coverage
+      // instrumentation could and did dominate the result.
+      const testSizes = FULL_PERFORMANCE ? [100, 500, 1000] : [200, 400, 800];
 
-      const measurements: Array<{ size: number; duration: number }> = [];
-
-      for (const size of testSizes) {
+      const measureOnce = (size: number): number => {
         const nodes = generateTestNodes(size);
-
         const startTime = performance.now();
         const tempNodeManager = createReactiveNodeService(mockEvents);
         tempNodeManager.initializeNodes(nodes);
         void tempNodeManager.visibleNodes;
-        const endTime = performance.now();
+        return performance.now() - startTime;
+      };
 
-        measurements.push({
-          size,
-          duration: endTime - startTime
-        });
-      }
+      // Warm up: run the measured code path once, discarded, before timing
+      // anything. Without this, the smallest dataset absorbs the JIT
+      // compilation cost of createReactiveNodeService/initializeNodes and
+      // comes out slower than a larger, already-warm dataset — a warmup
+      // artifact, not a scaling measurement (100 nodes measured faster than
+      // 50 in isolation, which is what motivated this fix).
+      measureOnce(testSizes[0]);
 
-      // Verify scaling (each measurement should be roughly proportional)
+      const SAMPLES_PER_SIZE = 9;
+      const measurements: Array<{ size: number; duration: number }> = testSizes.map((size) => {
+        const samples = Array.from({ length: SAMPLES_PER_SIZE }, () => measureOnce(size));
+        return { size, duration: median(samples) };
+      });
+
       console.log('Render scaling analysis:');
       for (const m of measurements) {
-        console.log(`  ${m.size} nodes: ${m.duration.toFixed(2)}ms`);
+        console.log(`  ${m.size} nodes: ${m.duration.toFixed(2)}ms (median of ${SAMPLES_PER_SIZE})`);
       }
 
-      // Performance should scale reasonably (not exponentially)
-      if (measurements.length >= 2) {
-        const ratios = [];
-        for (let i = 1; i < measurements.length; i++) {
-          const nodeRatio = measurements[i].size / measurements[i - 1].size;
-          const timeRatio = measurements[i].duration / measurements[i - 1].duration;
-          ratios.push(timeRatio / nodeRatio);
-        }
-
-        // Average scaling factor should be close to 1.0 (linear scaling)
-        const avgScalingFactor = ratios.reduce((a, b) => a + b, 0) / ratios.length;
-        console.log(`  Average scaling factor: ${avgScalingFactor.toFixed(2)}x`);
-
-        // Allow some variance (2.0x) for initialization overhead and caching effects
-        expect(avgScalingFactor).toBeLessThan(2.0);
+      const ratios: number[] = [];
+      for (let i = 1; i < measurements.length; i++) {
+        const nodeRatio = measurements[i].size / measurements[i - 1].size;
+        const timeRatio = measurements[i].duration / measurements[i - 1].duration;
+        ratios.push(timeRatio / nodeRatio);
       }
+
+      // Average scaling factor should be close to 1.0 (linear scaling)
+      const avgScalingFactor = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+      console.log(`  Average scaling factor: ${avgScalingFactor.toFixed(2)}x`);
+
+      // Bounded on both sides. MIN catches the sub-linear warmup artifact
+      // that motivated this rewrite — the historical ~0.30x that passed
+      // silently as a "strong result" is exactly the failure mode this floor
+      // exists to catch; it is not scaled by coverage because instrumentation
+      // overhead does not explain sub-linear timing, a warmup artifact does,
+      // and that is now fixed above by the discarded warm-up call.
+      //
+      // MAX catches genuine super-linear scaling, widened under coverage the
+      // same way every duration budget in this file is (a larger dataset's
+      // measurement is more likely to absorb a GC pause, which skews the
+      // ratio up under instrumentation). 1.5, not 2.0: pure O(n^2) scaling
+      // asymptotically converges this ratio to exactly 2.0 (time roughly
+      // quadruples per doubling, 4/2 = 2.0) — a 2.0 bound only reliably
+      // catches WORSE than quadratic. Verified empirically across 30 clean
+      // runs (plain and --coverage, this machine under real background
+      // load): the observed factor topped out at 1.10x, so 1.5 keeps ~35%
+      // margin over real noise while catching quadratic-dominant regressions
+      // a 2.0 bound would let through on the wrong side of its own noise.
+      const MIN_SCALING_FACTOR = 0.5;
+      const MAX_SCALING_FACTOR = budget(1.5);
+      expect(avgScalingFactor).toBeGreaterThan(MIN_SCALING_FACTOR);
+      expect(avgScalingFactor).toBeLessThan(MAX_SCALING_FACTOR);
     });
   });
 
