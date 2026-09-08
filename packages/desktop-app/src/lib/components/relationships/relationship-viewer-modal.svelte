@@ -654,7 +654,7 @@
           aria-label="Relationships"
         >
           {#if ownedGroups.length > 0}
-            <div class="text-muted-foreground px-1 pb-1 text-[0.6875rem] font-medium uppercase">
+            <div class="text-muted-foreground px-1 pb-1 text-xs font-medium uppercase">
               On this node
             </div>
             <ul class="grid gap-0.5">
@@ -662,10 +662,7 @@
                 <li>
                   <button
                     type="button"
-                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm {group.key ===
-                    selectedKey
-                      ? 'bg-accent text-accent-foreground font-medium'
-                      : 'hover:bg-muted/60'}"
+                    class="rail-item {group.key === selectedKey ? 'rail-item--active' : ''}"
                     aria-current={group.key === selectedKey ? 'true' : undefined}
                     onclick={() => selectGroup(group)}
                   >
@@ -682,7 +679,7 @@
           {#if addableGroups.length > 0}
             <Popover.Root bind:open={addChooserOpen}>
               <Popover.Trigger
-                class="text-muted-foreground hover:bg-muted/60 hover:text-foreground focus-visible:ring-ring mt-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm focus-visible:outline-none focus-visible:ring-1"
+                class="rail-item text-muted-foreground focus-visible:ring-ring mt-1 focus-visible:outline-none focus-visible:ring-1"
               >
                 <PlusIcon class="size-3.5 shrink-0" />
                 <span>Add</span>
@@ -692,7 +689,7 @@
                   {#each addableGroups as group (group.key)}
                     <button
                       type="button"
-                      class="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm"
+                      class="rail-item"
                       onclick={() => chooseAddType(group)}
                     >
                       <span class="min-w-0 flex-1 truncate">{group.label}</span>
@@ -710,7 +707,7 @@
 
           {#if incomingGroups.length > 0}
             <div class="border-border mt-2 border-t border-dashed pt-2">
-              <div class="text-muted-foreground px-1 pb-1 text-[0.6875rem] font-medium uppercase">
+              <div class="text-muted-foreground px-1 pb-1 text-xs font-medium uppercase">
                 Incoming · read-only
               </div>
               <ul class="grid gap-0.5">
@@ -718,10 +715,7 @@
                   <li>
                     <button
                       type="button"
-                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm {group.key ===
-                      selectedKey
-                        ? 'bg-accent text-accent-foreground font-medium'
-                        : 'hover:bg-muted/60'}"
+                      class="rail-item {group.key === selectedKey ? 'rail-item--active' : ''}"
                       aria-current={group.key === selectedKey ? 'true' : undefined}
                       onclick={() => selectGroup(group)}
                     >
@@ -827,7 +821,7 @@
                         {@const kind = field ? edgeInputKind(field) : null}
                         <div class="grid gap-1 sm:grid-cols-[minmax(0,8rem)_minmax(0,1fr)]">
                           <span
-                            class="text-muted-foreground text-[0.6875rem] font-medium uppercase sm:pt-2"
+                            class="text-muted-foreground text-xs font-medium uppercase sm:pt-2"
                           >
                             {formatEdgeFieldLabel(entry.name)}
                           </span>
@@ -899,7 +893,7 @@
                            declare it on the schema. Saying "open the owning node"
                            for the second case would send the user somewhere that
                            cannot help — this node already owns the edge. -->
-                      <p class="text-muted-foreground text-[0.6875rem]">
+                      <p class="text-muted-foreground text-xs">
                         {#if editable}
                           Changes save as you make them.
                         {:else if inbound}
@@ -949,7 +943,7 @@
                 {@const value = addEdgeDraft[field.name]}
                 {@const kind = edgeInputKind(field)}
                 <div class="grid gap-1 sm:grid-cols-[minmax(0,8rem)_minmax(0,1fr)]">
-                  <span class="text-muted-foreground text-[0.6875rem] font-medium uppercase sm:pt-2">
+                  <span class="text-muted-foreground text-xs font-medium uppercase sm:pt-2">
                     {formatEdgeFieldLabel(field.name)}
                   </span>
                   {#if kind === 'enum'}
@@ -1004,7 +998,9 @@
                 >
                   Add
                 </Button>
-                <Button size="sm" variant="ghost" onclick={() => (addStaged = null)}>Back</Button>
+                <Button size="sm" variant="secondary" onclick={() => (addStaged = null)}>
+                  Back
+                </Button>
               </div>
             </div>
           {:else}
@@ -1031,7 +1027,7 @@
                   <li>
                     <button
                       type="button"
-                      class="hover:bg-muted w-full truncate rounded-md px-2 py-1.5 text-left text-sm"
+                      class="rail-item truncate"
                       disabled={busy}
                       onclick={() => pickTarget(group, node.id, nodeLabel(node))}
                     >
@@ -1047,3 +1043,43 @@
     {/if}
   </Dialog.Content>
 </Dialog.Root>
+
+<style>
+  /*
+   * Rail rows follow DESIGN.md's Sidebar convention: `active-nav-background`
+   * when active, `hover-background` on hover. Both are read through
+   * `hsl(var(...))` rather than a Tailwind class because neither token is
+   * mapped in the Tailwind config — the navigation sidebar reads them the same
+   * way, so this matches the one existing consumer rather than inventing a
+   * second access path.
+   *
+   * Deliberately NOT `bg-accent`: in this palette `--accent` is a saturated
+   * teal, and DESIGN.md reserves teal for interactive affordances while the
+   * codebase uses `bg-accent` for TRANSIENT highlight (dropdown focus,
+   * autocomplete selection). A rail selection is persistent structural state,
+   * which is what `active-nav-background` exists for.
+   */
+  .rail-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 0.5rem;
+    border-radius: calc(var(--radius) - 2px);
+    padding: 0.375rem 0.5rem;
+    text-align: left;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  .rail-item:hover {
+    background: hsl(var(--hover-background));
+    color: hsl(var(--hover-foreground));
+  }
+
+  .rail-item--active,
+  .rail-item--active:hover {
+    background: hsl(var(--active-nav-background));
+    color: hsl(var(--foreground));
+    font-weight: 500;
+  }
+</style>
