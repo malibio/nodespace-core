@@ -47,6 +47,11 @@ use nodespace_core::markdown::{NodeTemplate, SeedTier};
 /// inspection and management" section of `packages/skill/SKILL.md`
 /// (`packages/cli/examples/gen_skill_md.rs` renders the same source in prose
 /// form for that, separate, consumer).
+///
+/// `SCHEMA_RULES_NOT_IN_PROMPT` (test-only, defined below this function) is
+/// the explicit, reviewed record of every `SCHEMA_RULES` entry this function
+/// deliberately does not interpolate — see its own doc comment for why a
+/// hand-maintained list, rather than nothing, is the guard.
 fn schema_creation_guidance() -> String {
     format!(
         r#"# Schema Creation & Editing Guidance
@@ -87,6 +92,63 @@ CALL create_schema NOW: your next action is the tool call, not planning text.
         unique_field_flags = UNIQUE_FIELD_FLAGS.imperative,
     )
 }
+
+/// `SCHEMA_RULES` entries deliberately NOT interpolated into
+/// [`schema_creation_guidance`] — the in-app agent prompt — with the reason
+/// recorded inline.
+///
+/// A rule can be registered in [`crate::skill_rules::SCHEMA_RULES`] and
+/// rendered into the shipped `SKILL.md` prose without ever reaching this
+/// function, meaning the in-app local agent never sees it even though the
+/// external shell agent does. That happened once for real (`DELETE_A_SCHEMA`
+/// during review of the PR that added it) before anything caught it.
+///
+/// `schema_rules_are_wired_or_explicitly_excluded` (below) checks every
+/// `SCHEMA_RULES` entry against `schema_creation_guidance()`'s output and
+/// requires each miss to be named here. A hand-maintained exclusion list is
+/// itself a drift source, but the alternative already produced a shipped
+/// defect: an omission from this list is visible in review, where an
+/// omission from `schema_creation_guidance()` alone was not.
+///
+/// All five entries below are field/enum **shape** rules that ADR-064 says
+/// belong on `create_schema`'s own tool-schema descriptions
+/// (`local_agent/tools.rs`) instead of the prompt, to stop the schema and the
+/// prompt from being two independently-maintained copies of the same rule
+/// (the `coreValues`/`core_values` casing contradiction ADR-064 records is
+/// exactly that drift). The model reads the tool schema immediately before
+/// calling `create_schema`, so shape rules belong there rather than in prose
+/// interpolated earlier in the prompt. Four of the five actually have that
+/// tool-schema coverage today; `enum-edge-fields` does not (see its own
+/// comment below) — it is excluded from the prompt per the same doctrine,
+/// but the tool-schema side ADR-064 calls for hasn't been built yet.
+#[cfg(test)]
+const SCHEMA_RULES_NOT_IN_PROMPT: &[&str] = &[
+    // Field-naming shape: stated on create_schema's own field description.
+    "no-name-title-field",
+    // Field-source discipline: not an argument shape, but paired here with
+    // the other four per ADR-064's "argument shape lives on the tool schema"
+    // grouping rather than getting a sixth, one-off list.
+    "fields-from-request-only",
+    // title_template/field pairing: stated on create_schema's title_template
+    // description.
+    "name-placeholder-exception",
+    // Enum value/label casing: stated on create_schema's enum field
+    // description.
+    "enum-format",
+    // Edge field shape (coreValues, closed vocabulary): NOT currently stated
+    // anywhere in create_schema's or update_schema's tool schema — neither
+    // takes an `edgeFields` parameter at all (packages/agent/src/local_agent/tools.rs).
+    // The only enforcement is the post-hoc validator in
+    // packages/core/src/schema/mod.rs, which runs after the model has
+    // already committed to a shape — exactly the "too late" failure mode
+    // ADR-064 exists to prevent for this category of rule. This entry
+    // belongs here per ADR-064's *intent* (argument shape moves off the
+    // prompt and onto the tool schema), but that tool-schema side doesn't
+    // exist yet, so today this rule reaches the in-app agent through
+    // neither channel. A follow-up should add an `edgeFields` property to
+    // both tool schemas and only then can this comment claim real coverage.
+    "enum-edge-fields",
+];
 
 /// Builds the Graph Editing skill's markdown_content, interpolating shared
 /// interaction rules from [`crate::skill_rules`] (find-then-act, ambiguity
@@ -526,6 +588,65 @@ mod tests {
             .get("max_iterations")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize
+    }
+
+    /// Every `SCHEMA_RULES` entry must either reach the in-app agent prompt
+    /// (`schema_creation_guidance()`) or be named in
+    /// [`SCHEMA_RULES_NOT_IN_PROMPT`] with a reason.
+    ///
+    /// This is a distinct guard from
+    /// `packages/cli/tests/skill_md_generation.rs`'s
+    /// `every_schema_rule_reaches_the_skill`, which only checks that
+    /// `rule.prose` reaches the shipped `SKILL.md` — the external shell
+    /// agent's surface. Neither that test nor the `prompt_assembly_snapshot`
+    /// golden can catch a rule that never reaches this function: an unwired
+    /// rule never enters the rendered prompt, so the golden never changes,
+    /// and the SKILL.md test only ever looks at the other renderer's output.
+    /// `DELETE_A_SCHEMA` shipped exactly that gap once for real before this
+    /// test existed — registered, rendered into SKILL.md, and never
+    /// interpolated here, so the in-app local agent (holding both
+    /// `create_schema` and `delete_node`) never saw it.
+    #[test]
+    fn schema_rules_are_wired_or_explicitly_excluded() {
+        let prompt = schema_creation_guidance();
+
+        let mut unaccounted = Vec::new();
+        let mut wrongly_excluded = Vec::new();
+
+        for rule in crate::skill_rules::SCHEMA_RULES {
+            let wired = prompt.contains(rule.imperative);
+            let excluded = SCHEMA_RULES_NOT_IN_PROMPT.contains(&rule.id);
+
+            if wired && excluded {
+                // A rule can't be both interpolated into the prompt and
+                // recorded as prose-only — the exclusion list would be
+                // actively wrong, not merely stale.
+                wrongly_excluded.push(rule.id);
+            } else if !wired && !excluded {
+                unaccounted.push(rule.id);
+            }
+        }
+
+        assert!(
+            wrongly_excluded.is_empty(),
+            "these SCHEMA_RULES entries are BOTH interpolated into \
+             schema_creation_guidance() AND listed in SCHEMA_RULES_NOT_IN_PROMPT: {}. \
+             Remove them from SCHEMA_RULES_NOT_IN_PROMPT — it must only name rules that \
+             are prose-only by design.",
+            wrongly_excluded.join(", ")
+        );
+
+        assert!(
+            unaccounted.is_empty(),
+            "these SCHEMA_RULES entries are neither interpolated into \
+             schema_creation_guidance() (the in-app agent prompt) nor listed in \
+             SCHEMA_RULES_NOT_IN_PROMPT (packages/agent/src/skill_pipeline.rs): {}. \
+             Either wire each one into schema_creation_guidance()'s format string, or — \
+             if the omission is deliberate, e.g. a field/enum shape rule that belongs on \
+             create_schema's own tool schema per ADR-064 — add it to \
+             SCHEMA_RULES_NOT_IN_PROMPT with a comment explaining why.",
+            unaccounted.join(", ")
+        );
     }
 
     #[test]
