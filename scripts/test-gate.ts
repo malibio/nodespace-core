@@ -20,12 +20,23 @@
 
 import { $ } from "bun";
 import { reportBranchBehind } from "./check-branch-behind";
+import { classifyFailure, extractFailureOutput, formatAbortNote } from "./classify-test-failure";
 
 async function run(label: string, cmd: () => Promise<unknown>) {
   console.log(`\n▶ ${label}`);
   try {
     await cmd();
-  } catch {
+  } catch (err) {
+    // A load-induced process abort (e.g. a SIGSEGV under parallel-test
+    // resource contention) and a genuine regression both surface here
+    // identically otherwise — see classify-test-failure.ts. This does not
+    // change the outcome (the push is still blocked either way); it only
+    // tells the person which kind of failure they're looking at, so they
+    // don't burn a multi-minute rerun to find out, or reach for
+    // --no-verify out of frustration with a flake that looked real.
+    if (classifyFailure(extractFailureOutput(err)) === "abort") {
+      console.error(formatAbortNote(label));
+    }
     console.error(`\n✗ ${label} failed — push blocked.`);
     console.error("  Fix the failure, or if this is a WIP Handoff Commit (see CLAUDE.md),");
     console.error("  bypass with: git push --no-verify\n");
