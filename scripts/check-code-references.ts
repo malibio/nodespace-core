@@ -14,7 +14,11 @@
 // core#2357)" on a still-open tracking issue, added at 5 call sites total —
 // paid back down by dropping the bare reference from all 5, since the
 // constraint each one guards was already fully spelled out in the same
-// sentence). Current count: 279.
+// sentence); then +1 from another concurrent PR (a "(core#2451)" citation in
+// a new regression test in
+// packages/desktop-app/src/tests/components/onboarding-wizard-identity.test.ts
+// — paid back down by dropping the bare reference, since the constraint was
+// already fully spelled out in the same comment). Current count: 279.
 // Retroactively triaging all remaining issue-number references is a
 // separate, much larger undertaking — each one needs individual judgment (is
 // this constraint-bearing, provenance-only, or a doc-pointer?) — not
