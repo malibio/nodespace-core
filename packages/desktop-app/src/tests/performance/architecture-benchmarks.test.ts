@@ -1,8 +1,7 @@
 /**
  * Architecture Performance Benchmarks for NodeSpace
  *
- * Validates that the architecture meets performance targets specified in:
- * ../nodespace-docs/architecture/system-overview.md - Section 8: Performance Characteristics
+ * Validates that the architecture meets these performance targets:
  *
  * PERFORMANCE TEST MODES:
  * - Fast mode (default): Smaller datasets (100-500 nodes) for quick feedback during development

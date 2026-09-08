@@ -8,11 +8,11 @@
  * - `bun run test` - Fast in-memory mode (default)
  * - `bun run test:db` - Full database integration mode
  *
- * **For comprehensive documentation**, see:
- * - [Testing Guide](../../../../nodespace-docs/development/testing-guide.md)
- * - Usage patterns, migration guide, and design rationale
- *
- * @see ../nodespace-docs/development/testing-guide.md
+ * Default to in-memory for ordinary logic/behavior tests — it's fast and
+ * sufficient for anything that doesn't depend on real persistence. Reach for
+ * `test:db` only when a test needs to exercise actual SQL (a query, an
+ * index, a migration, a constraint) that the in-memory mock can't stand in
+ * for.
  */
 
 import { createTestDatabase, initializeTestDatabase, cleanupTestDatabase } from './test-database';

@@ -153,8 +153,6 @@ export interface Node {
    * - Version parameter is **mandatory** (not optional) to prevent TOCTOU attacks
    * - Clients cannot bypass version checks (enforced by backend)
    * - Version spoofing is impossible (must match current exactly)
-   *
-   * @see ../nodespace-docs/archived/architecture/data/optimistic-concurrency-control.md - Complete OCC guide
    */
   version: number;
 

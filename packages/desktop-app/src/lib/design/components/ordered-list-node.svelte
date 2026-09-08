@@ -11,8 +11,6 @@
   - Uses icon registry for proper OrderedListIcon rendering
   - Maintains compatibility with BaseNode API
   - Works seamlessly in node tree structure
-
-  Design System Reference: ../nodespace-docs/archived/design-system/components.html → Ordered List Nodes
 -->
 
 <script lang="ts">

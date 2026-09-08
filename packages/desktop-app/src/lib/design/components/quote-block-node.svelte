@@ -12,8 +12,6 @@
   - Uses icon registry for proper QuoteBlockIcon rendering
   - Maintains compatibility with BaseNode API
   - Works seamlessly in node tree structure
-
-  Design System Reference: ../nodespace-docs/archived/design-system/components.html → Quote Block Nodes
 -->
 
 <script lang="ts">
