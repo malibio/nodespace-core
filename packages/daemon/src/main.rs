@@ -484,6 +484,154 @@ mod shutdown_watchdog_tests {
     }
 }
 
+/// Drain every open database's compute, then release the shared GPU context
+/// once. Common to both platforms' tray-mode `serve_grpc`.
+///
+/// Bounded by its own watchdog rather than relying on `main`'s
+/// [`SHUTDOWN_WATCHDOG_TIMEOUT`] alone. `main`'s watchdog only arms once
+/// `tray::run()` has returned -- and on a signal-triggered shutdown
+/// (SIGTERM/SIGINT), `tray::run()` does not return until this exact drain
+/// has already finished (see [`bridge_grpc_completion_to_tray`]'s doc
+/// comment: the bridge that lets the tray loop exit on a signal only fires
+/// once `serve_grpc`'s whole body, including this drain, has already
+/// resolved). So on the tray-Quit path `main`'s watchdog happens to cover
+/// this segment (tray::run() returns immediately on a Quit click, well
+/// before this drain runs) -- but on the signal path it never arms at all,
+/// leaving a stall here completely unprotected even though this is the
+/// exact segment already confirmed to be where the observed hangs occur.
+/// Arming the same bound directly around this drain protects both trigger
+/// paths symmetrically; `main`'s watchdog becomes a secondary safety net
+/// for whatever runs before this (mainly tonic's own drain of in-flight
+/// requests) rather than the only line of defense for the part already
+/// known to hang.
+async fn drain_and_release_gpu(
+    shutdown_manager: Arc<DatabaseManager>,
+    shared_model: watch::Receiver<Option<Arc<EmbeddingService>>>,
+) {
+    let defused = arm_shutdown_watchdog(SHUTDOWN_WATCHDOG_TIMEOUT, || {
+        tracing::error!(
+            timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
+            "shutdown_all/release_shared_gpu did not complete in time -- forcing exit. If you \
+             see this, please report it: something in daemon teardown is hanging (see core#2357)."
+        );
+        std::process::exit(0);
+    });
+
+    let shutdown_started = std::time::Instant::now();
+    shutdown_manager.shutdown_all().await;
+    tracing::info!(elapsed = ?shutdown_started.elapsed(), "shutdown_all finished");
+    let gpu_release_started = std::time::Instant::now();
+    release_shared_gpu(&shared_model).await;
+    tracing::info!(elapsed = ?gpu_release_started.elapsed(), "release_shared_gpu finished");
+
+    defused.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod drain_and_release_gpu_tests {
+    /// Balanced-brace extraction of the source text starting at `decl_start`
+    /// (the byte offset of a `fn`/fn-attribute line), from its own opening
+    /// `{` through the matching closing `}`. Boundary-agnostic to whatever
+    /// text follows in the file -- a name-based end marker (e.g. `.find("fn
+    /// next_thing")`) silently grows to include anything inserted between
+    /// the target and that marker, which is exactly what made a similar test
+    /// elsewhere in this codebase tautological before it was fixed the same
+    /// way this one is written.
+    fn braced_body(source: &str, decl_start: usize) -> &str {
+        let body_start = source[decl_start..]
+            .find('{')
+            .map(|i| decl_start + i)
+            .expect("no opening brace found after decl_start");
+        let mut depth = 0i32;
+        let mut end = body_start;
+        for (i, ch) in source[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = body_start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        &source[decl_start..end]
+    }
+
+    fn function_source(name: &str) -> &'static str {
+        let source = include_str!("main.rs");
+        let sig = format!("fn {name}(");
+        let start = source
+            .find(&sig)
+            .unwrap_or_else(|| panic!("{name} not found in main.rs"));
+        braced_body(source, start)
+    }
+
+    /// The exact gap this function exists to close: a stall in
+    /// `shutdown_all`/`release_shared_gpu` must be bounded regardless of
+    /// which path triggered shutdown -- not just the tray-Quit path that
+    /// `main`'s own outer watchdog happens to cover for unrelated reasons
+    /// (see this function's own doc comment).
+    #[test]
+    fn arms_a_watchdog_before_the_drain_and_defuses_it_after() {
+        let src = function_source("drain_and_release_gpu");
+        let arm_pos = src
+            .find("arm_shutdown_watchdog")
+            .expect("must arm a watchdog");
+        let shutdown_all_pos = src
+            .find("shutdown_manager.shutdown_all()")
+            .expect("must call shutdown_all");
+        let release_pos = src
+            .find("release_shared_gpu(")
+            .expect("must call release_shared_gpu");
+        let defuse_pos = src
+            .find("defused.store(true")
+            .expect("must defuse the watchdog once the drain finishes");
+
+        assert!(
+            arm_pos < shutdown_all_pos,
+            "the watchdog must be armed BEFORE shutdown_all runs, not after -- arming it after \
+             would leave a stall inside shutdown_all itself unprotected"
+        );
+        assert!(
+            shutdown_all_pos < release_pos,
+            "shutdown_all must run before release_shared_gpu (draining database compute before \
+             releasing the GPU context it may still be using)"
+        );
+        assert!(
+            release_pos < defuse_pos,
+            "the watchdog must be defused only AFTER both steps finish -- defusing earlier would \
+             leave a genuine stall in release_shared_gpu unprotected"
+        );
+    }
+
+    /// Both tray-mode `serve_grpc` implementations (Unix and Windows) must
+    /// route their post-serve drain through `drain_and_release_gpu`, not
+    /// call `shutdown_all`/`release_shared_gpu` directly -- a platform that
+    /// regresses back to the old inline pattern silently loses watchdog
+    /// coverage for exactly the segment already confirmed to hang.
+    #[test]
+    fn both_platforms_tray_mode_serve_grpc_use_the_shared_drain_helper() {
+        let source = include_str!("main.rs");
+        for (label, marker) in [
+            ("unix", "#[cfg(unix)]\nasync fn serve_grpc"),
+            ("windows", "#[cfg(windows)]\nasync fn serve_grpc"),
+        ] {
+            let start = source
+                .find(marker)
+                .unwrap_or_else(|| panic!("{label} serve_grpc not found"));
+            let body = braced_body(source, start);
+            assert!(
+                body.contains("drain_and_release_gpu("),
+                "{label} serve_grpc must route its post-serve drain through drain_and_release_gpu, \
+                 not call shutdown_all/release_shared_gpu inline"
+            );
+        }
+    }
+}
+
 fn headless() -> bool {
     matches!(std::env::var("NODESPACED_HEADLESS").as_deref(), Ok("1"))
 }
@@ -627,20 +775,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     .await
     .context("gRPC server terminated with error")?;
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
-    // Drain every open database's compute, then release the shared GPU once.
-    //
-    // Timed (core#2357): live validation found this tail can
-    // intermittently stall for a long time (24s to several minutes observed)
-    // with no further log output, root cause not yet pinned down. These two
-    // timings are the diagnostic a future occurrence needs -- without them,
-    // a hang here is invisible until `main`'s SHUTDOWN_WATCHDOG_TIMEOUT
-    // (15s) forces the process to exit anyway.
-    let shutdown_started = std::time::Instant::now();
-    shutdown_manager.shutdown_all().await;
-    tracing::info!(elapsed = ?shutdown_started.elapsed(), "shutdown_all finished");
-    let gpu_release_started = std::time::Instant::now();
-    release_shared_gpu(&shared_model).await;
-    tracing::info!(elapsed = ?gpu_release_started.elapsed(), "release_shared_gpu finished");
+    drain_and_release_gpu(shutdown_manager, shared_model).await;
     Ok(())
 }
 
@@ -859,14 +994,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     })
     .await
     .context("gRPC server terminated with error")?;
-    // Drain every open database's compute, then release the shared GPU once.
-    // Timed (core#2357): see the matching Unix serve_grpc for why.
-    let shutdown_started = std::time::Instant::now();
-    shutdown_manager.shutdown_all().await;
-    tracing::info!(elapsed = ?shutdown_started.elapsed(), "shutdown_all finished");
-    let gpu_release_started = std::time::Instant::now();
-    release_shared_gpu(&shared_model).await;
-    tracing::info!(elapsed = ?gpu_release_started.elapsed(), "release_shared_gpu finished");
+    drain_and_release_gpu(shutdown_manager, shared_model).await;
     Ok(())
 }
 
