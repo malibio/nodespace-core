@@ -129,12 +129,13 @@ class MembershipStore {
 
 	/**
 	 * Resolve human-readable labels for the given person ids from their synced
-	 * person nodes and cache them for {@link displayFor}. The daemon FLATTENS the
-	 * type namespace when serving a node, so `name`/`email` come back at the top
-	 * level of `properties` (NOT nested under `person`, which is only the cloud's
-	 * on-disk shape). Prefer name, then email, then fall back to the id (also the
-	 * fallback when the node isn't synced or a non-co-member can't see the email,
-	 * which is `can_see_person`-gated server-side). Best-effort and fire-and-forget.
+	 * person nodes and cache them for {@link displayFor}. `node.title` is the
+	 * person schema's title_template-composed display name (server-computed —
+	 * see PersonNodeBehavior::compute_display_name for the same rule's
+	 * embedding-content fallback); prefer it, then email, then fall back to the
+	 * id (also the fallback when the node isn't synced or a non-co-member can't
+	 * see the email, which is `can_see_person`-gated server-side). Best-effort
+	 * and fire-and-forget.
 	 */
 	private async resolvePersonNames(personIds: string[]): Promise<void> {
 		// Re-attempt ids not yet resolved OR still showing the id fallback (a prior
@@ -148,9 +149,8 @@ class MembershipStore {
 				try {
 					const node = await backendAdapter.getNode(id);
 					const props = node?.properties as Record<string, unknown> | undefined;
-					const name = typeof props?.['name'] === 'string' ? (props['name'] as string) : '';
 					const email = typeof props?.['email'] === 'string' ? (props['email'] as string) : '';
-					return [id, name || email || id] as const;
+					return [id, node?.title || email || id] as const;
 				} catch {
 					return [id, id] as const;
 				}

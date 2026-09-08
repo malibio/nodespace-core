@@ -1184,18 +1184,19 @@ impl NodeService {
             .next())
     }
 
-    /// ADR-037 / core#2388: write the local user's name/email into the
-    /// SEEDED PersonNode resolved by [`Self::get_local_person`] — never a
-    /// newly created one. `content` is kept in sync with `name` (matching
-    /// how every other person edit path in the app stores the display name;
-    /// see `PersonSchemaForm.updateField` on the frontend), alongside
-    /// `properties.person.email`. Trims whitespace; an empty value clears
-    /// the corresponding field rather than erroring, so "name only" or
-    /// "email only" are both legal — this mirrors the wizard's skippable,
-    /// non-blocking design (a user may fill in just one field and move on).
+    /// ADR-037 / core#2388: write the local user's first/last name and email
+    /// into the SEEDED PersonNode resolved by [`Self::get_local_person`] —
+    /// never a newly created one. Display identity is composed by the
+    /// person schema's `title_template`, so `content` is left untouched here
+    /// (unlike the pre-#2111 single-`name` version, which synced it). Trims
+    /// whitespace; an empty value clears the corresponding field rather than
+    /// erroring, so any subset of fields may be filled and the rest left
+    /// blank — this mirrors the wizard's skippable, non-blocking design (a
+    /// user may fill in just one field and move on).
     pub async fn set_local_person_identity(
         &self,
-        name: &str,
+        first_name: &str,
+        last_name: &str,
         email: &str,
     ) -> Result<Node, NodeServiceError> {
         let person = self.get_local_person().await?.ok_or_else(|| {
@@ -1204,7 +1205,8 @@ impl NodeService {
             )
         })?;
 
-        let name = name.trim();
+        let first_name = first_name.trim();
+        let last_name = last_name.trim();
         let email = email.trim();
 
         let mut person_props = person
@@ -1214,8 +1216,12 @@ impl NodeService {
             .cloned()
             .unwrap_or_default();
         person_props.insert(
-            "name".to_string(),
-            serde_json::Value::String(name.to_string()),
+            "first_name".to_string(),
+            serde_json::Value::String(first_name.to_string()),
+        );
+        person_props.insert(
+            "last_name".to_string(),
+            serde_json::Value::String(last_name.to_string()),
         );
         person_props.insert(
             "email".to_string(),
@@ -1235,9 +1241,7 @@ impl NodeService {
             }
         }
 
-        let update = NodeUpdate::new()
-            .with_content(name.to_string())
-            .with_properties(properties);
+        let update = NodeUpdate::new().with_properties(properties);
 
         self.update_node(&person.id, person.version, update).await
     }
@@ -5221,7 +5225,7 @@ mod tests {
         let seeded_id = people[0].id.clone();
 
         let updated = service
-            .set_local_person_identity("Alice Example", "alice@example.com")
+            .set_local_person_identity("Alice", "Example", "alice@example.com")
             .await
             .unwrap();
 
@@ -5229,8 +5233,8 @@ mod tests {
             updated.id, seeded_id,
             "the write must land on the seeded node, never create a new person"
         );
-        assert_eq!(updated.content, "Alice Example");
-        assert_eq!(updated.properties["person"]["name"], "Alice Example");
+        assert_eq!(updated.properties["person"]["first_name"], "Alice");
+        assert_eq!(updated.properties["person"]["last_name"], "Example");
         assert_eq!(updated.properties["person"]["email"], "alice@example.com");
 
         // Still exactly one person — no duplicate was created.
@@ -5243,14 +5247,14 @@ mod tests {
         let (service, _temp) = create_test_service().await;
 
         let first = service
-            .set_local_person_identity("  Bob  ", "  bob@example.com  ")
+            .set_local_person_identity("  Bob  ", "  Example  ", "  bob@example.com  ")
             .await
             .unwrap();
         assert_eq!(
-            first.content, "Bob",
-            "leading/trailing whitespace on name must be trimmed"
+            first.properties["person"]["first_name"], "Bob",
+            "leading/trailing whitespace on first_name must be trimmed"
         );
-        assert_eq!(first.properties["person"]["name"], "Bob");
+        assert_eq!(first.properties["person"]["last_name"], "Example");
         assert_eq!(
             first.properties["person"]["email"], "bob@example.com",
             "leading/trailing whitespace on email must be trimmed"
@@ -5260,10 +5264,13 @@ mod tests {
         // the previous value in place — this is a full-value write, not a
         // sparse patch, matching the "email-only clears name" symmetric case
         // the wizard's skippable design relies on.
-        let updated = service.set_local_person_identity("Bob", "").await.unwrap();
+        let updated = service
+            .set_local_person_identity("Bob", "Example", "")
+            .await
+            .unwrap();
 
-        assert_eq!(updated.content, "Bob");
-        assert_eq!(updated.properties["person"]["name"], "Bob");
+        assert_eq!(updated.properties["person"]["first_name"], "Bob");
+        assert_eq!(updated.properties["person"]["last_name"], "Example");
         assert_eq!(updated.properties["person"]["email"], "");
     }
 

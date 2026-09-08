@@ -48,11 +48,12 @@ describe('TableView — protection-level filtering', () => {
       }
     });
 
-    expect(getByText('Name')).toBeTruthy();
+    expect(getByText('First name')).toBeTruthy();
+    expect(getByText('Last name')).toBeTruthy();
     expect(getByText('Email')).toBeTruthy();
     expect(queryByText('Possible duplicate')).toBeNull();
     // The leading '' column is the content/title link column.
-    expect(headerTexts(container)).toEqual(['', 'Name', 'Email']);
+    expect(headerTexts(container)).toEqual(['', 'First name', 'Last name', 'Email']);
   });
 
   it('omits all six of ai-chat’s system fields, transcript included', () => {

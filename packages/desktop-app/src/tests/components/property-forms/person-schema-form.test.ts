@@ -41,11 +41,12 @@ function personNode(overrides: Partial<Node> = {}): Node {
   return {
     id: 'person-1',
     nodeType: 'person',
-    content: 'Alice',
+    content: '',
+    title: 'Alice',
     createdAt: '2026-01-01T00:00:00Z',
     modifiedAt: '2026-01-01T00:00:00Z',
     version: 1,
-    properties: { person: { name: 'Alice', email: '' } },
+    properties: { person: { first_name: 'Alice', last_name: '', email: '' } },
     ...overrides
   } as Node;
 }
@@ -54,11 +55,12 @@ function existingMatch(overrides: Partial<Node> = {}): Node {
   return {
     id: 'person-existing',
     nodeType: 'person',
-    content: 'Bob Existing',
+    content: '',
+    title: 'Bob Existing',
     createdAt: '2026-01-01T00:00:00Z',
     modifiedAt: '2026-01-01T00:00:00Z',
     version: 1,
-    properties: { person: { name: 'Bob Existing', email: 'bob@example.com' } },
+    properties: { person: { first_name: 'Bob', last_name: 'Existing', email: 'bob@example.com' } },
     ...overrides
   } as Node;
 }
@@ -292,7 +294,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -307,7 +309,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -335,7 +337,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -352,7 +354,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -374,7 +376,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -393,7 +395,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -419,7 +421,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
