@@ -24,7 +24,7 @@
  * ```
  */
 
-import type { Node, NodeWithChildren, TaskNode, TaskNodeUpdate } from '$lib/types';
+import type { Node, NodeReference, NodeWithChildren, TaskNode, TaskNodeUpdate } from '$lib/types';
 import type { SchemaNode } from '$lib/types/schema-node';
 import type { RawNodeRelationships } from './relationship-grouping';
 import { createLogger } from '$lib/utils/logger';
@@ -202,11 +202,11 @@ class TauriAdapter implements BackendAdapter {
     );
   }
 
-  async getMentioningContainers(nodeId: string): Promise<string[]> {
+  async getMentioningContainers(nodeId: string): Promise<NodeReference[]> {
     // Tauri 2.x auto-converts snake_case Rust params to camelCase JS params
     return withDiagnosticLogging(
       'getMentioningContainers',
-      () => invoke<string[]>('get_mentioning_roots', { nodeId }),
+      () => invoke<NodeReference[]>('get_mentioning_roots', { nodeId }),
       [nodeId]
     );
   }
@@ -542,9 +542,9 @@ export class HttpAdapter implements BackendAdapter {
     return await this.handleResponse<string[]>(response);
   }
 
-  async getMentioningContainers(nodeId: string): Promise<string[]> {
+  async getMentioningContainers(nodeId: string): Promise<NodeReference[]> {
     const response = await fetch(`${this.baseUrl}${HTTP_ROUTES.getMentioningContainers(nodeId)}`);
-    return await this.handleResponse<string[]>(response);
+    return await this.handleResponse<NodeReference[]>(response);
   }
 
   async queryNodes(query: NodeQuery): Promise<Node[]> {
@@ -730,7 +730,7 @@ class MockAdapter implements BackendAdapter {
   async getIncomingMentions(_nodeId: string): Promise<string[]> {
     return [];
   }
-  async getMentioningContainers(_nodeId: string): Promise<string[]> {
+  async getMentioningContainers(_nodeId: string): Promise<NodeReference[]> {
     return [];
   }
   async queryNodes(_query: NodeQuery): Promise<Node[]> {

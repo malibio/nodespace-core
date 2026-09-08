@@ -17,7 +17,7 @@
 // resolution). Keep every `$lib`-aliased import type-only — TypeScript erases
 // type-only imports before Bun ever needs to resolve the specifier, but a
 // value-level `$lib` import here would break dev-proxy at runtime.
-import type { Node, NodeWithChildren, TaskNode, TaskNodeUpdate } from '$lib/types';
+import type { Node, NodeReference, NodeWithChildren, TaskNode, TaskNodeUpdate } from '$lib/types';
 import type { SchemaNode } from '$lib/types/schema-node';
 // Type-only: relationship-grouping is a pure module (no Tauri/DOM/$lib value
 // imports), so this is erased before the dev-proxy's Bun runtime resolves it.
@@ -106,7 +106,7 @@ export interface BackendAdapter {
   deleteMention(mentioningNodeId: string, mentionedNodeId: string): Promise<void>;
   getOutgoingMentions(nodeId: string): Promise<string[]>;
   getIncomingMentions(nodeId: string): Promise<string[]>;
-  getMentioningContainers(nodeId: string): Promise<string[]>;
+  getMentioningContainers(nodeId: string): Promise<NodeReference[]>;
 
   // Queries
   queryNodes(query: NodeQuery): Promise<Node[]>;

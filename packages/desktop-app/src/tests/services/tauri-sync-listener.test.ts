@@ -939,24 +939,41 @@ describe('TauriSyncListener', () => {
     });
   });
 
-  describe('Unified Relationship Events - Mentions (Issue #811)', () => {
+  describe('Unified Relationship Events - Mentions (backlinks refresh)', () => {
     beforeEach(async () => {
       await initializeTauriSyncListeners();
     });
 
-    it('should handle relationship:created with mentions type (logs only)', async () => {
-      expect(() => {
-        emitTauriEvent('relationship:created', {
-          id: 'relationship:mention:node1:node2',
-          fromId: 'node1',
-          toId: 'node2',
-          relationshipType: 'mentions',
-          properties: {}
-        });
-      }).not.toThrow();
+    it('refreshes mentionedIn for the target node on relationship:created', async () => {
+      const targetNode = createTestNode('node2', 'Target node');
+      sharedNodeStore.setNode(targetNode, { type: 'database', reason: 'test' }, false);
+
+      vi.spyOn(backendAdapterModule.backendAdapter, 'getMentioningContainers').mockResolvedValue([
+        { id: 'node1', title: 'Source node', nodeType: 'text' }
+      ]);
+
+      emitTauriEvent('relationship:created', {
+        id: 'relationship:mention:node1:node2',
+        fromId: 'node1',
+        toId: 'node2',
+        relationshipType: 'mentions',
+        properties: {}
+      });
+
+      await vi.waitFor(() => {
+        expect(backendAdapterModule.backendAdapter.getMentioningContainers).toHaveBeenCalledWith(
+          'node2'
+        );
+      });
+
+      await vi.waitFor(() => {
+        expect(sharedNodeStore.getNode('node2')?.mentionedIn).toEqual([
+          { id: 'node1', title: 'Source node', nodeType: 'text' }
+        ]);
+      });
     });
 
-    it('should handle relationship:updated with mentions type (logs only)', async () => {
+    it('does not throw on relationship:updated with mentions type (no dedicated handling)', async () => {
       expect(() => {
         emitTauriEvent('relationship:updated', {
           id: 'relationship:mention:node1:node2',
@@ -968,15 +985,54 @@ describe('TauriSyncListener', () => {
       }).not.toThrow();
     });
 
-    it('should handle relationship:deleted with mentions type (logs only)', async () => {
-      expect(() => {
-        emitTauriEvent('relationship:deleted', {
-          id: 'relationship:mention:node1:node2',
-          fromId: 'node1',
-          toId: 'node2',
-          relationshipType: 'mentions'
-        });
-      }).not.toThrow();
+    it('refreshes mentionedIn for the target node on relationship:deleted', async () => {
+      const targetNode = createTestNode('node2', 'Target node');
+      sharedNodeStore.setNode(
+        { ...targetNode, mentionedIn: [{ id: 'node1', title: 'Source node', nodeType: 'text' }] },
+        { type: 'database', reason: 'test' },
+        false
+      );
+
+      vi.spyOn(backendAdapterModule.backendAdapter, 'getMentioningContainers').mockResolvedValue([]);
+
+      emitTauriEvent('relationship:deleted', {
+        id: 'relationship:mention:node1:node2',
+        fromId: 'node1',
+        toId: 'node2',
+        relationshipType: 'mentions'
+      });
+
+      await vi.waitFor(() => {
+        expect(backendAdapterModule.backendAdapter.getMentioningContainers).toHaveBeenCalledWith(
+          'node2'
+        );
+      });
+
+      await vi.waitFor(() => {
+        expect(sharedNodeStore.getNode('node2')?.mentionedIn).toEqual([]);
+      });
+    });
+
+    it('does not fetch backlinks for a target node that is not currently cached', async () => {
+      const getMentioningContainersSpy = vi
+        .spyOn(backendAdapterModule.backendAdapter, 'getMentioningContainers')
+        .mockResolvedValue([{ id: 'node1', title: 'Source', nodeType: 'text' }]);
+
+      expect(sharedNodeStore.hasNode('uncached-target')).toBe(false);
+
+      emitTauriEvent('relationship:created', {
+        id: 'relationship:mention:node1:uncached-target',
+        fromId: 'node1',
+        toId: 'uncached-target',
+        relationshipType: 'mentions',
+        properties: {}
+      });
+
+      // Give any (incorrectly-fired) async refresh a tick to resolve, then
+      // confirm it never happened — the node isn't displayed, so nothing to
+      // refresh (see `refreshMentionedIn`'s cache guard).
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(getMentioningContainersSpy).not.toHaveBeenCalled();
     });
   });
 

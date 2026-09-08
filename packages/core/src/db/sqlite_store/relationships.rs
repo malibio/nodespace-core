@@ -28,6 +28,51 @@ pub struct SchemaDeclarationChanges {
     pub deleted: Vec<(String, String, String)>,
 }
 
+/// Resolves incoming `mentions` sources to their containers: a single query,
+/// seeding one row per mentioning source and walking `has_child` upward from
+/// each seed in lockstep (one recursive step per depth level, not per source)
+/// until each branch runs out of parents. `top` keeps only the deepest row per
+/// source (its root), unless the source is itself a task/ai-chat node, which
+/// is its own container. Takes one bound parameter (`?1`, the target node id).
+///
+/// IMPORTANT: the recursive step is written as a correlated subquery
+/// (`(SELECT r.in_node FROM relationship r WHERE r.out_node = w.nid AND
+/// r.relationship_type = 'has_child')`) rather than a `JOIN ... WHERE
+/// r.relationship_type = 'has_child'`. The join form lets SQLite pick
+/// `idx_rel_type` (relationship_type) as the driving index and scan every
+/// `has_child` edge in the database per recursive step; the correlated
+/// subquery form forces the `out_node = ?` lookup to use `idx_rel_out
+/// (out_node, relationship_type)` instead, which is the difference between an
+/// 8ms query and a 393ms query on a database with ~31k `has_child` edges. Do
+/// not "simplify" this back into a join — the query-plan regression test in
+/// this file's `#[cfg(test)] mod tests` binds this exact constant and fails if
+/// the plan ever falls back to `idx_rel_type`.
+const MENTION_CONTAINERS_QUERY: &str = r#"WITH RECURSIVE
+    src(sid) AS (
+        SELECT DISTINCT in_node FROM relationship
+        WHERE out_node = ?1 AND relationship_type = 'mentions'
+    ),
+    walk(sid, nid, d) AS (
+        SELECT sid, sid, 0 FROM src
+        UNION ALL
+        SELECT w.sid,
+               (SELECT r.in_node FROM relationship r
+                WHERE r.out_node = w.nid AND r.relationship_type = 'has_child'),
+               w.d + 1
+        FROM walk w
+        WHERE w.d < 100
+          AND EXISTS (SELECT 1 FROM relationship r
+                      WHERE r.out_node = w.nid AND r.relationship_type = 'has_child')
+    ),
+    top AS (
+        SELECT sid, nid, ROW_NUMBER() OVER (PARTITION BY sid ORDER BY d DESC) AS rn
+        FROM walk
+    )
+SELECT DISTINCT
+    CASE WHEN (SELECT node_type FROM node WHERE id = t.sid) IN ('task', 'ai-chat')
+         THEN t.sid ELSE t.nid END AS container_id
+FROM top t WHERE t.rn = 1"#;
+
 impl SqliteStore {
     pub async fn create_mention(&self, source_id: &str, target_id: &str) -> Result<Option<String>> {
         // Guard spans the existence check and the insert: without it two
@@ -113,52 +158,23 @@ impl SqliteStore {
     ) -> Result<Vec<crate::models::NodeReference>> {
         let start = std::time::Instant::now();
 
-        // Get all nodes that mention this node. Scoped so the cursor drops before
-        // the per-source `get_node_type` / ancestor-walk reads below check out a
-        // second reader connection — see `ReadRows` in `connections.rs`.
-        let mut source_ids: Vec<String> = Vec::new();
+        // Scoped so the cursor (and the reader connection it owns — see
+        // `ReadConn::query`'s doc comment) drops before the batch container
+        // fetch below checks out a second reader connection.
+        let mut container_ids: HashSet<String> = HashSet::new();
         {
-            let mut rows = self.read().await?.query(
-                "SELECT in_node FROM relationship WHERE out_node = ?1 AND relationship_type = 'mentions'",
-                libsql::params![node_id.to_string()],
-            ).await.context("Failed to get mentioning sources")?;
+            let mut rows = self
+                .read()
+                .await?
+                .query(
+                    MENTION_CONTAINERS_QUERY,
+                    libsql::params![node_id.to_string()],
+                )
+                .await
+                .context("Failed to resolve mentioning containers")?;
 
             while let Some(row) = rows.next().await? {
-                source_ids.push(row.get(0)?);
-            }
-        }
-
-        if source_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // For each source, determine its container (task=itself, else walk up to root)
-        let mut container_ids: HashSet<String> = HashSet::new();
-
-        for source_id in &source_ids {
-            let node_type = self.get_node_type(source_id).await?;
-            if node_type.as_deref() == Some("task") {
-                container_ids.insert(source_id.clone());
-            } else {
-                // Walk up to root using recursive CTE
-                let mut root_rows = self.read().await?.query(
-                    r#"WITH RECURSIVE ancestors(node_id, depth) AS (
-                        SELECT in_node, 1 FROM relationship WHERE out_node = ?1 AND relationship_type = 'has_child'
-                        UNION ALL
-                        SELECT r.in_node, a.depth + 1 FROM relationship r
-                        JOIN ancestors a ON r.out_node = a.node_id
-                        WHERE r.relationship_type = 'has_child' AND a.depth < 100
-                    )
-                    SELECT node_id FROM ancestors ORDER BY depth DESC LIMIT 1"#,
-                    libsql::params![source_id.clone()],
-                ).await.context("Failed to get ancestor chain")?;
-
-                if let Some(row) = root_rows.next().await? {
-                    container_ids.insert(row.get(0)?);
-                } else {
-                    // Source is already a root
-                    container_ids.insert(source_id.clone());
-                }
+                container_ids.insert(row.get(0)?);
             }
         }
 
@@ -1714,5 +1730,55 @@ impl SqliteStore {
             .await?
             .ok_or_else(|| anyhow::anyhow!("No count result"))?;
         Ok(row.get::<i64>(0).unwrap_or(0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Query-plan regression check for `get_incoming_mention_containers`'s
+    /// recursive CTE. The recursive step must resolve via the correlated
+    /// subquery form (`out_node = ? AND relationship_type = 'has_child'`
+    /// inside a `SELECT`), which SQLite drives through `idx_rel_out
+    /// (out_node, relationship_type)`. A `JOIN ... WHERE r.relationship_type
+    /// = 'has_child'` form instead lets SQLite pick `idx_rel_type` as the
+    /// driving index and scan every `has_child` edge per recursive step —
+    /// measured as the difference between an 8ms and a 393ms query on a
+    /// database with ~31k `has_child` edges. This test locks the query
+    /// shape actually used by `get_incoming_mention_containers` so that
+    /// regression can't silently return.
+    #[tokio::test]
+    async fn container_resolution_query_does_not_scan_idx_rel_type() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let store = SqliteStore::new(db_path).await?;
+
+        // Binds the exact same query text `get_incoming_mention_containers`
+        // runs (see `MENTION_CONTAINERS_QUERY`'s doc comment) — this can't
+        // silently drift out of sync with the production query.
+        let mut rows = store
+            .read()
+            .await?
+            .query(
+                &format!("EXPLAIN QUERY PLAN {MENTION_CONTAINERS_QUERY}"),
+                libsql::params!["x".to_string()],
+            )
+            .await
+            .context("Failed to run EXPLAIN QUERY PLAN")?;
+
+        let mut detail = String::new();
+        while let Some(row) = rows.next().await? {
+            let d: String = row.get(3)?; // EXPLAIN QUERY PLAN: (id, parent, notused, detail)
+            detail.push_str(&d);
+            detail.push(' ');
+        }
+
+        assert!(
+            !detail.contains("idx_rel_type"),
+            "container-resolution query must not use idx_rel_type (full has_child scan); plan was: {detail}"
+        );
+        Ok(())
     }
 }

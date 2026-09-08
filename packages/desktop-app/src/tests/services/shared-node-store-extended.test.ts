@@ -704,10 +704,10 @@ describe('SharedNodeStore - Extended Coverage', () => {
   });
 
   // ========================================================================
-  // Immediate Backlinks Reactivity
+  // Backlinks: fetched as a separate resource, refreshed via invalidation
   // ========================================================================
 
-  describe('Immediate Backlinks Reactivity (Issue #880)', () => {
+  describe('Backlinks as a separate, independently-refreshed resource', () => {
     const targetNode: Node = {
       id: 'target-node-1',
       nodeType: 'text',
@@ -719,267 +719,107 @@ describe('SharedNodeStore - Extended Coverage', () => {
       mentionedIn: []
     };
 
-    const sourceNode: Node = {
-      id: 'source-node-1',
-      nodeType: 'text',
-      content: 'Source node without mentions',
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      version: 1,
-      properties: {}
-    };
-
-    beforeEach(() => {
-      // Set up both nodes in the store
-      store.setNode(targetNode, databaseSource);
-      store.setNode(sourceNode, databaseSource);
+    afterEach(() => {
+      vi.restoreAllMocks();
     });
 
-    it('should add to mentionedIn when mention is created', () => {
-      // Simulate typing a mention - source node references target node
-      const contentWithMention = `Check out [@Target](nodespace://${targetNode.id})`;
+    describe('refreshMentionedIn', () => {
+      it('refetches and merges mentionedIn onto an already-cached node', async () => {
+        store.setNode(targetNode, databaseSource);
 
-      // The updateMentionedInOnContentChange method is called internally
-      // We test it by calling the private method via type casting
-      const storeAny = store as unknown as {
-        updateMentionedInOnContentChange: (
-          sourceNodeId: string,
-          oldContent: string | undefined,
-          newContent: string | undefined
-        ) => void;
-      };
+        vi.spyOn(backendAdapter, 'getMentioningContainers').mockResolvedValue([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
 
-      storeAny.updateMentionedInOnContentChange(
-        sourceNode.id,
-        sourceNode.content, // old content without mention
-        contentWithMention // new content with mention
-      );
+        await store.refreshMentionedIn(targetNode.id);
 
-      // Check that target node's mentionedIn was updated
-      const updatedTarget = store.getNode(targetNode.id);
-      expect(updatedTarget?.mentionedIn).toBeDefined();
-      expect(updatedTarget?.mentionedIn?.length).toBe(1);
-      expect(updatedTarget?.mentionedIn?.[0].id).toBe(sourceNode.id);
+        const updated = store.getNode(targetNode.id);
+        expect(updated?.mentionedIn).toEqual([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
+      });
+
+      it('notifies subscribers when mentionedIn is refreshed', async () => {
+        store.setNode(targetNode, databaseSource);
+        const callback = vi.fn();
+        const unsubscribe = store.subscribe(targetNode.id, callback);
+
+        vi.spyOn(backendAdapter, 'getMentioningContainers').mockResolvedValue([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
+
+        await store.refreshMentionedIn(targetNode.id);
+
+        expect(callback).toHaveBeenCalled();
+        const lastCallNode = callback.mock.calls[callback.mock.calls.length - 1][0];
+        expect(lastCallNode.mentionedIn).toEqual([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
+
+        unsubscribe();
+      });
+
+      it('is a no-op when the node is not cached (nobody is viewing it)', async () => {
+        const getMentioningContainersSpy = vi
+          .spyOn(backendAdapter, 'getMentioningContainers')
+          .mockResolvedValue([{ id: 'source-node-1', title: 'Source', nodeType: 'text' }]);
+
+        await store.refreshMentionedIn('not-in-store');
+
+        expect(getMentioningContainersSpy).not.toHaveBeenCalled();
+        expect(store.hasNode('not-in-store')).toBe(false);
+      });
+
+      it('replaces the previous mentionedIn list rather than appending', async () => {
+        store.setNode(
+          { ...targetNode, mentionedIn: [{ id: 'stale-source', title: 'Stale', nodeType: 'text' }] },
+          databaseSource
+        );
+
+        vi.spyOn(backendAdapter, 'getMentioningContainers').mockResolvedValue([
+          { id: 'fresh-source', title: 'Fresh', nodeType: 'text' }
+        ]);
+
+        await store.refreshMentionedIn(targetNode.id);
+
+        const updated = store.getNode(targetNode.id);
+        expect(updated?.mentionedIn).toEqual([{ id: 'fresh-source', title: 'Fresh', nodeType: 'text' }]);
+      });
     });
 
-    it('should remove from mentionedIn when mention is removed', () => {
-      // First add a backlink
-      const targetWithBacklink: Node = {
-        ...targetNode,
-        mentionedIn: [{
-          id: sourceNode.id,
-          title: 'Source node',
-          nodeType: 'text'
-        }]
-      };
-      store.setNode(targetWithBacklink, databaseSource);
+    describe('loadChildrenForParent', () => {
+      it('fetches backlinks in parallel with children and attaches them to a freshly-fetched parent', async () => {
+        const parentNode: Node = { ...targetNode, id: 'parent-not-cached' };
+        vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(parentNode);
+        vi.spyOn(backendAdapter, 'getChildren').mockResolvedValue([]);
+        vi.spyOn(backendAdapter, 'getMentioningContainers').mockResolvedValue([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
 
-      const contentWithMention = `Check out [@Target](nodespace://${targetNode.id})`;
-      const contentWithoutMention = 'Removed the mention';
+        await store.loadChildrenForParent('parent-not-cached');
 
-      const storeAny = store as unknown as {
-        updateMentionedInOnContentChange: (
-          sourceNodeId: string,
-          oldContent: string | undefined,
-          newContent: string | undefined
-        ) => void;
-      };
+        expect(store.getNode('parent-not-cached')?.mentionedIn).toEqual([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
+      });
 
-      storeAny.updateMentionedInOnContentChange(
-        sourceNode.id,
-        contentWithMention, // old content with mention
-        contentWithoutMention // new content without mention
-      );
+      it('attaches backlinks to an already-cached parent via merge, not overwrite', async () => {
+        const parentNode: Node = { ...targetNode, id: 'parent-already-cached', content: 'kept' };
+        store.setNode(parentNode, databaseSource);
 
-      // Check that target node's mentionedIn was updated
-      const updatedTarget = store.getNode(targetNode.id);
-      expect(updatedTarget?.mentionedIn?.length).toBe(0);
-    });
+        vi.spyOn(backendAdapter, 'getChildren').mockResolvedValue([]);
+        vi.spyOn(backendAdapter, 'getMentioningContainers').mockResolvedValue([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
 
-    it('should not add duplicate when same container already mentions', () => {
-      // Target already has source in mentionedIn
-      const targetWithBacklink: Node = {
-        ...targetNode,
-        mentionedIn: [{
-          id: sourceNode.id,
-          title: 'Source node',
-          nodeType: 'text'
-        }]
-      };
-      store.setNode(targetWithBacklink, databaseSource);
+        await store.loadChildrenForParent('parent-already-cached');
 
-      // Adding another mention from same source should not duplicate
-      const contentWithMention = `[@Target](nodespace://${targetNode.id})`;
-      const contentWithTwoMentions = `[@Target](nodespace://${targetNode.id}) and again [@Target](nodespace://${targetNode.id})`;
-
-      const storeAny = store as unknown as {
-        updateMentionedInOnContentChange: (
-          sourceNodeId: string,
-          oldContent: string | undefined,
-          newContent: string | undefined
-        ) => void;
-      };
-
-      // First mention
-      storeAny.updateMentionedInOnContentChange(
-        sourceNode.id,
-        '', // start empty
-        contentWithMention
-      );
-
-      // The mentionedIn should still have just 1 entry
-      let updatedTarget = store.getNode(targetNode.id);
-      expect(updatedTarget?.mentionedIn?.length).toBe(1);
-
-      // Adding more mentions from same source shouldn't duplicate
-      storeAny.updateMentionedInOnContentChange(
-        sourceNode.id,
-        contentWithMention,
-        contentWithTwoMentions
-      );
-
-      updatedTarget = store.getNode(targetNode.id);
-      expect(updatedTarget?.mentionedIn?.length).toBe(1);
-    });
-
-    it('should notify subscribers when mentionedIn changes', () => {
-      const callback = vi.fn();
-      const unsubscribe = store.subscribe(targetNode.id, callback);
-
-      const contentWithMention = `[@Target](nodespace://${targetNode.id})`;
-
-      const storeAny = store as unknown as {
-        updateMentionedInOnContentChange: (
-          sourceNodeId: string,
-          oldContent: string | undefined,
-          newContent: string | undefined
-        ) => void;
-      };
-
-      storeAny.updateMentionedInOnContentChange(
-        sourceNode.id,
-        '',
-        contentWithMention
-      );
-
-      // Callback should have been called with updated node
-      expect(callback).toHaveBeenCalled();
-      const lastCallNode = callback.mock.calls[callback.mock.calls.length - 1][0];
-      expect(lastCallNode.mentionedIn?.length).toBe(1);
-
-      unsubscribe();
-    });
-
-    it('should find container for child nodes', () => {
-      // Create a child node under source
-      const childNode: Node = {
-        id: 'child-node-1',
-        nodeType: 'text',
-        content: 'Child content',
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        version: 1,
-        properties: {}
-      };
-      store.setNode(childNode, databaseSource);
-
-      const storeAny = store as unknown as {
-        findContainer: (nodeId: string) => Node | null;
-      };
-
-      // findContainer should return the root parent (sourceNode) for the child
-      const container = storeAny.findContainer(childNode.id);
-
-      // In tests without structureTree, findContainer returns the node itself
-      // This is acceptable behavior - the important thing is it doesn't crash
-      expect(container).toBeDefined();
-    });
-
-    it('should handle task nodes as their own container', () => {
-      const taskNode: Node = {
-        id: 'task-node-1',
-        nodeType: 'task',
-        content: 'A task',
-        createdAt: new Date().toISOString(),
-        modifiedAt: new Date().toISOString(),
-        version: 1,
-        properties: {}
-      };
-      store.setNode(taskNode, databaseSource);
-
-      const storeAny = store as unknown as {
-        findContainer: (nodeId: string) => Node | null;
-      };
-
-      const container = storeAny.findContainer(taskNode.id);
-
-      // Task should be its own container
-      expect(container?.id).toBe(taskNode.id);
-      expect(container?.nodeType).toBe('task');
-    });
-
-    it('should handle content update with no mention changes', () => {
-      const storeAny = store as unknown as {
-        updateMentionedInOnContentChange: (
-          sourceNodeId: string,
-          oldContent: string | undefined,
-          newContent: string | undefined
-        ) => void;
-      };
-
-      // No mentions in either old or new content
-      storeAny.updateMentionedInOnContentChange(
-        sourceNode.id,
-        'old content',
-        'new content'
-      );
-
-      // Target should be unchanged
-      const target = store.getNode(targetNode.id);
-      expect(target?.mentionedIn?.length).toBe(0);
-    });
-
-    it('should handle undefined content gracefully', () => {
-      const storeAny = store as unknown as {
-        updateMentionedInOnContentChange: (
-          sourceNodeId: string,
-          oldContent: string | undefined,
-          newContent: string | undefined
-        ) => void;
-      };
-
-      // Both undefined - should be a no-op
-      expect(() => {
-        storeAny.updateMentionedInOnContentChange(sourceNode.id, undefined, undefined);
-      }).not.toThrow();
-
-      // Same content - should be a no-op
-      expect(() => {
-        storeAny.updateMentionedInOnContentChange(sourceNode.id, 'same', 'same');
-      }).not.toThrow();
-    });
-
-    it('should skip self-mentions (node mentioning itself)', () => {
-      const storeAny = store as unknown as {
-        updateMentionedInOnContentChange: (
-          sourceNodeId: string,
-          oldContent: string | undefined,
-          newContent: string | undefined
-        ) => void;
-      };
-
-      // Source node mentions itself
-      const contentWithSelfMention = `Check out [@Self](nodespace://${sourceNode.id})`;
-
-      storeAny.updateMentionedInOnContentChange(
-        sourceNode.id,
-        '', // old content without mention
-        contentWithSelfMention // new content with self-mention
-      );
-
-      // Source node's mentionedIn should NOT include itself
-      const updatedSource = store.getNode(sourceNode.id);
-      expect(updatedSource?.mentionedIn ?? []).toHaveLength(0);
+        const updated = store.getNode('parent-already-cached');
+        expect(updated?.content).toBe('kept');
+        expect(updated?.mentionedIn).toEqual([
+          { id: 'source-node-1', title: 'Source node', nodeType: 'text' }
+        ]);
+      });
     });
   });
 });
