@@ -268,7 +268,7 @@ nodespace import file ./notes.md
 nodespace import dir ./docs ./adr --auto-collection-routing
 ```
 
-Top-level headings become root nodes, sub-headings become children — for any multi-section document, not only bulk import; `import dir` takes several directories at once. Report nodes created; skip follow-up search calls.
+Top-level headings become root nodes, sub-headings become children — for any multi-section doc, not only bulk import; `import dir` takes several at once. Report nodes created, skip follow-up search calls.
 
 ### Export a document for AI context
 
