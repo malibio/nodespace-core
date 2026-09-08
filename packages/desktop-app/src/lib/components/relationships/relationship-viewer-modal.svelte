@@ -71,6 +71,7 @@
     searchTargets
   } from '$lib/services/relationship-viewer-service';
   import {
+    filterUnlinkedTargets,
     findGroupByKey,
     findRowByKey,
     groupSupportsEdgeEditing,
@@ -146,6 +147,11 @@
   let addQuery = $state('');
   let addResults = $state<Node[]>([]);
   let addSearching = $state(false);
+  // True once a search returned at least one raw match but every one of them
+  // was already linked, so the empty-results message can say that rather than
+  // the ambiguous "No matches." — reserved for a search that genuinely found
+  // nothing.
+  let addAllLinked = $state(false);
   // A picked target awaiting edge-attribute entry (only for groups with declared
   // edge fields); null means the picker is still in search mode.
   let addStaged = $state<{ id: string; label: string } | null>(null);
@@ -459,6 +465,7 @@
     addQuery = '';
     addResults = [];
     addSearching = false;
+    addAllLinked = false;
     addStaged = null;
     addEdgeDraft = {};
     mutationError = null;
@@ -469,6 +476,7 @@
     addQuery = '';
     addResults = [];
     addSearching = false;
+    addAllLinked = false;
     addStaged = null;
     addEdgeDraft = {};
   }
@@ -486,6 +494,7 @@
     const q = addQuery.trim();
     if (!q) {
       addResults = [];
+      addAllLinked = false;
       return;
     }
     addSearching = true;
@@ -498,13 +507,20 @@
       // offer a target that is already linked.
       const current = addGroup;
       if (!current) return;
-      const existing = new Set(current.rows.map((r) => r.id));
-      addResults = results.filter((n) => !existing.has(n.id));
+      const filtered = filterUnlinkedTargets(current, results);
+      addResults = filtered;
+      // Distinguishes "nothing left to add" from "no matches": only true when
+      // the search itself found something, but every match was already
+      // linked — as opposed to a search that genuinely found nothing.
+      addAllLinked = results.length > 0 && filtered.length === 0;
     } catch (error) {
       log.error('Target search failed', error);
       // Only blank the results if this response still belongs to the open
       // picker — a superseded request must not clear what replaced it.
-      if (addGroupKey === requestedKey) addResults = [];
+      if (addGroupKey === requestedKey) {
+        addResults = [];
+        addAllLinked = false;
+      }
     } finally {
       if (addGroupKey === requestedKey) addSearching = false;
     }
@@ -1017,7 +1033,7 @@
               </div>
             {:else if addQuery.trim() && addResults.length === 0}
               <span class="text-muted-foreground text-xs">
-                {group.rows.length > 0
+                {addAllLinked
                   ? 'No matches — every result is already linked.'
                   : 'No matches.'}
               </span>
