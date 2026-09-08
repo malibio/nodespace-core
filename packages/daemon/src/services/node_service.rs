@@ -553,19 +553,15 @@ impl GrpcNodeService for NodeServiceImpl {
             .await
             .map_err(ops_error_to_status)?;
 
-        let mut nodes = Vec::with_capacity(output.nodes.len());
-        for value in output.nodes {
-            let Some(id) = value.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            match this.node_service.get_node(id).await {
-                Ok(Some(node)) => nodes.push(node_to_proto(node)),
-                Ok(None) => tracing::warn!(node_id = %id, "search result missing on re-fetch"),
-                Err(e) => {
-                    tracing::warn!(node_id = %id, error = %e, "failed to re-fetch search result")
-                }
-            }
-        }
+        // Use the nodes search already fetched rather than re-reading each result
+        // from the store by id. The re-fetch was one query and one
+        // reader-connection checkout per result — work that scales with the
+        // result count to reproduce rows search is already holding.
+        let nodes: Vec<NodeData> = output
+            .matched_nodes
+            .into_iter()
+            .map(node_to_proto)
+            .collect();
 
         let count = nodes.len() as i32;
         Ok(Response::new(NodeListResponse {

@@ -673,10 +673,23 @@ impl NodeEmbeddingService {
         // fewer candidates are needed (top roots bubble up). 2x gives enough headroom after
         // root resolution deduplication without the cost of resolving 5x nodes.
         let bm25_limit = (limit as i64) * 2;
-        let (knn_results, bm25_roots) = tokio::join!(
-            self.store
-                .search_embeddings(&query_vector, limit as i64, Some(threshold as f64)),
-            self.store.bm25_search_roots(query, bm25_limit)
+        // Each leg is timed inside the join so the profile attributes cost to KNN vs
+        // BM25 individually — they run concurrently, so the wall-clock `search_time`
+        // below is roughly the max of the two, not their sum.
+        let ((knn_results, knn_time), (bm25_roots, bm25_time)) = tokio::join!(
+            async {
+                let start = std::time::Instant::now();
+                let r = self
+                    .store
+                    .search_embeddings(&query_vector, limit as i64, Some(threshold as f64))
+                    .await;
+                (r, start.elapsed())
+            },
+            async {
+                let start = std::time::Instant::now();
+                let r = self.store.bm25_search_roots(query, bm25_limit).await;
+                (r, start.elapsed())
+            }
         );
         let search_time = search_start.elapsed();
 
@@ -749,6 +762,7 @@ impl NodeEmbeddingService {
         results.extend(tier2);
 
         let mut tier3_count = 0usize;
+        let tier3_start = std::time::Instant::now();
         if knn_count < limit {
             let remaining = limit - knn_count;
             // Sort by node_id for deterministic ordering within Tier 3
@@ -761,10 +775,22 @@ impl NodeEmbeddingService {
             bm25_only_roots.truncate(remaining);
 
             if !bm25_only_roots.is_empty() {
-                // Fetch node data for BM25-only results (no embedding score available)
+                // Fetch node data for BM25-only results in one batched query rather than
+                // a `get_node` per root — each of those checks out (and on a pool miss,
+                // opens) its own reader connection.
                 // Score is set to 0.0 to indicate keyword-only match (ranked last within tier 3)
+                let mut nodes = self
+                    .store
+                    .get_nodes_by_ids(&bm25_only_roots)
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::query_failed(format!(
+                            "BM25-only node fetch failed: {}",
+                            e
+                        ))
+                    })?;
                 for root_id in bm25_only_roots {
-                    if let Ok(Some(node)) = self.store.get_node(&root_id).await {
+                    if let Some(node) = nodes.remove(&root_id) {
                         results.push(EmbeddingSearchResult {
                             node_id: root_id,
                             score: 0.0,
@@ -778,19 +804,27 @@ impl NodeEmbeddingService {
             }
         }
 
+        let tier3_time = tier3_start.elapsed();
         let total_time = total_start.elapsed();
         let intersection_count = results.len() - tier3_count - tier2_count;
 
+        // Per-phase, as structured fields: a slow search must be attributable to a
+        // phase without re-instrumenting. `knn_ms` and `bm25_ms` overlap in wall clock
+        // (they run concurrently), so they do not sum to `search_ms`.
         tracing::debug!(
-            "HYBRID SEARCH PROFILE: total={:?} | embedding={:?} search={:?} | results={} (tier1={} tier2={} tier3={}) query='{}'",
-            total_time,
-            embed_time,
-            search_time,
-            results.len(),
-            intersection_count,
-            tier2_count,
-            tier3_count,
-            &query[..query.len().min(50)]
+            total_ms = total_time.as_millis() as u64,
+            embed_ms = embed_time.as_millis() as u64,
+            search_ms = search_time.as_millis() as u64,
+            knn_ms = knn_time.as_millis() as u64,
+            bm25_ms = bm25_time.as_millis() as u64,
+            tier3_hydrate_ms = tier3_time.as_millis() as u64,
+            limit,
+            results = results.len(),
+            tier1 = intersection_count,
+            tier2 = tier2_count,
+            tier3 = tier3_count,
+            query = &query[..query.len().min(50)],
+            "hybrid search profile"
         );
 
         Ok(results)

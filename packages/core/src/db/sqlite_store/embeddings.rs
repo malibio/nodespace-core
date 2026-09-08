@@ -452,8 +452,10 @@ impl SqliteStore {
         // Group by node_id: track max similarity, chunk counts
         let mut node_scores: HashMap<String, (f64, i64, i64)> = HashMap::new(); // node_id -> (max_sim, matching_chunks, total_chunks)
 
-        // Scoped so the cursor drops before the per-result `get_node` calls below
-        // check out a second reader connection — see `ReadRows` in `connections.rs`.
+        let knn_start = std::time::Instant::now();
+
+        // Scoped so the cursor drops before the batch node fetch below checks out a
+        // second reader connection — see `ReadRows` in `connections.rs`.
         {
             let mut rows = self
                 .read()
@@ -482,34 +484,75 @@ impl SqliteStore {
             }
         }
 
-        // Compute composite scores and filter
-        let mut results: Vec<crate::models::EmbeddingSearchResult> = Vec::new();
-        for (node_id, (max_similarity, matching_chunks, total_chunks)) in node_scores {
-            let density = if total_chunks > 0 {
-                matching_chunks as f64 / total_chunks as f64
-            } else {
-                1.0
-            };
-            let composite_score = max_similarity * (1.0 + 0.3 * density);
+        let knn_time = knn_start.elapsed();
+        let candidates = node_scores.len();
 
-            if composite_score > min_score {
-                let node = self.get_node(&node_id).await?;
-                results.push(crate::models::EmbeddingSearchResult {
-                    node_id: node_id.clone(),
-                    score: composite_score,
+        // Score every candidate first, then rank and truncate to `limit` BEFORE any
+        // node data is fetched. Two things matter here, and both used to be wrong:
+        //
+        //   1. The fetch is a single batched `IN (...)` query rather than one
+        //      `get_node` per surviving candidate. Each `get_node` checks a reader
+        //      connection out of the pool, and on a pool miss that *opens a new
+        //      SQLite connection* — so a serial loop paid a connection checkout
+        //      plus a round trip for every result.
+        //   2. Only the `limit` rows actually returned are hydrated. KNN over-fetches
+        //      by `EMBEDDING_KNN_OVERFETCH`, and callers inflate `limit` further for
+        //      their own post-filters, so hydrating pre-truncation fetched node data
+        //      that was then immediately discarded.
+        let score_start = std::time::Instant::now();
+        let mut scored: Vec<(String, f64, f64, i64)> = node_scores
+            .into_iter()
+            .filter_map(
+                |(node_id, (max_similarity, matching_chunks, total_chunks))| {
+                    let density = if total_chunks > 0 {
+                        matching_chunks as f64 / total_chunks as f64
+                    } else {
+                        1.0
+                    };
+                    let composite_score = max_similarity * (1.0 + 0.3 * density);
+                    (composite_score > min_score).then_some((
+                        node_id,
+                        composite_score,
+                        max_similarity,
+                        matching_chunks,
+                    ))
+                },
+            )
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit as usize);
+        let score_time = score_start.elapsed();
+
+        let hydrate_start = std::time::Instant::now();
+        let ids: Vec<String> = scored.iter().map(|(id, ..)| id.clone()).collect();
+        let mut nodes = self.get_nodes_by_ids(&ids).await?;
+        let hydrate_time = hydrate_start.elapsed();
+
+        let results: Vec<crate::models::EmbeddingSearchResult> = scored
+            .into_iter()
+            .map(|(node_id, score, max_similarity, matching_chunks)| {
+                let node = nodes.remove(&node_id);
+                crate::models::EmbeddingSearchResult {
+                    node_id,
+                    score,
                     max_similarity,
                     matching_chunks,
                     node,
-                });
-            }
-        }
+                }
+            })
+            .collect();
 
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        results.truncate(limit as usize);
+        tracing::debug!(
+            knn_ms = knn_time.as_millis() as u64,
+            score_ms = score_time.as_millis() as u64,
+            hydrate_ms = hydrate_time.as_millis() as u64,
+            k,
+            candidates,
+            returned = results.len(),
+            "search_embeddings phases"
+        );
+
         Ok(results)
     }
 
@@ -561,49 +604,65 @@ impl SqliteStore {
             }
         }
 
-        let mut results = Vec::new();
-        for (node_id, (max_similarity, matching_chunks, total_chunks)) in node_scores {
-            let density = if total_chunks > 0 {
-                matching_chunks as f64 / total_chunks as f64
-            } else {
-                1.0
-            };
-            let composite_score = max_similarity * (1.0 + 0.3 * density);
+        // Rank and truncate before hydrating, then fetch the surviving nodes in one
+        // batched query — see `search_embeddings` for why a per-result `get_node` loop
+        // is the expensive shape.
+        let mut scored: Vec<(String, f64, f64, i64)> = node_scores
+            .into_iter()
+            .filter_map(
+                |(node_id, (max_similarity, matching_chunks, total_chunks))| {
+                    let density = if total_chunks > 0 {
+                        matching_chunks as f64 / total_chunks as f64
+                    } else {
+                        1.0
+                    };
+                    let composite_score = max_similarity * (1.0 + 0.3 * density);
+                    (composite_score > min_score).then_some((
+                        node_id,
+                        composite_score,
+                        max_similarity,
+                        matching_chunks,
+                    ))
+                },
+            )
+            .collect();
 
-            if composite_score > min_score {
-                let node = self.get_node(&node_id).await?;
-                results.push(crate::models::EmbeddingSearchResult {
-                    node_id: node_id.clone(),
-                    score: composite_score,
-                    max_similarity,
-                    matching_chunks,
-                    node,
-                });
-            }
-        }
-
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // The node_type filter runs after the global top-k, so a type that is rare
         // relative to the corpus can be crowded out of the KNN window — surfacing as
-        // fewer than `limit` results. Surface that as a debug signal rather than failing
-        // silently; raising EMBEDDING_KNN_OVERFETCH is the lever if recall suffers.
-        if (results.len() as i64) < limit {
+        // fewer than `limit` results. Counted before truncation, so it reports how many
+        // candidates actually cleared the threshold. Surface that as a debug signal
+        // rather than failing silently; raising EMBEDDING_KNN_OVERFETCH is the lever if
+        // recall suffers.
+        if (scored.len() as i64) < limit {
             tracing::debug!(
                 node_type,
-                returned = results.len(),
+                returned = scored.len(),
                 limit,
                 k,
                 "typed embedding search returned fewer than `limit` results; node_type may be under-represented in the KNN window"
             );
         }
 
-        results.truncate(limit as usize);
-        Ok(results)
+        scored.truncate(limit as usize);
+
+        let ids: Vec<String> = scored.iter().map(|(id, ..)| id.clone()).collect();
+        let mut nodes = self.get_nodes_by_ids(&ids).await?;
+
+        Ok(scored
+            .into_iter()
+            .map(|(node_id, score, max_similarity, matching_chunks)| {
+                let node = nodes.remove(&node_id);
+                crate::models::EmbeddingSearchResult {
+                    node_id,
+                    score,
+                    max_similarity,
+                    matching_chunks,
+                    node,
+                }
+            })
+            .collect())
     }
 
     pub async fn bm25_search_roots(
