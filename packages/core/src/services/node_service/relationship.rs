@@ -612,9 +612,9 @@ impl NodeService {
 
             if !has_explicit_order {
                 // Use atomic add_to_collection for auto-ordered member_of
-                let rel_id = self
+                let created = self
                     .store
-                    .add_to_collection(source_id, target_id)
+                    .add_to_collection(source_id, target_id, &edge_data)
                     .await
                     .map_err(|e| {
                         NodeServiceError::query_failed(format!(
@@ -624,17 +624,14 @@ impl NodeService {
                     })?;
 
                 // Emit event if relationship was created (not idempotent hit)
-                if let Some(id) = rel_id {
-                    // Order is assigned atomically by add_to_collection; use 1.0 as placeholder for event
-                    let order = 1.0_f64;
-
+                if let Some((id, merged_props)) = created {
                     self.emit_event(DomainEvent::RelationshipCreated {
                         relationship: crate::db::events::RelationshipEvent::new(
                             id,
                             source_id,
                             target_id,
                             "member_of",
-                            serde_json::json!({"order": order}),
+                            merged_props,
                         ),
                     });
                 }

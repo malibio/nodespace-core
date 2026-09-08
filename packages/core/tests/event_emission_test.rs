@@ -160,7 +160,10 @@ mod event_emission_tests {
                 nodespace_core::models::Node::new("text".to_string(), format!("m{i}"), json!({}));
             let mid = m.id.clone();
             service.create_node(m).await?;
-            service.store().add_to_collection(&mid, &coll_id).await?;
+            service
+                .store()
+                .add_to_collection(&mid, &coll_id, &json!({}))
+                .await?;
         }
         for i in 0..2 {
             let other =
@@ -223,7 +226,10 @@ mod event_emission_tests {
                 nodespace_core::models::Node::new("text".to_string(), format!("m{i}"), json!({}));
             let mid = m.id.clone();
             service.create_node(m).await?;
-            service.store().add_to_collection(&mid, &coll_id).await?;
+            service
+                .store()
+                .add_to_collection(&mid, &coll_id, &json!({}))
+                .await?;
         }
         // 25 NON-member nodes created AFTER (newer) — would dominate a global limit.
         for i in 0..25 {

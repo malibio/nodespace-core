@@ -67,7 +67,7 @@ mod store_concurrency_tests {
                 let coll = collection_ids[i].clone();
                 async move {
                     store
-                        .add_to_collection(&member, &coll)
+                        .add_to_collection(&member, &coll, &json!({}))
                         .await
                         .map(|_| ())
                         .map_err(|e| format!("add_to_collection: {e}"))

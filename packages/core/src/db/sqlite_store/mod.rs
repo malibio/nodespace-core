@@ -500,17 +500,23 @@ mod tests {
         let sub = Node::new("collection".to_string(), "Sub".to_string(), json!({}));
         let sub_id = sub.id.clone();
         store.create_node(sub, None, None).await?;
-        store.add_to_collection(&sub_id, &parent_id).await?; // Sub member_of Parent
+        store
+            .add_to_collection(&sub_id, &parent_id, &json!({}))
+            .await?; // Sub member_of Parent
 
         let direct = Node::new("text".to_string(), "direct member".to_string(), json!({}));
         let direct_id = direct.id.clone();
         store.create_node(direct, None, None).await?;
-        store.add_to_collection(&direct_id, &parent_id).await?;
+        store
+            .add_to_collection(&direct_id, &parent_id, &json!({}))
+            .await?;
 
         let nested = Node::new("text".to_string(), "nested member".to_string(), json!({}));
         let nested_id = nested.id.clone();
         store.create_node(nested, None, None).await?;
-        store.add_to_collection(&nested_id, &sub_id).await?; // member of the SUB only
+        store
+            .add_to_collection(&nested_id, &sub_id, &json!({}))
+            .await?; // member of the SUB only
 
         let members = store.get_collection_members_recursive(&parent_id).await?;
         assert!(
@@ -587,7 +593,7 @@ mod tests {
         let b_id = b.id.clone();
         store.create_node(b, None, None).await?;
 
-        store.add_to_collection(&b_id, &a_id).await?; // B member_of A
+        store.add_to_collection(&b_id, &a_id, &json!({})).await?; // B member_of A
 
         // Adding A member_of B closes the cycle → error.
         let err = store
@@ -628,11 +634,11 @@ mod tests {
         let b_id = b.id.clone();
         store.create_node(b, None, None).await?;
 
-        store.add_to_collection(&a_id, &b_id).await?; // A member_of B (valid)
+        store.add_to_collection(&a_id, &b_id, &json!({})).await?; // A member_of B (valid)
 
         // B member_of A would close the cycle → rejected at the store chokepoint.
         let err = store
-            .add_to_collection(&b_id, &a_id)
+            .add_to_collection(&b_id, &a_id, &json!({}))
             .await
             .expect_err("a cyclic collection membership must be rejected by add_to_collection");
         assert!(err.to_string().contains("collection_cycle"), "got: {err}");
@@ -641,7 +647,10 @@ mod tests {
         let root = Node::new("text".to_string(), "root".to_string(), json!({}));
         let root_id = root.id.clone();
         store.create_node(root, None, None).await?;
-        assert!(store.add_to_collection(&root_id, &a_id).await?.is_some());
+        assert!(store
+            .add_to_collection(&root_id, &a_id, &json!({}))
+            .await?
+            .is_some());
         Ok(())
     }
 
@@ -662,7 +671,10 @@ mod tests {
         let root_id = root_text.id.clone();
         store.create_node(root_text, None, None).await?;
         assert!(
-            store.add_to_collection(&root_id, &coll_id).await?.is_some(),
+            store
+                .add_to_collection(&root_id, &coll_id, &json!({}))
+                .await?
+                .is_some(),
             "a root content node must be fileable into a collection"
         );
 
@@ -673,7 +685,7 @@ mod tests {
             .create_child_node_atomic(&root_id, "text", "an interior child", json!({}), None)
             .await?;
         let err = store
-            .add_to_collection(&interior.id, &coll_id)
+            .add_to_collection(&interior.id, &coll_id, &json!({}))
             .await
             .expect_err("an interior content node must not be fileable into a collection");
         let msg = err.to_string();
@@ -718,7 +730,7 @@ mod tests {
             .await?;
         assert!(
             store
-                .add_to_collection(&interior_person.id, &coll_id)
+                .add_to_collection(&interior_person.id, &coll_id, &json!({}))
                 .await
                 .is_ok(),
             "person-node member_of edges are exempt from the root-only rule"
@@ -730,7 +742,7 @@ mod tests {
             .await?;
         assert!(
             store
-                .add_to_collection(&interior_coll.id, &coll_id)
+                .add_to_collection(&interior_coll.id, &coll_id, &json!({}))
                 .await
                 .is_ok(),
             "collection nesting is exempt from the root-only rule"
@@ -743,7 +755,9 @@ mod tests {
         let project = Node::new("project".to_string(), "Open Project".to_string(), json!({}));
         let project_id = project.id.clone();
         store.create_node(project, None, None).await?;
-        store.add_to_collection(&project_id, &coll_id).await?; // project root filed
+        store
+            .add_to_collection(&project_id, &coll_id, &json!({}))
+            .await?; // project root filed
         let task = store
             .create_child_node_atomic(&project_id, "task", "a restricted task", json!({}), None)
             .await?;
@@ -884,7 +898,9 @@ mod tests {
         let member = Node::new("text".to_string(), "root member".to_string(), json!({}));
         let member_id = member.id.clone();
         store.create_node(member, None, None).await?;
-        store.add_to_collection(&member_id, &coll_id).await?;
+        store
+            .add_to_collection(&member_id, &coll_id, &json!({}))
+            .await?;
         let err = store
             .move_node(&member_id, Some(&parent_id), None)
             .await
@@ -916,7 +932,9 @@ mod tests {
         let person = Node::new("person".to_string(), "Ada".to_string(), json!({}));
         let person_id = person.id.clone();
         store.create_node(person, None, None).await?;
-        store.add_to_collection(&person_id, &coll_id).await?;
+        store
+            .add_to_collection(&person_id, &coll_id, &json!({}))
+            .await?;
         assert!(
             store
                 .move_node(&person_id, Some(&parent_id), None)
@@ -931,7 +949,9 @@ mod tests {
         let bulk_member = Node::new("text".to_string(), "bulk member".to_string(), json!({}));
         let bulk_member_id = bulk_member.id.clone();
         store.create_node(bulk_member, None, None).await?;
-        store.add_to_collection(&bulk_member_id, &coll_id).await?;
+        store
+            .add_to_collection(&bulk_member_id, &coll_id, &json!({}))
+            .await?;
         let plain2 = Node::new("text".to_string(), "plain2".to_string(), json!({}));
         let plain2_id = plain2.id.clone();
         store.create_node(plain2, None, None).await?;
@@ -1032,7 +1052,7 @@ mod tests {
         let m = Node::new("text".to_string(), "m".to_string(), json!({}));
         let mid = m.id.clone();
         store.create_node(m, None, None).await?;
-        store.add_to_collection(&mid, &cid).await?; // member_of: in_node=member, out_node=collection
+        store.add_to_collection(&mid, &cid, &json!({})).await?; // member_of: in_node=member, out_node=collection
 
         store
             .write()
@@ -2033,7 +2053,7 @@ mod tests {
             .await?;
         assert!(
             store
-                .add_to_collection(&member.id, &collection.id)
+                .add_to_collection(&member.id, &collection.id, &json!({}))
                 .await?
                 .is_some(),
             "fixture must file the member, or the offender path below is never reached"
@@ -2255,7 +2275,9 @@ mod tests {
         // One pre-existing member in `seeded`; `empty` has none.
         let (first_id, first) = new_node("first", "text");
         store.create_node(first, None, None).await?;
-        store.add_to_collection(&first_id, &seeded_id).await?;
+        store
+            .add_to_collection(&first_id, &seeded_id, &json!({}))
+            .await?;
         let seeded_before = member_orders(&store, &seeded_id).await?;
         assert_eq!(seeded_before.len(), 1);
 
