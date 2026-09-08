@@ -23,7 +23,6 @@ import type { EnumValue } from '$lib/types/schema-node';
 
 export type RelationshipDirection = 'out' | 'in';
 export type RelationshipCardinality = 'one' | 'many';
-export type RelationshipLayout = 'table' | 'chips';
 
 /** An edge field definition as declared on the schema relationship. */
 export interface RawEdgeField {
@@ -101,9 +100,10 @@ export interface RelationshipGroupView {
   /** Whether the relationship requires at least one edge (blocks last-edge removal). */
   required: boolean;
   description: string | null;
-  /** `table` when the group carries edge attributes, else `chips`. */
-  layout: RelationshipLayout;
-  /** Ordered edge-attribute column names (empty for the `chips` layout). */
+  /**
+   * Ordered edge-property names: the union of declared `edgeFields` and any keys
+   * found on stored edges. Drives which rows an expanded edge shows.
+   */
   edgeColumns: string[];
   /** Declared edge field definitions, used to render edge-attribute editors. */
   edgeFields: RawEdgeField[];
@@ -152,30 +152,14 @@ export function groupDisplayLabel(group: RawRelationshipGroup): string {
 }
 
 /**
- * A group renders as a table when it carries edge attributes — either the
- * schema declares `edgeFields`, or at least one related edge actually stores
- * properties. Otherwise it is a bare relationship shown as compact chips (a
- * one-to-one relationship with no edge fields must not render as a one-row
- * table).
- */
-export function groupLayout(group: RawRelationshipGroup): RelationshipLayout {
-  const hasDeclaredFields = !!group.edgeFields && group.edgeFields.length > 0;
-  const hasEdgeData = group.related.some(
-    (node) => node.edgeProperties && Object.keys(node.edgeProperties).length > 0
-  );
-  return hasDeclaredFields || hasEdgeData ? 'table' : 'chips';
-}
-
-/**
- * Ordered edge-attribute column names for a group: declared `edgeFields` first
- * (in declared order), then any additional keys present on the stored edge
- * properties that were not declared (so ad-hoc edge data still surfaces).
- * Empty for a `chips` group.
+ * Ordered edge-property names for a group: declared `edgeFields` first (in
+ * declared order), then any additional keys present on stored edge properties
+ * that were never declared, so ad-hoc edge data still surfaces.
+ *
+ * Naturally empty for a group with neither — which is most of them, since most
+ * relationships declare no edge fields at all.
  */
 export function groupEdgeColumns(group: RawRelationshipGroup): string[] {
-  if (groupLayout(group) !== 'table') {
-    return [];
-  }
   const columns: string[] = [];
   const seen = new Set<string>();
   for (const field of group.edgeFields ?? []) {
@@ -206,7 +190,6 @@ function rowLabel(node: RawRelatedNode): string {
 }
 
 function buildGroupView(group: RawRelationshipGroup): RelationshipGroupView {
-  const layout = groupLayout(group);
   const edgeColumns = groupEdgeColumns(group);
   const rows: RelationshipRowView[] = group.related.map((node) => ({
     id: node.id,
@@ -223,7 +206,6 @@ function buildGroupView(group: RawRelationshipGroup): RelationshipGroupView {
     cardinality: group.cardinality,
     required: group.required ?? false,
     description: group.description,
-    layout,
     edgeColumns,
     edgeFields: group.edgeFields ?? [],
     rows,
@@ -265,13 +247,14 @@ export function resolveEdgeEndpoints(
  * by the other node's schema.
  *
  * A group carrying only AD-HOC edge keys — present on stored edges but never
- * declared in `edgeFields` — is deliberately not editable either, even though
- * `groupEdgeColumns` still surfaces those keys as read-only columns so the data
- * stays visible. An undeclared key has no `type`, so an editor could only ever
- * guess a free-text input, and the update path replaces edge properties
- * wholesale — which would coerce a stored number or boolean into a string on
- * the first save. Showing the value and declining to edit it is the honest
- * option; declaring the field on the schema is how it becomes editable.
+ * declared in `edgeFields` — is deliberately not editable either. The values
+ * remain VISIBLE: `groupEdgeColumns` includes those keys, and the panel expands
+ * a row over that union, so an undeclared key still renders read-only. An
+ * undeclared key has no `type`, so an editor could only ever guess a free-text
+ * input, and the update path replaces edge properties wholesale — which would
+ * coerce a stored number or boolean into a string on the first save. Showing the
+ * value and declining to edit it is the honest option; declaring the field on
+ * the schema is how it becomes editable.
  */
 export function groupSupportsEdgeEditing(group: RelationshipGroupView): boolean {
   return group.direction === 'out' && group.edgeFields.length > 0;
