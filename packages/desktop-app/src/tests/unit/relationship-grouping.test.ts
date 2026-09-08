@@ -335,6 +335,33 @@ describe('relationship-grouping: partitionGroups', () => {
     expect(addable).toHaveLength(0);
   });
 
+  it('moves a group out of `populated` when its last edge goes, while the group remains', () => {
+    // The distinction the panel's rail depends on: removing a relationship's last
+    // edge does NOT remove the group — it stays declared, which is what makes it
+    // addable again. So a selection held as a group key goes on RESOLVING against
+    // the view after the rail entry it pointed at is gone. A rail that re-selects
+    // by "does this key still resolve?" therefore strands an empty detail pane;
+    // it has to ask whether the key is still in `populated`.
+    const before = viewOf([
+      makeGroup({ relationshipName: 'supersedes', count: 1, related: [relatedNode('adr-2')] }),
+      makeGroup({ relationshipName: 'decided_by', count: 1, related: [relatedNode('adr-3')] })
+    ]);
+    const key = before[0].key;
+    expect(partitionGroups(before).populated.map((g) => g.key)).toContain(key);
+
+    const after = viewOf([
+      makeGroup({ relationshipName: 'supersedes', count: 0, related: [] }),
+      makeGroup({ relationshipName: 'decided_by', count: 1, related: [relatedNode('adr-3')] })
+    ]);
+    const { populated, addable } = partitionGroups(after);
+
+    // Still resolvable by key...
+    expect(findGroupByKey(after, key)).not.toBeNull();
+    // ...but no longer a rail entry, and now offered for re-adding instead.
+    expect(populated.map((g) => g.key)).not.toContain(key);
+    expect(addable.map((g) => g.key)).toContain(key);
+  });
+
   it('folds empty OUTBOUND groups into the add chooser rather than sections', () => {
     const groups = viewOf([
       makeGroup({ relationshipName: 'supersedes' }),
