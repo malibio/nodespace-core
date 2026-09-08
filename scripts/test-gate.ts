@@ -33,6 +33,22 @@ async function run(label: string, cmd: () => Promise<unknown>) {
   }
 }
 
+// Staleness check, not a fix for the merge race — see check-branch-behind.ts.
+// Runs first so the warning (if any) is visible before the several-minutes
+// pyramid below, and never blocks: checkBranchBehind() already swallows every
+// documented failure mode (fetch/rev-list) into a "skipped" result without
+// throwing. This try/catch is defensive-only, guarding the one call in this
+// entry sequence that isn't wrapped by run() — a future edit to
+// check-branch-behind.ts that adds a throwing statement outside those
+// try/catches must not be able to crash the push it's supposed to only warn
+// about.
+try {
+  await reportBranchBehind();
+} catch (err) {
+  console.warn("\n⚠ origin/main staleness check crashed unexpectedly — skipping it.");
+  console.warn(`  ${err instanceof Error ? err.message : String(err)}\n`);
+}
+
 // Stages two of the things nodespace-app's build.rs (tauri_build::build())
 // insists on: the `nodespace-skill-installer` externalBin and the
 // `resources/skill/**/*` glob, neither of which has a tracked file to fall
@@ -42,12 +58,6 @@ async function run(label: string, cmd: () => Promise<unknown>) {
 // its `src/` unit tests. The remaining sidecars aren't staged here — a cold
 // build of them takes minutes, too much for every push — so `rust:test` checks
 // every required path up front and names the command that produces each.
-// Staleness check, not a fix for the merge race — see check-branch-behind.ts.
-// Runs first so the warning (if any) is visible before the several-minutes
-// pyramid below, and never blocks: a fetch/rev-list failure degrades to a
-// skipped check rather than a failed push.
-await reportBranchBehind();
-
 await run("bun run build:skill (stage bundled skill installer resource)", () => $`bun run build:skill`);
 await run("bun run test:all (frontend + skill + Rust)", () => $`bun run test:all`);
 await run("cargo build --bin nodespaced (e2e harness daemon)", () => $`cargo build --bin nodespaced`);

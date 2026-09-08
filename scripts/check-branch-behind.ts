@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Warns when the current branch is behind origin/main (nodespace-core#2447).
+// Warns when the current branch is behind origin/main.
 //
 // `scripts/test-gate.ts` (ADR-047) runs the full test pyramid against the
 // working tree as it stands — it has no awareness of origin/main. A green
@@ -31,8 +31,15 @@ async function defaultFetch(): Promise<void> {
   await $`git fetch origin main --quiet`.quiet();
 }
 
-async function defaultCountBehind(): Promise<number> {
-  const out = (await $`git rev-list --count HEAD..origin/main`.text()).trim();
+// Separated from defaultCountBehind so the parsing/validation is directly
+// unit-testable without mocking the `$` shell.
+export function parseRevListCount(rawOutput: string): number {
+  const out = rawOutput.trim();
+  if (out === "") {
+    // Number("") is 0, not NaN — an empty (but zero-exit) result would
+    // otherwise silently read as "up-to-date" rather than "skipped".
+    throw new Error("empty rev-list output");
+  }
   const n = Number(out);
   if (!Number.isFinite(n)) {
     throw new Error(`unparseable rev-list output: ${JSON.stringify(out)}`);
@@ -40,8 +47,31 @@ async function defaultCountBehind(): Promise<number> {
   return n;
 }
 
+async function defaultCountBehind(): Promise<number> {
+  const out = await $`git rev-list --count HEAD..origin/main`.text();
+  return parseRevListCount(out);
+}
+
+// Bun's ShellError carries the real diagnostic text on `.stderr`/`.stdout`
+// (Buffers, populated alongside the live stream to the terminal — `.quiet()`
+// only suppresses the echo, not the buffering) — `.message` alone is a
+// generic "Failed with exit code N" that never says why. Prefer stderr
+// (where git's own error text lands), then stdout, then fall back to
+// `.message` for a non-shell error.
 function errorMessage(err: unknown): string {
+  if (err && typeof err === "object") {
+    const stderr = readBufferField(err, "stderr");
+    if (stderr) return stderr;
+    const stdout = readBufferField(err, "stdout");
+    if (stdout) return stdout;
+  }
   return err instanceof Error ? err.message : String(err);
+}
+
+function readBufferField(obj: object, key: "stdout" | "stderr"): string {
+  if (!(key in obj)) return "";
+  const value = (obj as Record<string, unknown>)[key];
+  return Buffer.isBuffer(value) ? value.toString().trim() : "";
 }
 
 export interface CheckBranchBehindDeps {
