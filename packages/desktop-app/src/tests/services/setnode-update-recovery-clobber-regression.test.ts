@@ -46,11 +46,10 @@ function textNode(id: string, content: string, mentions: string[], version = 1):
 // `setNode()` only persists an already-persisted node for a non-'viewer'
 // source (`shouldPersist = source.type !== 'viewer' || isNewNode`) — viewer
 // edits to an existing node go through the debounced `updateNode()` path
-// instead. Use 'mcp-server' so the write both persists immediately (mode is
-// 'immediate' for any non-new-node write) and bypasses the 'database'-only
-// skip-while-editing guard entirely (irrelevant here since neither write
-// focuses the node, but keeps the source semantically distinct from a
-// server-authoritative broadcast).
+// instead. Any non-'viewer', non-'database' source works here; 'mcp-server'
+// was picked arbitrarily (it also incidentally sidesteps the 'database'-only
+// skip-while-editing guard, though that guard would no-op anyway since
+// neither write focuses the node).
 const writeSource = { type: 'mcp-server' as const, serverId: 'test-server' };
 
 describe("SharedNodeStore.setNode() update-recovery success handler — field clobber regression", () => {

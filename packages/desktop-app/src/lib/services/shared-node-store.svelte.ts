@@ -2199,6 +2199,20 @@ export class SharedNodeStore {
                   // write's OCC check regardless of which fields it touches.
                   // `properties` is compared shallowly since callers replace
                   // it wholesale rather than patching individual keys.
+                  //
+                  // Comparing against a SINGLE `currentNode` snapshot (rather
+                  // than tracking per-field ownership) is safe only because
+                  // `PersistenceCoordinator` (`persist()`, this closure's
+                  // caller) executes at most one real RPC per node at a
+                  // time — a second `setNode()` write for the same node
+                  // while this one is executing collapses into a single
+                  // queued slot and only starts once this write's response
+                  // has already been applied here. A future change that let
+                  // two RPCs for the same node race concurrently would need
+                  // this comparison to also account for that, not just
+                  // compare against the one snapshot (mirrors the identical
+                  // invariant `updateNode()`'s own success handler relies
+                  // on).
                   const latestNode = this.nodes.get(nodeId);
                   if (latestNode && updatedFromBackend) {
                     const localContent = latestNode.content;
