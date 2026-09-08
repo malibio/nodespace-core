@@ -1980,6 +1980,29 @@ pub struct CompletenessResult {
 /// corrupt relationship set) is refused.
 const MAX_TREE_DEPTH: usize = 100;
 
+/// Node-count ceiling for a single `GetChildrenTree` response.
+///
+/// `MAX_TREE_DEPTH` bounds recursion but not breadth: a subtree with tens of
+/// thousands of siblings under one parent is still within depth 1 while its
+/// serialized JSON can exceed the gRPC message-size limit
+/// (`nodespace_proto::MAX_MESSAGE_SIZE_BYTES`, currently 64 MiB). At an
+/// average of a few hundred bytes to a few KB per node once content and
+/// properties are included, 20,000 nodes stays comfortably under that
+/// ceiling for realistic documents while covering every legitimate one seen
+/// in practice — the largest real subtrees are in the low thousands of
+/// nodes. Checked before the tree is built so an oversized subtree fails
+/// fast with an actionable error instead of a transport-level decode
+/// failure.
+///
+/// This is a heuristic node-count cap, not a guaranteed byte ceiling: a
+/// per-node `content`/`properties` size is not itself bounded, so a
+/// pathological document with 20,000 unusually large nodes could in
+/// principle still exceed the message-size limit even under this cap. That
+/// residual case is accepted deliberately — typical nodes are short
+/// text/task fragments — rather than adding an unbounded byte-accumulation
+/// pass over every node just to guard against it.
+const MAX_TREE_NODES: usize = 20_000;
+
 /// Recursively build a tree structure from flat node data
 ///
 /// Converts flat node map and adjacency list into nested JSON tree.

@@ -103,6 +103,22 @@ impl NodeService {
         // Use shared subtree data fetching
         let (root_node, node_map, adjacency_list) = self.get_subtree_data(parent_id).await?;
 
+        // Checked before the mention lookup and tree build/serialization below,
+        // so an oversized subtree fails fast without paying for that remaining
+        // work — rather than producing a JSON payload the gRPC transport then
+        // rejects at decode time with an opaque OutOfRange. This does NOT
+        // short-circuit the DB read above: get_subtree_with_relationships is a
+        // single consolidated query that already fetched the whole subtree by
+        // the time node_map.len() is known, since splitting "count first, fetch
+        // second" would need a separate query.
+        if node_map.len() > MAX_TREE_NODES {
+            return Err(NodeServiceError::tree_too_large(
+                parent_id,
+                node_map.len(),
+                MAX_TREE_NODES,
+            ));
+        }
+
         match root_node {
             Some(mut root) => {
                 // Fetch incoming mention containers for the root node
@@ -996,4 +1012,145 @@ pub fn flatten_subtree_content(
         }
     }
     parts
+}
+
+#[cfg(test)]
+mod tree_size_limit_tests {
+    use super::*;
+    use crate::db::SqliteStore;
+    use anyhow::{Context, Result};
+    use chrono::Utc;
+    use tempfile::TempDir;
+
+    /// Creates 30k+ nodes; slow. Skipped unless explicitly opted in, matching
+    /// the convention in `db::sqlite_store::nodes::large_subtree_chunking_tests`.
+    /// Run explicitly with:
+    /// `RUN_LONG_TESTS=1 cargo test --lib -p nodespace-core tree_size_limit_tests -- --nocapture`.
+    macro_rules! require_long_tests {
+        () => {
+            if std::env::var("RUN_LONG_TESTS").is_err() {
+                eprintln!(
+                    "skipping {}: set RUN_LONG_TESTS=1 to run (creates 20k+ nodes; slow)",
+                    module_path!()
+                );
+                return Ok(());
+            }
+        };
+    }
+
+    async fn create_test_service() -> Result<(NodeService, TempDir)> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let mut store = Arc::new(SqliteStore::new(db_path).await?);
+        let service = NodeService::new(&mut store).await?;
+        Ok((service, temp_dir))
+    }
+
+    /// Directly bulk-inserts `count` flat `has_child` descendants of `root_id`,
+    /// bypassing the service's node-by-node create path — too slow at this
+    /// scale for a test. Mirrors
+    /// `db::sqlite_store::nodes::large_subtree_chunking_tests::seed_flat_subtree`.
+    async fn seed_flat_children(store: &SqliteStore, root_id: &str, count: usize) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let child_ids: Vec<String> = (0..count)
+            .map(|_| uuid::Uuid::new_v4().to_string())
+            .collect();
+        const SEED_CHUNK: usize = 5_000;
+
+        for chunk in child_ids.chunks(SEED_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len())
+                .map(|i| format!("(?{i}, 'text', '', '{{}}', NULL, 'active', 1, '{now}', '{now}')"))
+                .collect();
+            let sql = format!(
+                "INSERT INTO node (id, node_type, content, properties, title, lifecycle_status, version, created_at, modified_at) VALUES {}",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            store
+                .write()
+                .await
+                .execute(&sql, params)
+                .await
+                .context("Failed to seed child node chunk")?;
+        }
+
+        for chunk in child_ids.chunks(SEED_CHUNK) {
+            let placeholders: Vec<String> = (1..=chunk.len())
+                .map(|i| format!("('{root_id}', ?{i}, 'has_child', '{{}}', 1, '{now}', '{now}')"))
+                .collect();
+            let sql = format!(
+                "INSERT INTO relationship (in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES {}",
+                placeholders.join(", ")
+            );
+            let params: Vec<libsql::Value> = chunk
+                .iter()
+                .map(|id| libsql::Value::Text(id.clone()))
+                .collect();
+            store
+                .write()
+                .await
+                .execute(&sql, params)
+                .await
+                .context("Failed to seed relationship chunk")?;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_children_tree_rejects_subtree_over_the_node_limit() -> Result<()> {
+        require_long_tests!();
+        let (service, _tmp) = create_test_service().await?;
+        let root_id = service
+            .create_node(crate::models::Node::new(
+                "text".to_string(),
+                "root".to_string(),
+                serde_json::json!({}),
+            ))
+            .await?;
+        seed_flat_children(&service.store, &root_id, MAX_TREE_NODES + 1).await?;
+
+        let err = service
+            .get_children_tree(&root_id)
+            .await
+            .expect_err("a subtree over MAX_TREE_NODES must be refused, not serialized");
+
+        assert!(
+            matches!(err, NodeServiceError::TreeTooLarge { .. }),
+            "expected TreeTooLarge, got: {err:?}"
+        );
+        assert!(
+            err.to_string().contains(&MAX_TREE_NODES.to_string()),
+            "error should name the configured limit: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_children_tree_accepts_subtree_at_exactly_the_node_limit() -> Result<()> {
+        require_long_tests!();
+        let (service, _tmp) = create_test_service().await?;
+        let root_id = service
+            .create_node(crate::models::Node::new(
+                "text".to_string(),
+                "root".to_string(),
+                serde_json::json!({}),
+            ))
+            .await?;
+        // Root counts toward the total, so seed MAX_TREE_NODES - 1 children.
+        seed_flat_children(&service.store, &root_id, MAX_TREE_NODES - 1).await?;
+
+        let tree = service
+            .get_children_tree(&root_id)
+            .await
+            .expect("a subtree at exactly MAX_TREE_NODES must be served, not refused");
+        assert_eq!(
+            tree["children"].as_array().map(|c| c.len()),
+            Some(MAX_TREE_NODES - 1)
+        );
+        Ok(())
+    }
 }
