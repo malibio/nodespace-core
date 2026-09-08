@@ -169,17 +169,16 @@ impl GrpcEmbeddingsService for EmbeddingsServiceImpl {
         // A result without its node is a hydration bug rather than a missing row,
         // so it surfaces as an error instead of being dropped from the response —
         // the previous `if let Ok(Some(..))` silently shortened the result set.
-        let nodes = search_results
-            .into_iter()
-            .map(|result| {
-                result.node.map(node_to_proto).ok_or_else(|| {
-                    Status::internal(format!(
-                        "search result {} arrived without its node",
-                        result.node_id
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>, Status>>()?;
+        let mut nodes = Vec::with_capacity(search_results.len());
+        for result in search_results {
+            let Some(node) = result.node else {
+                return Err(Status::internal(format!(
+                    "search result {} arrived without its node",
+                    result.node_id
+                )));
+            };
+            nodes.push(node_to_proto(node));
+        }
 
         Ok(Response::new(SearchSemanticResponse { nodes }))
     }
