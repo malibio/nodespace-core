@@ -192,6 +192,7 @@ fn messages_at_failing_step() -> Vec<ChatMessage> {
                 "node_type": "equipment_checkout_record"
             })
             .to_string(),
+            provider_extra: None,
         }],
     ));
 

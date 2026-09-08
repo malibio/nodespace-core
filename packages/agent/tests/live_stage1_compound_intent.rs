@@ -294,7 +294,7 @@ async fn run_stage1(engine: &Arc<dyn ChatInferenceEngine>, user_message: &str) -
             Box::new(move |chunk| {
                 let mut g = sink.lock().expect("sink not poisoned");
                 match chunk {
-                    StreamingChunk::ToolCallStart { id, name } => {
+                    StreamingChunk::ToolCallStart { id, name, .. } => {
                         g.push((id, name, String::new()));
                     }
                     StreamingChunk::ToolCallArgs { id, args_json } => {

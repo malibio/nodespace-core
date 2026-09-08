@@ -116,6 +116,18 @@ pub struct ToolCallRaw {
     pub function_name: String,
     /// Raw JSON arguments string as the model emitted them.
     pub arguments_json: String,
+    /// Provider-opaque data that must be echoed back verbatim when this call
+    /// is replayed as history, merged into the outgoing tool-call object as
+    /// sibling fields alongside `id`/`type`/`function`.
+    ///
+    /// Some providers attach state to a tool call that isn't part of the
+    /// OpenAI schema but is required to validate a later replay of it — e.g.
+    /// Gemini 3's `thought_signature`, which its OpenAI-compat endpoint
+    /// rejects a subsequent turn for omitting. `None` when the provider
+    /// attached nothing (the common case, and the only case for local
+    /// llama.cpp-served models).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_extra: Option<serde_json::Value>,
 }
 
 /// A single message in a chat conversation, used for both agent history and inference input.
@@ -311,6 +323,7 @@ mod tests {
             id: "tc1".into(),
             function_name: "search".into(),
             arguments_json: "{}".into(),
+            provider_extra: None,
         };
         let a = ChatMessage::assistant_with_tool_calls("", vec![tc]);
         assert_eq!(a.role, Role::Assistant);

@@ -2010,7 +2010,7 @@ fn streaming_chunk_to_proto(chunk: StreamingChunk) -> AgentChunk {
             token_text: Some(text),
             ..Default::default()
         },
-        StreamingChunk::ToolCallStart { id, name } => AgentChunk {
+        StreamingChunk::ToolCallStart { id, name, .. } => AgentChunk {
             chunk_type: "tool_call_start".to_string(),
             tool_call_id: Some(id),
             tool_name: Some(name),

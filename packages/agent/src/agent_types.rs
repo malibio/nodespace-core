@@ -137,6 +137,11 @@ pub enum StreamingChunk {
         id: String,
         /// Name of the tool being invoked.
         name: String,
+        /// Provider-opaque data (e.g. Gemini 3's `thought_signature`) that
+        /// must be echoed back verbatim if this call is replayed as history.
+        /// `None` for providers/models that attach nothing extra.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_extra: Option<serde_json::Value>,
     },
     /// Incremental arguments JSON for an in-progress tool call.
     ToolCallArgs {
