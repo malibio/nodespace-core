@@ -17,6 +17,7 @@
     importOptionsFromModal,
     type ImportModalState,
   } from '$lib/services/import-options';
+  import { collectionsData } from '$lib/stores/collections.svelte';
   import { createLogger } from '$lib/utils/logger';
 
   const log = createLogger('ImportOptionsModal');
@@ -107,6 +108,11 @@
       // the returned result as completion (covers the empty-folder case too).
       teardownProgress();
       if (phase === 'importing') phase = 'done';
+      // Refresh the collections sidebar so newly-routed/mirrored collections
+      // (and their members) show up without a manual reload. Runs on any
+      // completion (including a partial failure with result.failed > 0), not
+      // only full success — files that did import still routed to collections.
+      await collectionsData.loadCollections();
     } catch (error) {
       log.error('Folder import failed', error);
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -118,8 +124,8 @@
   const optionRows = [
     {
       id: 'exclude-agent-files',
-      label: 'Exclude CLAUDE.md / AGENTS.md',
-      help: 'Skip agent instruction files (matched by name, case-insensitive, in every sub-folder).',
+      label: 'Exclude agent/design files (CLAUDE.md, AGENTS.md, DESIGN.md)',
+      help: 'Skip agent instruction and design files (matched by name, case-insensitive, in every sub-folder).',
       key: 'excludeAgentFiles',
     },
     {

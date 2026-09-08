@@ -28,8 +28,8 @@ export interface ImportOptions {
   /** Base directory for relative path calculation in auto-routing */
   base_directory?: string;
   /**
-   * Opt-out: include CLAUDE.md / AGENTS.md agent files.
-   * Defaults false on the Rust side = agent files filtered OUT.
+   * Opt-out: include CLAUDE.md / AGENTS.md / DESIGN.md agent/design files.
+   * Defaults false on the Rust side = agent/design files filtered OUT.
    * snake_case must match the Rust serde field exactly (no rename).
    */
   include_agent_files?: boolean;

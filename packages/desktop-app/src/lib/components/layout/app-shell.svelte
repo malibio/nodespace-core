@@ -5,7 +5,6 @@
   import NavigationSidebar from './navigation-sidebar.svelte';
   import PaneManager from './pane-manager.svelte';
   import StatusBar from '$lib/components/status-bar.svelte';
-  import { importService } from '$lib/services/import-service';
   import { statusBar } from '$lib/stores/status-bar.svelte';
   import ThemeProvider from '$lib/design/components/theme-provider.svelte';
   import NodeServiceContext from '$lib/contexts/node-service-context.svelte';
@@ -22,6 +21,8 @@
   import { schemasData } from '$lib/stores/schemas.svelte';
   import { loadPersistedState, addTab, navigationStore, setActiveTab } from '$lib/stores/navigation.svelte';
   import { settingsStore } from '$lib/stores/settings.svelte';
+  import { importModalStore } from '$lib/stores/import-modal.svelte';
+  import ImportOptionsModal from '$lib/components/settings/import-options-modal.svelte';
   import { TabPersistenceService } from '$lib/services/tab-persistence-service';
   import { createLogger } from '$lib/utils/logger';
   import {
@@ -364,77 +365,11 @@
       // Set up polling interval
       staleNodesInterval = setInterval(updateStaleNodesCount, 5000);
 
-      // Listen for import folder menu event
-      unlistenImport = listen('menu-import-folder', async () => {
-        const folderPath = await importService.selectFolder();
-        if (!folderPath) return;
-
-        // Track if we've received step 9 (complete) to know when to unsubscribe
-        let unsubProgress: (() => void) | null = null;
-        let importFailed = false;
-
-        // Subscribe to progress updates - show step-based messages
-        // NOTE: Phase 2 runs in background after importDirectory returns,
-        // so we must NOT unsubscribe until step 9 is received
-        unsubProgress = importService.onProgress(async (event) => {
-          // Calculate overall progress based on step (9 steps total)
-          // Steps 2-3 have per-file progress, others are single events
-          let progress: number;
-          if (event.step <= 3 && event.total > 0) {
-            // For reading/parsing steps, use item progress within the step
-            const stepBase = (event.step - 1) * (100 / 9);
-            const stepProgress = (event.current / event.total) * (100 / 9);
-            progress = Math.round(stepBase + stepProgress);
-          } else {
-            // For other steps, progress is just the step percentage
-            progress = Math.round((event.step / 9) * 100);
-          }
-
-          // Step 9 (complete) shows success message and triggers cleanup
-          if (event.step === 9) {
-            if (!importFailed) {
-              statusBar.success(event.message);
-            }
-            // Unsubscribe now that import is fully complete
-            if (unsubProgress) {
-              unsubProgress();
-              unsubProgress = null;
-            }
-            // Refresh collections after background import completes
-            await collectionsData.loadCollections();
-          } else {
-            statusBar.show(event.message, progress);
-          }
-        });
-
-        try {
-          const result = await importService.importDirectory(folderPath, {
-            auto_collection_routing: true,
-            exclude_patterns: ['design-system', 'node_modules', '.git'],
-          });
-
-          // Phase 1 complete - Phase 2 runs in background
-          // If there were parsing failures, show error (but don't override progress)
-          if (result.failed > 0) {
-            importFailed = true;
-            statusBar.error(`Import complete: ${result.successful} imported, ${result.failed} failed`);
-            // Unsubscribe since we're showing error
-            if (unsubProgress) {
-              unsubProgress();
-              unsubProgress = null;
-            }
-          }
-          // NOTE: Do NOT unsubProgress here - Phase 2 still running
-        } catch (error) {
-          log.error('Import failed', error);
-          importFailed = true;
-          statusBar.error('Import failed: ' + (error instanceof Error ? error.message : String(error)));
-          // Unsubscribe on error
-          if (unsubProgress) {
-            unsubProgress();
-            unsubProgress = null;
-          }
-        }
+      // Listen for import folder menu event — opens the same import options
+      // modal Settings uses, rather than importing directly. Both entry
+      // points now share one flow (see ImportOptionsModal).
+      unlistenImport = listen('menu-import-folder', () => {
+        importModalStore.show();
       });
 
       // Listen for settings menu — open or focus settings tab
@@ -772,6 +707,10 @@
 
     <!-- Non-blocking "a newer NodeSpace release is available" banner. -->
     <UpdateBanner />
+
+    <!-- Shared import-folder modal (File → Import → "Import Folder..." menu
+         and Settings → Import Sources both open this single instance). -->
+    <ImportOptionsModal bind:open={importModalStore.open} />
 
     <!-- Pro chrome modal slot (re-login prompt when the daemon's session can't be
          refreshed, T18) — registry-driven. -->

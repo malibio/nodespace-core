@@ -68,8 +68,8 @@ pub struct ImportDirArgs {
     #[arg(long = "exclude")]
     pub exclude_patterns: Vec<String>,
 
-    /// Include CLAUDE.md / AGENTS.md files (default: excluded). Matched by
-    /// basename, case-insensitive, at any depth.
+    /// Include CLAUDE.md / AGENTS.md / DESIGN.md files (default: excluded).
+    /// Matched by basename, case-insensitive, at any depth.
     #[arg(long)]
     pub include_agent_files: bool,
 
@@ -500,7 +500,7 @@ fn directory_failure_result(directory: &str, error: &str) -> FileImportResult {
 /// so the fields are true when the corresponding filter is applied.
 #[derive(Clone, Copy)]
 struct WalkFilters {
-    /// Skip files whose basename is CLAUDE.md / AGENTS.md (case-insensitive).
+    /// Skip files whose basename is CLAUDE.md / AGENTS.md / DESIGN.md (case-insensitive).
     exclude_agent_files: bool,
     /// Skip any entry (file or dir) whose name starts with '.'.
     skip_hidden: bool,
@@ -513,7 +513,11 @@ struct WalkFilters {
 fn is_agent_file(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.eq_ignore_ascii_case("CLAUDE.md") || n.eq_ignore_ascii_case("AGENTS.md"))
+        .map(|n| {
+            n.eq_ignore_ascii_case("CLAUDE.md")
+                || n.eq_ignore_ascii_case("AGENTS.md")
+                || n.eq_ignore_ascii_case("DESIGN.md")
+        })
         .unwrap_or(false)
 }
 
@@ -601,9 +605,11 @@ mod tests {
     ///   top.md            top-level plain doc
     ///   CLAUDE.md         top-level agent file (mixed case)
     ///   AGENTS.md         top-level agent file
+    ///   DESIGN.md         top-level design file
     ///   .dotfile.md       top-level hidden dotfile doc
     ///   sub/nested.md     doc in a sub-folder
     ///   sub/claude.md     nested, lowercase agent file (case-insensitive + depth)
+    ///   sub/design.md     nested, lowercase design file (case-insensitive + depth)
     ///   .hidden/hidden.md doc under a hidden directory
     fn fixture() -> TempDir {
         let tmp = TempDir::new().unwrap();
@@ -611,12 +617,14 @@ mod tests {
         fs::write(root.join("top.md"), "# top").unwrap();
         fs::write(root.join("CLAUDE.md"), "# claude").unwrap();
         fs::write(root.join("AGENTS.md"), "# agents").unwrap();
+        fs::write(root.join("DESIGN.md"), "# design").unwrap();
         fs::write(root.join(".dotfile.md"), "# dotfile").unwrap();
 
         let sub = root.join("sub");
         fs::create_dir(&sub).unwrap();
         fs::write(sub.join("nested.md"), "# nested").unwrap();
         fs::write(sub.join("claude.md"), "# nested claude").unwrap();
+        fs::write(sub.join("design.md"), "# nested design").unwrap();
 
         let hidden = root.join(".hidden");
         fs::create_dir(&hidden).unwrap();
@@ -666,11 +674,19 @@ mod tests {
             exclude_agent_files: false,
             ..ALL_ON
         };
-        // Top-level CLAUDE.md/AGENTS.md and the nested lowercase claude.md return;
-        // hidden entries stay excluded.
+        // Top-level CLAUDE.md/AGENTS.md/DESIGN.md and the nested lowercase
+        // claude.md/design.md return; hidden entries stay excluded.
         assert_eq!(
             names(&tmp, &[], filters),
-            set(&["top.md", "nested.md", "CLAUDE.md", "AGENTS.md", "claude.md"])
+            set(&[
+                "top.md",
+                "nested.md",
+                "CLAUDE.md",
+                "AGENTS.md",
+                "DESIGN.md",
+                "claude.md",
+                "design.md",
+            ])
         );
     }
 
@@ -715,7 +731,9 @@ mod tests {
                 "nested.md",
                 "CLAUDE.md",
                 "AGENTS.md",
+                "DESIGN.md",
                 "claude.md",
+                "design.md",
                 ".dotfile.md",
                 "hidden.md",
             ])
@@ -742,7 +760,13 @@ mod tests {
         };
         assert_eq!(
             names(&tmp, &[], filters),
-            set(&["top.md", "CLAUDE.md", "AGENTS.md", ".dotfile.md"])
+            set(&[
+                "top.md",
+                "CLAUDE.md",
+                "AGENTS.md",
+                "DESIGN.md",
+                ".dotfile.md"
+            ])
         );
     }
 }

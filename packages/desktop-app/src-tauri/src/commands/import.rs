@@ -63,7 +63,7 @@ impl ImportOptions {
 /// Derived from `ImportOptions` opt-out fields at the collection call site.
 #[derive(Clone, Copy)]
 struct WalkFilters {
-    /// Skip files whose basename is CLAUDE.md / AGENTS.md (case-insensitive).
+    /// Skip files whose basename is CLAUDE.md / AGENTS.md / DESIGN.md (case-insensitive).
     exclude_agent_files: bool,
     /// Skip any entry (file or dir) whose name starts with '.'.
     skip_hidden: bool,
@@ -86,7 +86,11 @@ impl WalkFilters {
 fn is_agent_file(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.eq_ignore_ascii_case("CLAUDE.md") || n.eq_ignore_ascii_case("AGENTS.md"))
+        .map(|n| {
+            n.eq_ignore_ascii_case("CLAUDE.md")
+                || n.eq_ignore_ascii_case("AGENTS.md")
+                || n.eq_ignore_ascii_case("DESIGN.md")
+        })
         .unwrap_or(false)
 }
 
@@ -494,9 +498,11 @@ mod tests {
     ///   top.md            top-level plain doc
     ///   CLAUDE.md         top-level agent file (mixed case)
     ///   AGENTS.md         top-level agent file
+    ///   DESIGN.md         top-level design file
     ///   .dotfile.md       top-level hidden dotfile doc
     ///   sub/nested.md     doc in a sub-folder
     ///   sub/claude.md     nested, lowercase agent file (case-insensitive + depth)
+    ///   sub/design.md     nested, lowercase design file (case-insensitive + depth)
     ///   .hidden/hidden.md doc under a hidden directory
     fn fixture() -> tempfile::TempDir {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -504,12 +510,14 @@ mod tests {
         std::fs::write(root.join("top.md"), "# top").unwrap();
         std::fs::write(root.join("CLAUDE.md"), "# claude").unwrap();
         std::fs::write(root.join("AGENTS.md"), "# agents").unwrap();
+        std::fs::write(root.join("DESIGN.md"), "# design").unwrap();
         std::fs::write(root.join(".dotfile.md"), "# dotfile").unwrap();
 
         let sub = root.join("sub");
         std::fs::create_dir(&sub).unwrap();
         std::fs::write(sub.join("nested.md"), "# nested").unwrap();
         std::fs::write(sub.join("claude.md"), "# nested claude").unwrap();
+        std::fs::write(sub.join("design.md"), "# nested design").unwrap();
 
         let hidden = root.join(".hidden");
         std::fs::create_dir(&hidden).unwrap();
@@ -557,7 +565,15 @@ mod tests {
         };
         assert_eq!(
             names(&tmp, &[], filters),
-            set(&["top.md", "nested.md", "CLAUDE.md", "AGENTS.md", "claude.md"])
+            set(&[
+                "top.md",
+                "nested.md",
+                "CLAUDE.md",
+                "AGENTS.md",
+                "DESIGN.md",
+                "claude.md",
+                "design.md",
+            ])
         );
     }
 
@@ -599,7 +615,9 @@ mod tests {
                 "nested.md",
                 "CLAUDE.md",
                 "AGENTS.md",
+                "DESIGN.md",
                 "claude.md",
+                "design.md",
                 ".dotfile.md",
                 "hidden.md",
             ])
