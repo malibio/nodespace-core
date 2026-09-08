@@ -706,8 +706,10 @@ pub fn destructive_tools_withheld(candidates: &[SkillCandidate]) -> Vec<&str> {
 /// corpus exercises a genuine two-different-tools compound turn, so there is
 /// no measured guidance on how to tell it apart mechanically from the
 /// distractor case using only candidate score and tool whitelist — doing so
-/// well likely needs the same per-skill retrieval scoping a separate,
-/// still-open improvement tracks.
+/// well likely needs per-skill retrieval scoping (ranking each tool's
+/// candidates independently rather than by one global score) to distinguish
+/// "beaten by a better candidate for the same tool" from "a different tool
+/// entirely, just scored lower."
 /// Pinned by `declare_write_tool_fields_does_not_declare_a_non_top_scoring_but_uncontested_tool`
 /// below so this is a documented, deliberate trade-off rather than a latent
 /// surprise.
@@ -1305,7 +1307,9 @@ mod tests {
     /// — only gets one of them declared. Falls back to the bare-object
     /// shape for the other, not a regression relative to production before
     /// per-candidate field declaration existed, just an unrealized
-    /// improvement flagged as separate, still-open follow-up work.
+    /// improvement: per-skill retrieval scoping (see the doc comment above)
+    /// would let both tools' top candidates get their fields declared
+    /// independently instead of only the turn's single global top scorer.
     #[test]
     fn declare_write_tool_fields_does_not_declare_a_non_top_scoring_but_uncontested_tool() {
         let mut top = candidate("Relationship Management", 0.9, &["create_relationship"]);
