@@ -104,21 +104,11 @@ impl NodeService {
         let (root_node, node_map, adjacency_list) = self.get_subtree_data(parent_id).await?;
 
         match root_node {
-            Some(mut root) => {
-                // Fetch incoming mention containers for the root node
-                // Uses optimized batch query with recursive ancestor traversal
-                // Returns NodeReference with {id, title, nodeType} for each container
-                root.mentioned_in = self
-                    .store
-                    .get_incoming_mention_containers(&root.id)
-                    .await
-                    .map_err(|e| {
-                        NodeServiceError::query_failed(format!(
-                            "Failed to fetch incoming mention containers: {}",
-                            e
-                        ))
-                    })?;
-
+            Some(root) => {
+                // Backlinks (mentioned_in) are fetched as their own resource via
+                // `get_mentioning_containers`, in parallel with children — not
+                // carried on the tree payload. See ADR/mentions-and-references.md.
+                //
                 // Recursively build tree structure. Errors on cyclic or
                 // pathologically deep hierarchy data rather than recursing
                 // until the stack aborts the process.

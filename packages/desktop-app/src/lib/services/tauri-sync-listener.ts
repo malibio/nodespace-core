@@ -494,18 +494,16 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         log.debug(`Member added: ${rel.fromId} to collection ${toId}`);
         scheduleCollectionRefresh(toId);
       } else if (rel.relationshipType === 'mentions') {
-        // Mention relationship created - target node's mentionedIn needs refresh
-        // mentionedIn is populated by get_children_tree, so we need to refetch the tree
-        // for the target node to get updated backlinks. Strip prefix for log clarity;
-        // when this branch grows to call `loadChildrenTree`, normalization will be
-        // necessary for the lookup to hit the bare-id keyspace.
-        log.debug(
-          `Mention created: ${stripNodePrefix(rel.fromId)} mentions ${stripNodePrefix(rel.toId)}`
-        );
-
-        // If the target node is currently displayed, its mentionedIn will update
-        // on next tree load. For immediate reactivity, the user can refresh the view.
-        // Future enhancement: call loadChildrenTree for toId if it's the current view.
+        // Mention relationship created - target node's backlinks need refresh.
+        // mentionedIn is a separate, independently-fetched resource (not carried
+        // on the node payload) — refetch it directly for the target rather than
+        // reloading the whole tree. Bare-id keyspace, same rationale as
+        // `member_of` above.
+        const toId = stripNodePrefix(rel.toId);
+        log.debug(`Mention created: ${stripNodePrefix(rel.fromId)} mentions ${toId}`);
+        sharedNodeStore
+          .refreshMentionedIn(toId)
+          .catch((err) => log.error(`Failed to refresh mentionedIn for ${toId}:`, err));
       } else {
         // Custom relationship type
         log.debug(`Custom relationship created: ${rel.relationshipType}`);
@@ -546,13 +544,13 @@ export async function initializeTauriSyncListeners(): Promise<void> {
         log.debug(`Member removed from collection: ${id}`);
         scheduleCollectionRefresh(bareToId);
       } else if (relationshipType === 'mentions') {
-        // Mention relationship deleted - target node's mentionedIn needs refresh.
-        log.debug(
-          `Mention deleted: ${id} (${stripNodePrefix(fromId)} -> ${stripNodePrefix(toId)})`
-        );
-
-        // Same as creation: mentionedIn updates on next tree load for toId.
-        // Future enhancement: call loadChildrenTree for toId if it's the current view.
+        // Mention relationship deleted - target node's backlinks need refresh.
+        // Same rationale as the created branch above.
+        const bareToId = stripNodePrefix(toId);
+        log.debug(`Mention deleted: ${id} (${stripNodePrefix(fromId)} -> ${bareToId})`);
+        sharedNodeStore
+          .refreshMentionedIn(bareToId)
+          .catch((err) => log.error(`Failed to refresh mentionedIn for ${bareToId}:`, err));
       }
     });
 

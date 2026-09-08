@@ -695,16 +695,20 @@ describe('Backend Adapter - HttpAdapter (Browser Dev Mode)', () => {
       const { getBackendAdapter } = await import('$lib/services/backend-adapter');
       const adapter = getBackendAdapter();
 
+      const references = [
+        { id: 'root-1', title: 'Root One', nodeType: 'text' },
+        { id: 'root-2', title: 'Root Two', nodeType: 'task' }
+      ];
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: new Headers(),
-        json: async () => ['root-1', 'root-2']
+        json: async () => references
       });
 
       const result = await adapter.getMentioningContainers('node-1');
 
-      expect(result).toEqual(['root-1', 'root-2']);
+      expect(result).toEqual(references);
       expect(mockFetch).toHaveBeenCalledWith(
         'http://localhost:3001/api/nodes/node-1/mentions/roots'
       );
@@ -1406,11 +1410,15 @@ describe('Backend Adapter - TauriAdapter (Tauri IPC Mode)', () => {
       const { getBackendAdapter } = await import('$lib/services/backend-adapter');
       const adapter = getBackendAdapter();
 
-      mockInvoke.mockResolvedValueOnce(['root-1', 'root-2']);
+      const references = [
+        { id: 'root-1', title: 'Root One', nodeType: 'text' },
+        { id: 'root-2', title: 'Root Two', nodeType: 'task' }
+      ];
+      mockInvoke.mockResolvedValueOnce(references);
 
       const result = await adapter.getMentioningContainers('node-1');
 
-      expect(result).toEqual(['root-1', 'root-2']);
+      expect(result).toEqual(references);
       expect(mockInvoke).toHaveBeenCalledWith('get_mentioning_roots', { nodeId: 'node-1' });
     });
   });

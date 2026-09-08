@@ -381,7 +381,7 @@ impl NodeService {
     /// Returns `NodeReference` with {id, title, nodeType} for efficient UI display.
     ///
     /// # Container Resolution Logic
-    /// - For task nodes: Uses the task node itself (tasks are their own containers)
+    /// - For task/ai-chat nodes: Uses the node itself (its own container)
     /// - For other nodes: Traverses up the hierarchy to find the root node
     ///
     /// # Performance
