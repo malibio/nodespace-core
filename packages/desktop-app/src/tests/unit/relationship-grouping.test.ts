@@ -3,7 +3,6 @@ import {
   buildRelationshipsView,
   groupDisplayLabel,
   groupEdgeColumns,
-  groupLayout,
   findGroupByKey,
   findRowByKey,
   groupSupportsEdgeEditing,
@@ -73,31 +72,42 @@ describe('relationship-grouping: groupDisplayLabel', () => {
   });
 });
 
-describe('relationship-grouping: groupLayout', () => {
-  it('is a table when the schema declares edge fields', () => {
-    const group = makeGroup({
-      edgeFields: [{ name: 'role', type: 'string' }],
-      related: [{ id: 'p1', nodeType: 'person', title: 'Sarah', contentPreview: '', edgeProperties: {} }]
-    });
-    expect(groupLayout(group)).toBe('table');
-  });
-
-  it('is a table when an edge carries properties even without declared fields', () => {
+describe('relationship-grouping: groupEdgeColumns surfaces undeclared keys', () => {
+  it('lists a key stored on an edge that the schema never declared', () => {
+    // The panel drives row expansion off this union, so a key present ONLY on
+    // stored edge properties still has to appear — otherwise its value would be
+    // unreachable in the UI, with no expander to reveal it.
     const group = makeGroup({
       edgeFields: null,
       related: [
         { id: 'p1', nodeType: 'person', title: 'Sarah', contentPreview: '', edgeProperties: { role: 'lead' } }
       ]
     });
-    expect(groupLayout(group)).toBe('table');
+    expect(groupEdgeColumns(group)).toEqual(['role']);
   });
 
-  it('is chips for a bare relationship with no edge data', () => {
+  it('puts declared fields first, then undeclared keys', () => {
+    const group = makeGroup({
+      edgeFields: [{ name: 'role', type: 'string' }],
+      related: [
+        {
+          id: 'p1',
+          nodeType: 'person',
+          title: 'Sarah',
+          contentPreview: '',
+          edgeProperties: { note: 'ad hoc', role: 'lead' }
+        }
+      ]
+    });
+    expect(groupEdgeColumns(group)).toEqual(['role', 'note']);
+  });
+
+  it('is empty for a bare relationship with neither declared fields nor edge data', () => {
     const group = makeGroup({
       edgeFields: null,
       related: [{ id: 'p1', nodeType: 'person', title: 'Sarah', contentPreview: '', edgeProperties: {} }]
     });
-    expect(groupLayout(group)).toBe('chips');
+    expect(groupEdgeColumns(group)).toEqual([]);
   });
 });
 
@@ -167,7 +177,6 @@ describe('relationship-grouping: buildRelationshipsView', () => {
     expect(view.groups).toHaveLength(2);
 
     const assigned = view.groups.find((g) => g.key === 'out:assigned_to:person');
-    expect(assigned?.layout).toBe('table');
     expect(assigned?.edgeColumns).toEqual(['role']);
     // Mutation-driving fields carried onto the view model.
     expect(assigned?.relationshipName).toBe('assigned_to');
@@ -181,7 +190,6 @@ describe('relationship-grouping: buildRelationshipsView', () => {
     });
 
     const belongs = view.groups.find((g) => g.key === 'out:belongs_to:project');
-    expect(belongs?.layout).toBe('chips');
     expect(belongs?.edgeColumns).toEqual([]);
   });
 
@@ -228,8 +236,8 @@ describe('relationship-grouping: buildRelationshipsView', () => {
     expect(view.isEmpty).toBe(false);
     const assigned = view.groups.find((g) => g.key === 'out:assigned_to:person');
     expect(assigned?.rows).toHaveLength(0);
-    // Declared edge fields still classify the empty group as a table.
-    expect(assigned?.layout).toBe('table');
+    // A declared edge field still yields its column on an empty group.
+    expect(assigned?.edgeColumns).toEqual(['role']);
   });
 
   it('carries relationshipName, required, and edgeFields onto the group view', () => {
@@ -457,8 +465,8 @@ describe('relationship-grouping: groupSupportsEdgeEditing', () => {
         }
       ]
     });
-    // The group still renders as a table (it has edge data) but offers no editor.
-    expect(group.layout).toBe('table');
+    // The undeclared key is still surfaced for display, but offers no editor.
+    expect(group.edgeColumns).toContain('note');
     expect(groupSupportsEdgeEditing(group)).toBe(false);
   });
 });

@@ -101,6 +101,13 @@
 
   type Phase = 'idle' | 'loading' | 'loaded' | 'error';
 
+  /**
+   * One row of an expanded edge's properties: the property name, plus its
+   * schema declaration when it has one. `field` is undefined for a key stored on
+   * the edge but never declared — see `expandableFields`.
+   */
+  type EdgeRow = { name: string; field: RawEdgeField | undefined };
+
   let phase = $state<Phase>('idle');
   let view = $state<NodeRelationshipsView | null>(null);
   let errorMessage = $state<string | null>(null);
@@ -565,9 +572,26 @@
     return group.cardinality === 'one' ? 'single' : null;
   }
 
-  /** Edge fields a row can show when expanded, in declared order. */
-  function expandableFields(group: RelationshipGroupView): RawEdgeField[] {
-    return group.edgeFields;
+  /**
+   * The edge-property rows a group shows when expanded, keyed by name.
+   *
+   * `edgeColumns` rather than `edgeFields`: it is the union of the DECLARED
+   * fields and any keys actually present on stored edges. A group whose edges
+   * carry only undeclared ("ad-hoc") properties has no `edgeFields` at all, and
+   * keying off those alone would make such a row unexpandable — its values
+   * invisible with no way to reach them.
+   *
+   * The declaration is still what governs EDITING: `field` is undefined for an
+   * ad-hoc key, and `groupSupportsEdgeEditing` is false for a group with no
+   * declared fields, so those values render read-only. That asymmetry is
+   * deliberate — an undeclared key has no `type`, and the update path replaces
+   * edge properties wholesale, so an editor could only guess a free-text input
+   * and would coerce a stored number or boolean to a string on first save.
+   * Showing the value and declining to edit it is the honest option.
+   */
+  function expandableFields(group: RelationshipGroupView): EdgeRow[] {
+    const declared = new Map(group.edgeFields.map((field) => [field.name, field]));
+    return group.edgeColumns.map((name) => ({ name, field: declared.get(name) }));
   }
 </script>
 
@@ -582,6 +606,7 @@
 
     {#if mutationError}
       <div
+        role="alert"
         class="border-destructive/30 bg-destructive/10 text-destructive flex items-start gap-2 rounded-md border p-3 text-sm"
       >
         <CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
@@ -596,6 +621,7 @@
       </div>
     {:else if phase === 'error'}
       <div
+        role="alert"
         class="border-destructive/30 bg-destructive/10 text-destructive flex items-start gap-2 rounded-md border p-3 text-sm"
       >
         <CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
@@ -733,6 +759,7 @@
                         type="button"
                         class="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex size-5 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-1"
                         aria-expanded={open}
+                        aria-controls={`edge-props-${rowKey(group, row)}`}
                         aria-label={open ? `Collapse ${row.label}` : `Expand ${row.label}`}
                         onclick={() => toggleExpanded(group, row)}
                       >
@@ -776,24 +803,32 @@
                   </div>
 
                   {#if open}
-                    <div class="border-border grid gap-2 border-t px-2 py-2 pl-9">
-                      {#each fields as field (field.name)}
-                        {@const value = currentEdgeValue(group, row, field.name)}
-                        {@const kind = edgeInputKind(field)}
+                    <div
+                      id={`edge-props-${rowKey(group, row)}`}
+                      class="border-border grid gap-2 border-t px-2 py-2 pl-9"
+                    >
+                      {#each fields as entry (entry.name)}
+                        {@const field = entry.field}
+                        {@const value = currentEdgeValue(group, row, entry.name)}
+                        {@const kind = field ? edgeInputKind(field) : null}
                         <div class="grid gap-1 sm:grid-cols-[minmax(0,8rem)_minmax(0,1fr)]">
                           <span
                             class="text-muted-foreground text-[0.6875rem] font-medium uppercase sm:pt-2"
                           >
-                            {formatEdgeFieldLabel(field.name)}
+                            {formatEdgeFieldLabel(entry.name)}
                           </span>
-                          {#if !editable}
+                          <!-- No `field` means a key stored on the edge that the
+                               schema never declared: show its value, but offer no
+                               editor — there is no type to render one from. -->
+                          {#if !editable || !field || !kind}
                             <span class="text-sm sm:py-1.5">{formatEdgeValue(field, value)}</span>
                           {:else if kind === 'enum'}
                             <Select.Root
                               type="single"
+                              disabled={busy}
                               value={typeof value === 'string' ? value : ''}
                               onValueChange={(next) => {
-                                setEdgeDraft(group, row, field.name, next);
+                                setEdgeDraft(group, row, entry.name, next);
                                 void commitEdge(group, row);
                               }}
                             >
@@ -817,7 +852,7 @@
                                 setEdgeDraft(
                                   group,
                                   row,
-                                  field.name,
+                                  entry.name,
                                   event.currentTarget.checked
                                 );
                                 void commitEdge(group, row);
@@ -833,7 +868,7 @@
                                 setEdgeDraft(
                                   group,
                                   row,
-                                  field.name,
+                                  entry.name,
                                   kind === 'number'
                                     ? coerceNumber(event.currentTarget.value)
                                     : event.currentTarget.value
@@ -843,10 +878,22 @@
                           {/if}
                         </div>
                       {/each}
+                      <!-- Two different reasons a row is read-only, and they need
+                           different answers: an inbound edge is owned elsewhere,
+                           so the fix is to open that node; an undeclared key has
+                           no type to build an editor from, so the fix is to
+                           declare it on the schema. Saying "open the owning node"
+                           for the second case would send the user somewhere that
+                           cannot help — this node already owns the edge. -->
                       <p class="text-muted-foreground text-[0.6875rem]">
-                        {editable
-                          ? 'Changes save as you make them.'
-                          : 'Edit these from the node that owns this relationship.'}
+                        {#if editable}
+                          Changes save as you make them.
+                        {:else if inbound}
+                          Edit these from the node that owns this relationship.
+                        {:else}
+                          These properties aren't declared on the schema, so they're shown as
+                          stored. Declare them as edge fields to make them editable.
+                        {/if}
                       </p>
                     </div>
                   {/if}
