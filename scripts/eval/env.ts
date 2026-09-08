@@ -7,8 +7,7 @@
  *
  * The daemon, socket, and database are managed by the CALLER — this harness
  * never starts or seeds anything. It asserts the environment is usable
- * (see preflight.ts) and otherwise assumes it. Setup is documented in
- * nodespace-docs/development/agent-eval.md.
+ * (see preflight.ts) and otherwise assumes it.
  */
 
 import { dirname, join, resolve } from "node:path";

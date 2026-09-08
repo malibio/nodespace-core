@@ -55,8 +55,7 @@
  * The scenarios are therefore written in NodeSpace's own working domain:
  * feature write-ups and their sign-off state, the calls a team makes about how
  * a system is built, planning cycles, work tied to the decision that
- * constrains it. See ../../../../nodespace-docs/strategy/{vision,beliefs,
- * principles}.md for the framing this tracks.
+ * constrains it.
  *
  * The MECHANICS are unchanged by that re-theme and are the reason the scenario
  * set was re-themed in place rather than duplicated into a second fixture: the

@@ -3,8 +3,6 @@
 
   CSS-based approach matching design-system-icons.css exactly
   Uses background SVG for curly braces overlay
-
-  Design System Reference: ../nodespace-docs/archived/design-system/components.html → Code Block Nodes
 -->
 
 <script lang="ts">

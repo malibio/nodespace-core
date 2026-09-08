@@ -1,0 +1,144 @@
+// Covers the issue-number/doc-path drift-prevention check (CLAUDE.md's rule
+// against citing GitHub issue numbers or nodespace-docs/ paths in code —
+// "describe the behavior/constraint directly, and reference decisions by
+// ADR"). Most tests build an isolated fixture directory so they exercise the
+// scanner's actual pattern matching without depending on this repo's real
+// (and naturally drifting) reference count; one integration test checks the
+// real repo against the ratchet baseline.
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BASELINES, countReferences } from "./check-code-references";
+
+let fixtureDir: string;
+
+beforeEach(() => {
+  fixtureDir = mkdtempSync(join(tmpdir(), "check-code-references-test-"));
+});
+
+afterEach(() => {
+  rmSync(fixtureDir, { recursive: true, force: true });
+});
+
+function writeFixture(relativePath: string, content: string): void {
+  const full = join(fixtureDir, relativePath);
+  mkdirSync(join(full, ".."), { recursive: true });
+  writeFileSync(full, content);
+}
+
+describe("countReferences — issue-number patterns", () => {
+  test("matches core#NNNN", () => {
+    writeFixture("scripts/a.ts", "// see core#1234 for context\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
+  test("matches a trailing (#NNNN)", () => {
+    writeFixture("scripts/a.ts", "// Fixed the bug (#5678)\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
+  test("matches Issue #NNNN case-insensitively", () => {
+    writeFixture("scripts/a.ts", "// per issue #99, this must hold\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
+  test("does not match plain prose with a hash but no digits", () => {
+    writeFixture("scripts/a.ts", "// use the #hashtag pattern here\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(0);
+  });
+
+  test("counts one match per line, not per file", () => {
+    writeFixture("scripts/a.ts", "// core#1\n// core#2\n// core#3\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(3);
+  });
+});
+
+describe("countReferences — doc-path patterns", () => {
+  test("matches a nodespace-docs/ path", () => {
+    writeFixture("scripts/a.ts", "// @see ../nodespace-docs/architecture/foo.md\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.docPathReferences).toBe(1);
+  });
+
+  test("does not match an unrelated path", () => {
+    writeFixture("scripts/a.ts", "// @see ../other-repo/foo.md\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.docPathReferences).toBe(0);
+  });
+});
+
+describe("countReferences — file discovery", () => {
+  test("only scans the requested extensions (.rs/.ts/.svelte/.js)", () => {
+    writeFixture("scripts/a.ts", "core#1\n");
+    writeFixture("scripts/a.rs", "core#2\n");
+    writeFixture("scripts/a.svelte", "core#3\n");
+    writeFixture("scripts/a.js", "core#4\n");
+    writeFixture("scripts/a.md", "core#5\n"); // not scanned
+    writeFixture("scripts/a.json", "core#6\n"); // not scanned
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(4);
+  });
+
+  test("skips excluded directory names (node_modules, target)", () => {
+    writeFixture("scripts/node_modules/dep/a.ts", "core#1\n");
+    writeFixture("scripts/target/debug/a.rs", "core#2\n");
+    writeFixture("scripts/real.ts", "core#3\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
+  test("recurses into nested subdirectories", () => {
+    writeFixture("scripts/a/b/c/deep.ts", "core#1\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+  });
+
+  test("only scans the given roots, not the whole fixture tree", () => {
+    writeFixture("scripts/a.ts", "core#1\n");
+    writeFixture("packages/agent/b.ts", "core#2\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(1);
+    expect(result.issueNumberFiles.some((f) => f.includes("packages/agent"))).toBe(false);
+  });
+
+  test("tolerates a root that doesn't exist", () => {
+    const result = countReferences(["does-not-exist"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(0);
+    expect(result.docPathReferences).toBe(0);
+  });
+});
+
+describe("countReferences — file lists", () => {
+  test("issueNumberFiles/docPathFiles list each matching file once, even with multiple hits", () => {
+    writeFixture("scripts/a.ts", "core#1\ncore#2\n");
+    const result = countReferences(["scripts"], fixtureDir);
+    expect(result.issueNumberReferences).toBe(2);
+    expect(result.issueNumberFiles.length).toBe(1);
+  });
+});
+
+describe("real-repo ratchet", () => {
+  test("current repo counts do not exceed the checked-in baselines", () => {
+    // Exercises the real repo (default roots/repoRoot) against the ratchet:
+    // a decrease (someone pays down the backlog) passes silently; only an
+    // increase — new drift — fails this test.
+    const counts = countReferences();
+    expect(counts.issueNumberReferences).toBeLessThanOrEqual(BASELINES.issueNumberReferences);
+    expect(counts.docPathReferences).toBeLessThanOrEqual(BASELINES.docPathReferences);
+  });
+
+  test("scan roots exclude packages/agent and packages/nlp-engine", () => {
+    const counts = countReferences();
+    const allFiles = [...counts.issueNumberFiles, ...counts.docPathFiles];
+    for (const f of allFiles) {
+      expect(f).not.toContain(`${"/"}packages/agent/`);
+      expect(f).not.toContain(`${"/"}packages/nlp-engine/`);
+    }
+  });
+});

@@ -130,8 +130,7 @@ export function readDaemonStatus(env: EvalEnv): DaemonStatus {
       `Daemon is not reachable on ${env.socket} (\`model status\` exited ${r.exitCode}).\n` +
         (stderr ? `  ${stderr}\n` : ""),
       `Start the test daemon and confirm it is listening on ${env.socket}, or point\n` +
-        `  NODESPACED_SOCKET at the socket it is actually using. See\n` +
-        `  nodespace-docs/development/agent-eval.md for the full setup.`,
+        `  NODESPACED_SOCKET at the socket it is actually using.`,
     );
   }
 
