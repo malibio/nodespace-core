@@ -9,14 +9,22 @@
   let {
     open = false,
     onClose,
+    identityOnly = false,
   }: {
     open: boolean;
     onClose: () => void;
+    /**
+     * core#2388 backfill nudge: an already-onboarded install whose seeded
+     * local person is still blank gets ONLY the identity step (no
+     * path/skill/summary) — a lightweight, dismissible one-time reminder
+     * rather than re-running the whole first-launch wizard.
+     */
+    identityOnly?: boolean;
   } = $props();
 
   // ── types ──────────────────────────────────────────────────────────────────
 
-  type WizardStep = 'path' | 'skill' | 'summary';
+  type WizardStep = 'identity' | 'path' | 'skill' | 'summary';
 
   interface OnboardingStatus {
     completed: boolean;
@@ -24,6 +32,18 @@
     skillConfigured: boolean;
     claudeCodeDetected: boolean;
     pathAlreadyConfigured: boolean;
+  }
+
+  interface LocalIdentity {
+    nodeId: string;
+    name: string;
+    email: string;
+    isBlank: boolean;
+  }
+
+  interface IdentityPrefill {
+    name: string | null;
+    email: string | null;
   }
 
   interface SkippedAgent {
@@ -47,6 +67,17 @@
   let isLoading = $state(false);
   let stepSuccess = $state(false);
   let stepError = $state<string | null>(null);
+
+  // ── identity step state (core#2388) ─────────────────────────────────────────
+
+  // Whether to include the 'identity' step at all — true only while the
+  // seeded local person is still blank; a node that already has a name/email
+  // (e.g. this wizard re-running after a prior backfill save) is left alone.
+  let showIdentity = $state(false);
+  let identityName = $state('');
+  let identityEmail = $state('');
+  let identityPrefilled = $state(false);
+  let identityDone = $state(false);
 
   // The dialog content element — the focus-trap target and the focus anchor for
   // step transitions (see the $effect below).
@@ -74,7 +105,10 @@
 
   const stepSequence = $derived(
     (() => {
-      const steps: WizardStep[] = ['path'];
+      if (identityOnly) return ['identity'] as WizardStep[];
+      const steps: WizardStep[] = [];
+      if (showIdentity) steps.push('identity');
+      steps.push('path');
       if (showSkill) steps.push('skill');
       steps.push('summary');
       return steps;
@@ -94,19 +128,96 @@
   // ── mount: probe environment ───────────────────────────────────────────────
 
   onMount(() => {
-    invoke<OnboardingStatus>('check_onboarding_status')
-      .then((status) => {
-        showSkill = status.claudeCodeDetected;
-        pathWasAlreadyConfigured = status.pathAlreadyConfigured;
-        log.debug('Onboarding status loaded', {
-          showSkill,
-          pathAlreadyConfigured: status.pathAlreadyConfigured,
+    if (identityOnly) {
+      currentStep = 'identity';
+    } else {
+      invoke<OnboardingStatus>('check_onboarding_status')
+        .then((status) => {
+          showSkill = status.claudeCodeDetected;
+          pathWasAlreadyConfigured = status.pathAlreadyConfigured;
+          log.debug('Onboarding status loaded', {
+            showSkill,
+            pathAlreadyConfigured: status.pathAlreadyConfigured,
+          });
+        })
+        .catch((err) => {
+          log.warn('Could not load onboarding status', err);
         });
-      })
-      .catch((err) => {
-        log.warn('Could not load onboarding status', err);
-      });
+    }
+    loadIdentity();
   });
+
+  /**
+   * core#2388: load the seeded local person's current identity. When it's
+   * still blank, include the 'identity' step (asked first, before
+   * path/skill) and fetch a best-effort git/OS prefill to show for
+   * confirmation — never written until the user explicitly saves.
+   */
+  async function loadIdentity() {
+    try {
+      const identity = await invoke<LocalIdentity | null>('get_local_identity');
+      if (!identity) {
+        log.debug('No local person node to prompt an identity for');
+        return;
+      }
+      if (!identity.isBlank) {
+        // Already filled in (e.g. re-opening after a prior save) — nothing to ask.
+        return;
+      }
+      showIdentity = true;
+      if (!identityOnly && currentStep === 'path') {
+        currentStep = 'identity';
+      }
+      try {
+        const prefill = await invoke<IdentityPrefill>('get_identity_prefill');
+        if (prefill.name) identityName = prefill.name;
+        if (prefill.email) identityEmail = prefill.email;
+        identityPrefilled = Boolean(prefill.name || prefill.email);
+      } catch (err) {
+        log.debug('No identity prefill available', err);
+      }
+    } catch (err) {
+      log.warn('Could not load local identity', err);
+    }
+  }
+
+  async function handleSaveIdentity() {
+    isLoading = true;
+    stepError = null;
+    try {
+      await invoke('set_local_identity', {
+        name: identityName.trim(),
+        email: identityEmail.trim(),
+      });
+      identityDone = true;
+      log.info('Local identity saved');
+      if (identityOnly) {
+        await invoke('dismiss_identity_backfill_prompt').catch((err) =>
+          log.debug('Could not persist identity-prompt dismissal', err)
+        );
+        onClose();
+        return;
+      }
+      stepSuccess = true;
+    } catch (err) {
+      stepError = err instanceof Error ? err.message : String(err);
+      log.error('Failed to save local identity', err);
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  function skipIdentity() {
+    log.debug('Skipped identity step');
+    if (identityOnly) {
+      invoke('dismiss_identity_backfill_prompt').catch((err) =>
+        log.debug('Could not persist identity-prompt dismissal', err)
+      );
+      onClose();
+      return;
+    }
+    nextStep();
+  }
 
   // ── step actions ───────────────────────────────────────────────────────────
 
@@ -210,16 +321,77 @@
         </svg>
       </button>
 
-      <!-- Step indicator -->
-      <div class="step-indicator" aria-hidden="true">
-        {#each stepSequence as step (step)}
-          <span
-            class="step-dot"
-            class:active={currentStep === step}
-            class:done={stepSequence.indexOf(step) < stepSequence.indexOf(currentStep)}
-          ></span>
-        {/each}
-      </div>
+      <!-- Step indicator (skipped for the single-step backfill nudge) -->
+      {#if !identityOnly}
+        <div class="step-indicator" aria-hidden="true">
+          {#each stepSequence as step (step)}
+            <span
+              class="step-dot"
+              class:active={currentStep === step}
+              class:done={stepSequence.indexOf(step) < stepSequence.indexOf(currentStep)}
+            ></span>
+          {/each}
+        </div>
+      {/if}
+
+      <!-- ── Identity step (core#2388) ──────────────────────────────────── -->
+      {#if currentStep === 'identity'}
+        <div class="onboarding-header">
+          <h2>Who are you?</h2>
+          <p>
+            This identifies you as the owner of this database and is used as the default
+            assignee for new tasks. You can change it any time in
+            <strong>Settings → Database</strong>. Skipping leaves it blank — nothing here is
+            required.
+          </p>
+        </div>
+
+        {#if identityPrefilled && !identityDone}
+          <div class="info-banner">
+            Suggested from your git/OS account. Review and edit below — nothing is saved until
+            you click Save.
+          </div>
+        {/if}
+
+        {#if identityDone && !identityOnly}
+          <div class="success-banner">Saved. You're recorded as the owner of this database.</div>
+          <div class="step-actions">
+            <button class="primary-button" onclick={nextStep}>Next</button>
+          </div>
+        {:else}
+          {#if stepError}
+            <div class="error-banner">{stepError}</div>
+          {/if}
+          <div class="field">
+            <label for="identity-name">Name</label>
+            <input
+              id="identity-name"
+              type="text"
+              class="text-input"
+              bind:value={identityName}
+              placeholder="Your name"
+              disabled={isLoading}
+            />
+          </div>
+          <div class="field">
+            <label for="identity-email">Email</label>
+            <input
+              id="identity-email"
+              type="email"
+              class="text-input"
+              bind:value={identityEmail}
+              placeholder="you@example.com"
+              disabled={isLoading}
+            />
+          </div>
+          <div class="step-actions">
+            <button class="primary-button" onclick={handleSaveIdentity} disabled={isLoading}>
+              {isLoading ? 'Saving…' : 'Save'}
+            </button>
+            <button class="skip-button" onclick={skipIdentity} disabled={isLoading}>Skip</button>
+          </div>
+        {/if}
+      {/if}
 
       <!-- ── PATH step ──────────────────────────────────────────────────── -->
       {#if currentStep === 'path'}
@@ -314,6 +486,27 @@
         </div>
 
         <ul class="summary-list">
+          {#if showIdentity}
+            <li class:configured={identityDone} class:skipped={!identityDone}>
+              <span class="summary-icon">
+                {#if identityDone}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                {/if}
+              </span>
+              <span>
+                Your identity
+                {#if !identityDone}<span class="summary-note">(skipped)</span>{/if}
+              </span>
+            </li>
+          {/if}
+
           <li class:configured={pathDone || pathWasAlreadyConfigured} class:skipped={!pathDone && !pathWasAlreadyConfigured}>
             <span class="summary-icon">
               {#if pathDone || pathWasAlreadyConfigured}
@@ -513,6 +706,33 @@
   }
 
   /* Actions */
+  /* Identity step fields */
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 0.875rem;
+  }
+
+  .field label {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    font-weight: 500;
+  }
+
+  .text-input {
+    font-size: 0.875rem;
+    padding: 0.5rem 0.625rem;
+    border-radius: 0.375rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  .text-input:disabled {
+    opacity: 0.6;
+  }
+
   .step-actions {
     display: flex;
     align-items: center;

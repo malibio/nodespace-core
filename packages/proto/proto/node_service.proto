@@ -56,6 +56,15 @@ service NodeService {
   // Type-specific updates
   rpc UpdateTaskNode(UpdateTaskNodeRequest) returns (NodeResponse);
 
+  // Local identity (ADR-037): the seeded local-user PersonNode.
+  // GetLocalPerson resolves it via the has_role owner edge to the
+  // DatabaseSettingsNode singleton (falling back to the first person node on
+  // a database that predates that edge); the response's `node` is unset only
+  // when no person node exists at all. SetLocalPersonIdentity writes into
+  // that SAME node — never a newly created one (core#2388).
+  rpc GetLocalPerson(Empty) returns (OptionalNodeResponse);
+  rpc SetLocalPersonIdentity(SetLocalPersonIdentityRequest) returns (NodeResponse);
+
   // Roots
   rpc GetRoots(GetRootsRequest) returns (NodeListResponse);
   // Count root nodes without listing them. Use instead of GetRoots + counting
@@ -713,6 +722,14 @@ message UpdateTaskNodeRequest {
   optional string content = 9;
   // JSON-encoded properties patch; unset = no change.
   optional string properties = 10;
+}
+
+// Both fields are written together (whole-value replace, not a patch); pass
+// the current value for a field the caller doesn't mean to change. An empty
+// string clears that field.
+message SetLocalPersonIdentityRequest {
+  string name = 1;
+  string email = 2;
 }
 
 // ---------------------------------------------------------------------------

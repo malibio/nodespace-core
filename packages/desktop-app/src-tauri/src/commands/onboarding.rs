@@ -4,9 +4,13 @@
 //! installation. Completion state is persisted to `~/.nodespace/config.json`.
 //! Skill installation state is tracked separately in `~/.nodespace/setup.json`.
 
+use crate::services::GrpcClient;
 use crate::skill_setup::{self, SkillSetupResult};
+use nodespace_proto::nodespace::{Empty, NodeData, SetLocalPersonIdentityRequest};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tauri::State;
+use tonic::Request;
 
 /// Current onboarding status returned to the frontend on startup.
 #[derive(Serialize)]
@@ -27,6 +31,13 @@ struct NodespaceConfig {
     onboarding_completed: bool,
     #[serde(default)]
     integrations: IntegrationsConfig,
+    /// core#2388: set once the user has explicitly saved or skipped the
+    /// identity backfill prompt (the nudge shown to an already-onboarded
+    /// install whose seeded local person is still blank), so it surfaces at
+    /// most once rather than nagging on every launch. The identity itself
+    /// stays editable any time from Settings regardless of this flag.
+    #[serde(default)]
+    identity_prompt_dismissed: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -275,6 +286,191 @@ pub async fn complete_onboarding(
             path_configured,
             skill_configured,
         },
+        ..Default::default()
     };
+    write_config(&cfg).await
+}
+
+// ── local identity (ADR-037, core#2388) ─────────────────────────────────────
+
+/// The seeded local-user PersonNode's identity, as shown to the frontend.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalIdentity {
+    pub node_id: String,
+    pub name: String,
+    pub email: String,
+    /// True when neither content/name nor email has ever been filled in —
+    /// drives both the onboarding wizard's identity step (shown only when
+    /// blank) and the backfill nudge for already-onboarded installs.
+    pub is_blank: bool,
+}
+
+fn local_identity_from_node_data(data: NodeData) -> LocalIdentity {
+    let props: serde_json::Value = serde_json::from_str(&data.properties).unwrap_or_default();
+    let person_name = props
+        .get("person")
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let email = props
+        .get("person")
+        .and_then(|p| p.get("email"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let content = data.content.trim();
+    let is_blank = content.is_empty() && person_name.is_empty() && email.is_empty();
+    // `content` is the display name in every other person-editing surface
+    // (see PersonSchemaForm); prefer it, falling back to properties.person.name
+    // for a node that predates that convention or was written some other way.
+    let name = if !content.is_empty() {
+        content.to_string()
+    } else {
+        person_name.to_string()
+    };
+    LocalIdentity {
+        node_id: data.id,
+        name,
+        email,
+        is_blank,
+    }
+}
+
+/// Read the seeded local-user PersonNode's current identity. `None` only
+/// when the database has no person node at all (should not happen post-seed).
+#[tauri::command]
+pub async fn get_local_identity(
+    client: State<'_, GrpcClient>,
+) -> Result<Option<LocalIdentity>, String> {
+    let mut c = client.client().await;
+    let resp = c
+        .get_local_person(Request::new(Empty {}))
+        .await
+        .map_err(|e| e.to_string())?
+        .into_inner();
+    Ok(resp
+        .node
+        .and_then(|n| n.node_data)
+        .map(local_identity_from_node_data))
+}
+
+/// Write name/email into the seeded local-user PersonNode (never a newly
+/// created one — see core#2388 and `NodeService::set_local_person_identity`).
+/// Both fields are written together; an empty value clears that field.
+#[tauri::command]
+pub async fn set_local_identity(
+    client: State<'_, GrpcClient>,
+    name: String,
+    email: String,
+) -> Result<LocalIdentity, String> {
+    let mut c = client.client().await;
+    let resp = c
+        .set_local_person_identity(Request::new(SetLocalPersonIdentityRequest { name, email }))
+        .await
+        .map_err(|e| e.to_string())?
+        .into_inner();
+    let data = resp
+        .node_data
+        .ok_or_else(|| "gRPC response missing node_data".to_string())?;
+    Ok(local_identity_from_node_data(data))
+}
+
+/// Best-effort suggestion for the identity prompt, sourced from `git config`
+/// (both fields), falling back to the OS account's full name for `name`
+/// alone. Never written anywhere on its own — the caller shows this for
+/// confirmation only (core#2388's "prefill, do not auto-commit" criterion).
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPrefill {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_identity_prefill() -> IdentityPrefill {
+    let git_name = run_git_config("user.name").await;
+    let git_email = run_git_config("user.email").await;
+    let name = match git_name {
+        Some(n) => Some(n),
+        None => os_full_name().await,
+    };
+    IdentityPrefill {
+        name,
+        email: git_email,
+    }
+}
+
+async fn run_git_config(key: &str) -> Option<String> {
+    let output = tokio::process::Command::new("git")
+        .args(["config", "--get", key])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// Best-effort, macOS/Linux-oriented (the only currently-shipped desktop
+/// platforms): the account's Real Name via `id -F`, distinct from the short
+/// login name `whoami`/`$USER` would return. Absent on Windows — the command
+/// simply fails to spawn there, which resolves to `None` like any other miss.
+async fn os_full_name() -> Option<String> {
+    let output = tokio::process::Command::new("id")
+        .arg("-F")
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// Whether the backfill nudge should fire for an already-onboarded install:
+/// true only when the seeded local person is still blank AND the user has
+/// not already dismissed the nudge once (see `dismiss_identity_backfill_prompt`).
+#[tauri::command]
+pub async fn should_prompt_identity_backfill(
+    client: State<'_, GrpcClient>,
+) -> Result<bool, String> {
+    let cfg = read_config().await?;
+    if cfg.identity_prompt_dismissed {
+        return Ok(false);
+    }
+    let mut c = client.client().await;
+    let resp = c
+        .get_local_person(Request::new(Empty {}))
+        .await
+        .map_err(|e| e.to_string())?
+        .into_inner();
+    Ok(resp
+        .node
+        .and_then(|n| n.node_data)
+        .map(|data| local_identity_from_node_data(data).is_blank)
+        .unwrap_or(false))
+}
+
+/// Persist that the backfill nudge has been shown and resolved (saved or
+/// skipped) once, so it does not reappear on every subsequent launch. The
+/// identity itself stays editable any time from Settings regardless.
+#[tauri::command]
+pub async fn dismiss_identity_backfill_prompt() -> Result<(), String> {
+    let mut cfg = read_config().await?;
+    cfg.identity_prompt_dismissed = true;
     write_config(&cfg).await
 }

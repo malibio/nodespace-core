@@ -62,6 +62,10 @@
 
   // First-launch onboarding wizard.
   let showOnboarding = $state(false);
+  // core#2388: true when this is the backfill nudge (an already-onboarded
+  // install whose seeded local person is still blank) rather than the full
+  // first-launch wizard — see the `identityOnly` prop on OnboardingWizard.
+  let onboardingIdentityOnly = $state(false);
 
   // Recovered Items: once the daemon's probe confirms Pro tier, load
   // the local-only recovery log. If the daemon preserved any conflict "losers",
@@ -310,11 +314,23 @@
       startDaemonStatusListener();
 
       // Show first-launch onboarding wizard if setup has not been completed.
+      // Otherwise (core#2388), an already-onboarded install whose seeded
+      // local person is still blank gets the lightweight backfill nudge
+      // instead — never both in the same launch.
       invoke<{ completed: boolean }>('check_onboarding_status')
         .then((status) => {
           if (!status.completed) {
             showOnboarding = true;
+            return;
           }
+          invoke<boolean>('should_prompt_identity_backfill')
+            .then((shouldPrompt) => {
+              if (shouldPrompt) {
+                onboardingIdentityOnly = true;
+                showOnboarding = true;
+              }
+            })
+            .catch((err) => log.debug('Could not check identity backfill status:', err));
         })
         .catch((err) => log.debug('Could not check onboarding status:', err));
 
@@ -738,8 +754,15 @@
       <StatusBar />
     </div>
 
-    <!-- First-launch onboarding wizard -->
-    <OnboardingWizard open={showOnboarding} onClose={() => (showOnboarding = false)} />
+    <!-- First-launch onboarding wizard (or the core#2388 identity backfill nudge) -->
+    <OnboardingWizard
+      open={showOnboarding}
+      identityOnly={onboardingIdentityOnly}
+      onClose={() => {
+        showOnboarding = false;
+        onboardingIdentityOnly = false;
+      }}
+    />
 
     <!-- Hover/focus preview card for node references (single shared instance) -->
     <NodeRefPreview />
