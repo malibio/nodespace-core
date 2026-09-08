@@ -1,0 +1,16 @@
+# Resolve dependencies once, after a rebase has finished replaying.
+#
+# The counterpart to post-checkout's rebase skip. A rebase fires post-checkout
+# only at its base checkout — which that hook skips, because installing there
+# dirties bun.lock and deadlocks the replay — and fires nothing on completion.
+# Without this hook a rebase that pulls in package.json or bun.lock changes
+# would resolve dependencies zero times.
+#
+# Runs once against the finished tree rather than once per replayed commit, so
+# it is also cheaper than the behavior it replaces.
+#
+# Git passes "rebase" or "amend" as $1. Only rebase matters: an amend rewrites
+# one commit in place with no checkout, and post-checkout was never involved.
+if [ "$1" = "rebase" ]; then
+  bun install
+fi
