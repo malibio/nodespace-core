@@ -1829,6 +1829,34 @@ More nested content"#;
         );
     }
 
+    /// ADR-069 §5/F16 regression test: `DomainEvent::BackgroundImportFailed`
+    /// must actually reach subscribers when emitted — the fix for the async
+    /// import branch's non-reported failure. Forcing a genuine mid-import
+    /// failure through the public markdown API isn't practical (node ids
+    /// are freshly generated per call, so nothing collides deterministically),
+    /// so this exercises the event itself end-to-end: emit it the same way
+    /// the background task's `Err` branch does, and confirm a subscriber via
+    /// `subscribe_to_events` receives the right root_id and error text.
+    #[tokio::test]
+    async fn test_background_import_failed_event_reaches_subscribers() {
+        let (node_service, _temp_dir) = setup_test_service().await;
+        let mut rx = node_service.subscribe_to_events();
+
+        node_service.emit_event(crate::db::events::DomainEvent::BackgroundImportFailed {
+            root_id: "some-root-id".to_string(),
+            error: "simulated bulk insert failure".to_string(),
+        });
+
+        let envelope = rx.try_recv().expect("event must be emitted immediately, not buffered");
+        match envelope.event {
+            crate::db::events::DomainEvent::BackgroundImportFailed { root_id, error } => {
+                assert_eq!(root_id, "some-root-id");
+                assert_eq!(error, "simulated bulk insert failure");
+            }
+            other => panic!("expected BackgroundImportFailed, got {:?}", other),
+        }
+    }
+
     // Test that sync mode (for tests) returns full response
     #[tokio::test]
     async fn test_sync_import_for_tests() {
