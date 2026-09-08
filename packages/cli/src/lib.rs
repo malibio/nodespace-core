@@ -165,6 +165,13 @@ pub enum Command {
     },
     /// Uninstall NodeSpace: stop daemon, remove binaries and service registration.
     Uninstall(commands::uninstall::UninstallArgs),
+    /// Install, remove, or check the NodeSpace skill for detected AI-agent
+    /// harnesses (Claude Code, Codex, Gemini CLI, OpenCode) -- the CLI-only
+    /// equivalent of the desktop app's first-launch skill installer.
+    Skill {
+        #[command(subcommand)]
+        action: commands::skill::SkillAction,
+    },
     /// Host a stdio MCP server exposing one passthrough tool, for bash-less
     /// MCP surfaces (e.g. Claude Desktop's Chat tab) that cannot shell this
     /// CLI directly. Hidden from `--help` and the generated skill CLI
@@ -415,6 +422,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             commands::database::run(&mut client, action, json).await
         }
         Command::Uninstall(args) => commands::uninstall::run(args),
+        // Never touches the daemon -- shells out to the bundled/compiled
+        // skill installer directly, same as `uninstall` above.
+        Command::Skill { action } => commands::skill::run(action),
         // `mcp` doesn't connect to the daemon itself — each dispatched call
         // shells back out to this same binary (see `commands::mcp`), so it
         // only needs the resolved socket path and raw database selection,

@@ -10,4 +10,5 @@ pub mod relationship;
 pub mod schema;
 pub mod search;
 pub mod session;
+pub mod skill;
 pub mod uninstall;
