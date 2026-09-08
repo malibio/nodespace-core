@@ -361,7 +361,7 @@ impl NodeService {
 
     /// Update a task node with type-safe field updates
     ///
-    /// Updates task-specific fields (status, priority, due_date, assignee).
+    /// Updates task-specific fields (status, priority, due_date).
     /// Uses optimistic concurrency control (OCC) to prevent lost updates.
     ///
     /// # Type Safety

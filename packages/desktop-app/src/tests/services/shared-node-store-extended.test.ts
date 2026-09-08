@@ -190,15 +190,6 @@ describe('SharedNodeStore - Extended Coverage', () => {
       expect(updated?.dueDate).toBe('2025-12-31');
     });
 
-    it('should update task assignee', () => {
-      store.setNode(taskNode, viewerSource, true);
-
-      store.updateTaskNode('task-1', { assignee: 'user-123' }, viewerSource);
-
-      const updated = store.getNode('task-1') as unknown as TaskNode;
-      expect(updated?.assignee).toBe('user-123');
-    });
-
     it('should update task startedAt', () => {
       store.setNode(taskNode, viewerSource, true);
 

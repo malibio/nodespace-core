@@ -199,7 +199,6 @@ export const taskNodePlugin: PluginDefinition = {
         update.status = changes.status as TaskNodeUpdate['status'];
       if ('priority' in changes) update.priority = changes.priority as TaskNodeUpdate['priority'];
       if ('dueDate' in changes) update.dueDate = changes.dueDate as TaskNodeUpdate['dueDate'];
-      if ('assignee' in changes) update.assignee = changes.assignee as TaskNodeUpdate['assignee'];
       if ('startedAt' in changes)
         update.startedAt = changes.startedAt as TaskNodeUpdate['startedAt'];
       if ('completedAt' in changes)

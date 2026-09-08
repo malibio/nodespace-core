@@ -113,8 +113,8 @@ export function readGroupValue(node: Node, field: string): string | null {
  *
  * Not every field this can be called for actually HAS clear semantics on the
  * backend, though: task's `status` is a required, non-nullable `TaskStatus`
- * with no "cleared" state at all (unlike its siblings `priority`/`dueDate`/
- * `assignee`, which are genuinely optional). A `null` write to such a field
+ * with no "cleared" state at all (unlike its siblings `priority`/`dueDate`,
+ * which are genuinely optional). A `null` write to such a field
  * round-trips as an HTTP success while silently changing nothing server-side
  * — the caller is responsible for never offering Unassigned as a target for
  * a `required: true` schema field in the first place (kanban-view.svelte's

@@ -398,7 +398,6 @@ async function handleRequest(req: Request): Promise<Response> {
         status?: string;
         priority?: string | null;
         dueDate?: string | null;
-        assignee?: string | null;
         startedAt?: string | null;
         completedAt?: string | null;
         content?: string;
@@ -409,7 +408,6 @@ async function handleRequest(req: Request): Promise<Response> {
         status: patch.status ?? null,
         priority: patch.priority ?? null,
         dueDate: patch.dueDate ?? null,
-        assignee: patch.assignee ?? null,
         startedAt: patch.startedAt ?? null,
         completedAt: patch.completedAt ?? null,
         content: patch.content ?? null,
