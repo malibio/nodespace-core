@@ -1,0 +1,221 @@
+# hand-authored: core#2483. create_schema's relationships.items schema copied
+# verbatim from packages/agent/src/local_agent/tools.rs at generation time
+# (relationships.items.properties.edgeFields, ~line 1278).
+name = "edge-fields-schema-baseline"
+reps = 5
+
+notes = """
+CORE#2483 -- DOES THE NEW edgeFields TOOL-SCHEMA PROPERTY GET THE MODEL TO
+EMIT A CORRECTLY-SHAPED edgeFields DECLARATION?
+
+Before this issue, create_schema/update_schema's relationships item schema
+had no edgeFields property at all -- SCHEMA_RULES_NOT_IN_PROMPT excluded
+enum-edge-fields from the prompt on the (false, per the issue) premise that
+its content already lived on the tool schema. This case measures the
+tool-schema property added to close that gap.
+
+THE REQUEST
+
+A user asks for a "team" type with a "members" relationship to "person",
+where the membership itself carries an access level restricted to a fixed
+set (owner/editor/viewer) -- the canonical edge-field use case the
+ENUM_EDGE_FIELDS rule's own worked example uses. The request states the
+closed vocabulary explicitly but never uses the words "edgeFields" or
+"coreValues" -- those must come from the tool schema, not be echoed from the
+user's own wording.
+
+WHAT COUNTS AS SUCCESS
+
+create_schema(..., relationships=[{"name": "members", "targetType": "person",
+..., "edgeFields": [{"name": "access", "type": "enum", "coreValues": [
+{"value":"owner",...}, {"value":"editor",...}, {"value":"viewer",...}]}]}]).
+
+FAILURE MODES THIS CASE EXISTS TO CATCH
+
+  1. No edgeFields at all -- the access level dropped entirely, or invented
+     as a top-level field on "team" or "person" instead of on the edge.
+  2. edgeFields present but shaped like a node field -- coreValues omitted
+     on an enum edge field (schema validation would reject this at write
+     time -- see packages/core/src/schema/mod.rs's
+     validate_edge_field_declarations -- exactly the "too late" failure mode
+     ADR-064 exists to prevent).
+  3. edgeFields attached to a builtin relationship name instead of the
+     user-declared one (not applicable here since "members" is user-declared,
+     but worth eyeballing in output).
+
+This is a single case, single rep-set, real native inference
+(gemma-4-E4B-it-Q4_K_M) -- read with golden_runner, not scored automatically.
+Compare its output against edge-fields-schema-armB (edgeFields property
+removed, pre-issue shape) to see whether the new property is load-bearing.
+
+RESULT -- MEASURED (gemma-4-E4B-it-Q4_K_M, 5 reps, real native inference)
+
+Baseline (this file, edgeFields property present): 5/5 correct. Every rep
+emitted byte-identical shape:
+  create_schema(name="team", fields=[], relationships=[{"name": "has_member",
+  "targetType": "person", "direction": "out", "cardinality": "many",
+  "reverseName": "with_memberships", "reverseCardinality": "one",
+  "edgeFields": [{"name": "access_level", "type": "enum", "coreValues": [
+  {"value":"owner","label":"Owner"}, {"value":"editor","label":"Editor"},
+  {"value":"viewer","label":"Viewer"}]}]}])
+coreValues present and non-empty on every rep, all three values captured,
+attached to the relationship (not to "team" or "person" as a node field).
+Field/relationship names differ slightly from the "expect" text ("has_member"
+not "members", "access_level" not "access") but that's naming, not shape --
+immaterial to what this case measures.
+
+Arm B (edgeFields property removed, pre-issue shape): 5/5 WRONG, identically
+across all reps. The access-level requirement is dropped entirely -- not
+attached anywhere, not as a field, not as an edge attribute:
+  create_schema(name="team", relationships=[{"name": "has_member",
+  "targetType": "person", "direction": "out", "cardinality": "many",
+  "reverseName": "is_a_member_of", "reverseCardinality": "one"}])
+No coreValues, no access/access_level of any kind in the tool call. This is
+exactly the silent-loss failure mode the issue predicted: with no edgeFields
+property on the tool schema and no prompt guidance either (excluded by
+SCHEMA_RULES_NOT_IN_PROMPT), the model has no channel through which to learn
+the mechanism exists, so it just omits the detail rather than inventing an
+unsupported shape.
+
+CONCLUSION: the edgeFields tool-schema property added by this issue is
+load-bearing. 0/5 -> 5/5 on the same request, same model, same seed
+conditions, changing nothing but this one schema property. This closes the
+loop ADR-064 predicted: an argument-shape rule reaching the model through the
+tool schema (rather than prose) is both necessary (armB fails without it) and
+sufficient (baseline succeeds with it alone, no prompt-side guidance).
+
+CAVEATS: one case, one model, 5 reps -- not decision-grade for rare-frequency
+effects, but the effect size here (0/5 vs 5/5, identical wrong/right shape
+across every rep) leaves little room for a different real answer on this
+model. No code changed as a result of this measurement -- the schema
+property being measured was already the deliverable of this issue's other
+acceptance criteria.
+"""
+
+[[turn]]
+label = "turn1-team-with-access-level-on-membership"
+system = """
+You are NodeSpace's assistant, acting on a user's workspace.
+Call exactly one tool. Do not answer the user in prose when a tool applies.
+
+COLLECTIONS: Engineering, Q3 Planning
+
+EXISTING SCHEMAS (do not recreate these; do not copy their \
+fields onto a new type):
+- person "Person" -> title: text, required; email: text
+
+REFERENCE — procedures relevant to this request. Use whichever applies and \
+IGNORE the rest. Do not describe, quote, or summarise any of it. Your reply \
+must be the tool call itself. If none applies, answer the user normally.
+
+--- Candidate 1: Schema Creation
+Purpose: Define a new kind of record the workspace does not track yet, when \
+the user describes a category of thing rather than one particular instance.
+"""
+user = """
+Add a 'team' type, no fields of its own — a team can have multiple people as \
+members, and each membership needs an access level that's always one of \
+owner, editor, or viewer.
+"""
+expect = """
+create_schema(name="Team", fields=[], relationships=[{"name": "members", \
+"targetType": "person", "direction": "out", "cardinality": "many", \
+"reverseName": "teams" (or similar), "reverseCardinality": "many", \
+"edgeFields": [{"name": "access", "type": "enum", "coreValues": [\
+{"value": "owner", "label": "Owner"}, {"value": "editor", "label": "Editor"}, \
+{"value": "viewer", "label": "Viewer"}]}]}]). The failure this turn exists to \
+catch: the access level dropped, or emitted as a field on "team"/"person" \
+instead of an edgeFields entry on the "members" relationship.
+"""
+
+  [turn.tool_results]
+  create_schema = '{"ok": true, "type_id": "team", "note": "Type created. The id is derived from the name: lowercased, spaces to underscores."}'
+
+  [[turn.tool]]
+  name = "create_schema"
+  description = """
+  Define a new entity type with its fields. Do not include a title or name \
+  field, every record already has a title. Only use fields for scalar \
+  properties (text, number, date, enum, boolean). Do NOT use fields for \
+  references to other node types — use relationships instead.
+  """
+
+    [turn.tool.parameters_schema]
+    type = "object"
+    required = ["name", "fields"]
+
+      [turn.tool.parameters_schema.properties.name]
+      type = "string"
+      description = "Display name for the entity type, in the user's own words, singular."
+
+      [turn.tool.parameters_schema.properties.fields]
+      type = "array"
+      description = "Every field this type needs, listed explicitly here, even if empty ([])."
+
+        [turn.tool.parameters_schema.properties.fields.items]
+        type = "object"
+        required = ["name", "type"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.name]
+          type = "string"
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.type]
+          type = "string"
+          enum = ["text", "number", "date", "enum", "array", "object", "boolean"]
+
+          [turn.tool.parameters_schema.properties.fields.items.properties.coreValues]
+          type = "array"
+          description = "REQUIRED and must be non-empty when type=\"enum\"."
+
+      [turn.tool.parameters_schema.properties.relationships]
+      type = "array"
+      description = "Relationships to other node types. Use instead of array fields when referencing existing types (e.g., ticket has_task task)."
+
+        [turn.tool.parameters_schema.properties.relationships.items]
+        type = "object"
+        required = ["name", "targetType", "direction", "cardinality", "reverseName", "reverseCardinality"]
+
+          [turn.tool.parameters_schema.properties.relationships.items.properties.name]
+          type = "string"
+          description = "Relationship name, lowercase snake_case (e.g. 'supersedes', 'blocks', 'assigned_to')"
+
+          [turn.tool.parameters_schema.properties.relationships.items.properties.targetType]
+          type = "string"
+          description = "Target node type ID — MUST be an existing type from the EXISTING SCHEMAS list. Do NOT invent types that don't exist yet."
+
+          [turn.tool.parameters_schema.properties.relationships.items.properties.direction]
+          type = "string"
+          enum = ["out", "in"]
+
+          [turn.tool.parameters_schema.properties.relationships.items.properties.cardinality]
+          type = "string"
+          enum = ["one", "many"]
+
+          [turn.tool.parameters_schema.properties.relationships.items.properties.reverseName]
+          type = "string"
+          description = "REQUIRED. What this edge is called read from the target's end."
+
+          [turn.tool.parameters_schema.properties.relationships.items.properties.reverseCardinality]
+          type = "string"
+          enum = ["one", "many"]
+          description = "REQUIRED. How many sources may point at one target."
+
+          [turn.tool.parameters_schema.properties.relationships.items.properties.edgeFields]
+          type = "array"
+          description = "Attributes carried on the edge itself, not on either node — use for facts about the CONNECTION (an access level on a membership, a billing date on an invoice link), never for facts about a node (those go in that type's own fields). Give an edge field a fixed vocabulary the same way a node field does: {\"name\": \"access\", \"type\": \"enum\", \"coreValues\": [{\"value\": \"owner\", \"label\": \"Owner\"}, {\"value\": \"editor\", \"label\": \"Editor\"}, {\"value\": \"viewer\", \"label\": \"Viewer\"}]}. coreValues is REQUIRED when type=\"enum\" and REJECTED on any other type; a default must be one of the declared values; values must be unique. Edge enums are closed — there is no userValues/extensible. An undeclared value is rejected when an edge is created or edited, not stored. Only relationships you declare can carry edgeFields — the built-in structural names (member_of, has_child, mentions, has_role) are reserved and cannot take one. required/default are recorded but NOT enforced at write time: an omitted enum key is stored absent, never filled in from default."
+
+            [turn.tool.parameters_schema.properties.relationships.items.properties.edgeFields.items]
+            type = "object"
+            required = ["name", "type"]
+
+              [turn.tool.parameters_schema.properties.relationships.items.properties.edgeFields.items.properties.name]
+              type = "string"
+              description = "Edge field name, lowercase snake_case — the storage key."
+
+              [turn.tool.parameters_schema.properties.relationships.items.properties.edgeFields.items.properties.type]
+              type = "string"
+              description = "Field type: text, number, date, enum, boolean"
+
+              [turn.tool.parameters_schema.properties.relationships.items.properties.edgeFields.items.properties.coreValues]
+              type = "array"
+              description = "REQUIRED and must be non-empty when type=\"enum\" — an enum edge field with no values always fails validation. Rejected on any other type. Array of {value, label} pairs (e.g. {\"value\": \"owner\", \"label\": \"Owner\"}); use lowercase values (e.g. 'owner' not 'Owner')."
