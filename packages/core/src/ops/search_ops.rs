@@ -101,6 +101,14 @@ pub struct SearchSemanticInput {
 #[derive(Debug)]
 pub struct SearchSemanticOutput {
     pub nodes: Vec<Value>,
+    /// The same results as `nodes`, in the same order, as typed [`Node`]s.
+    ///
+    /// Search already fetched every one of these to rank and filter it, so a
+    /// consumer that needs node structs (the gRPC handler, which maps them
+    /// straight onto the wire type) can take them from here. Re-reading them
+    /// from the store by id costs one query per result and returns exactly the
+    /// rows search is already holding.
+    pub matched_nodes: Vec<Node>,
     pub count: usize,
     pub query: String,
     pub threshold: f32,
@@ -323,6 +331,7 @@ pub async fn search_semantic(
                 Err(NodeServiceError::CollectionNotFound(_)) => {
                     return Ok(SearchSemanticOutput {
                         nodes: vec![],
+                        matched_nodes: vec![],
                         count: 0,
                         query: input.query,
                         threshold,
@@ -603,9 +612,11 @@ pub async fn search_semantic(
         .collect();
 
     let count = nodes.len();
+    let matched_nodes: Vec<Node> = filtered_results.into_iter().map(|(node, _)| node).collect();
 
     Ok(SearchSemanticOutput {
         nodes,
+        matched_nodes,
         count,
         query: input.query,
         threshold,
