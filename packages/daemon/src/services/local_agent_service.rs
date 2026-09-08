@@ -1375,12 +1375,25 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         // engine was last swapped in for, so checking it here catches a
         // still-resident engine even if some future path moves the catalog's
         // own bookkeeping off this model_id without swapping the engine too.
+        //
+        // Check-then-act, not atomic with the delete below: a concurrent
+        // `load_model` for this same id could re-activate it in the gap.
+        // Accepted rather than closed with a lock spanning both calls --
+        // `GgufModelManager::delete`'s own catalog guard has the identical
+        // shape, and closing only this one instance would still leave a
+        // caller racing `load_model` against `delete_model` with no true
+        // fix; that needs its own design, not a narrower patch here.
         if self.inner.shared.active_model_id.lock().await.as_deref() == Some(model_id.as_str()) {
             return Err(Status::failed_precondition(format!(
                 "cannot delete model '{model_id}' while it is the active inference engine"
             )));
         }
 
+        // `model_manager()` is re-checked here (not reused from the guard
+        // above, which reads only `active_model_id` and never touches the
+        // manager) so `delete` still runs through its own catalog guard --
+        // the two guards are independent checks against independent state,
+        // not a single check split in two.
         self.model_manager()
             .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?
             .delete(&model_id)
@@ -1394,6 +1407,11 @@ impl GrpcLocalAgentService for LocalAgentServiceImpl {
         request: Request<LoadModelRequest>,
     ) -> Result<Response<LoadModelResponse>, Status> {
         let model_id = request.into_inner().model_id;
+        // Checked up front so a missing model manager reports the specific
+        // `MODEL_MANAGER_UNAVAILABLE` status, matching every other model-
+        // management RPC, rather than falling through into
+        // `load_model_and_collect_events`'s own (differently-worded) internal
+        // check and error event.
         self.model_manager()
             .ok_or_else(|| Status::unavailable(MODEL_MANAGER_UNAVAILABLE))?;
         // Drive the same eager load-and-swap path `EnsureModelReady` streams
