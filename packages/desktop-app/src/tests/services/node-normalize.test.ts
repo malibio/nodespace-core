@@ -99,7 +99,7 @@ describe('deepMergeProperties', () => {
 
 describe('promoteTypedFields', () => {
   it('promotes only fields present in a flat ai-chat write', () => {
-    const changes = { messages: [{ role: 'user', content: 'hi' }], turnStatus: 'processing' };
+    const changes = { messages: [{ role: 'user', content: 'hi' }], turn_status: 'processing' };
     const promoted = promoteTypedFields('ai-chat', changes, changes);
     // provider/model/sessionStatus omitted → not promoted (guards against undefined-clobber)
     expect(promoted).toEqual({ messages: changes.messages, turnStatus: 'processing' });
@@ -109,7 +109,7 @@ describe('promoteTypedFields', () => {
   });
 
   it('promotes turnStatus and sessionStatus independently', () => {
-    const changes = { sessionStatus: 'archived' };
+    const changes = { session_status: 'archived' };
     const promoted = promoteTypedFields('ai-chat', changes, changes);
     expect(promoted).toEqual({ sessionStatus: 'archived' });
     expect('turnStatus' in promoted).toBe(false);
@@ -136,11 +136,31 @@ describe('promoteTypedFields', () => {
   it('map stays aligned with the documented promoted types', () => {
     expect(Object.keys(OPTIMISTIC_TYPED_FIELDS).sort()).toEqual(['ai-chat', 'task']);
     expect(OPTIMISTIC_TYPED_FIELDS['ai-chat']).toEqual([
-      'turnStatus',
-      'sessionStatus',
-      'provider',
-      'model',
-      'messages'
+      { from: 'turn_status', to: 'turnStatus' },
+      { from: 'session_status', to: 'sessionStatus' },
+      { from: 'provider', to: 'provider' },
+      { from: 'model', to: 'model' },
+      { from: 'messages', to: 'messages' }
     ]);
+  });
+
+  it('promotes an ai-chat write using the real snake_case payload shape', () => {
+    // Mirrors the actual write in ai-chat-node-viewer.svelte: canonical
+    // snake_case property keys, promoted to camelCase top-level fields.
+    const changes = {
+      messages: [{ role: 'user', content: 'hi' }],
+      turn_status: 'processing',
+      session_status: 'active',
+      provider: 'native',
+      model: 'claude-sonnet-5'
+    };
+    const promoted = promoteTypedFields('ai-chat', changes, changes);
+    expect(promoted).toEqual({
+      messages: changes.messages,
+      turnStatus: 'processing',
+      sessionStatus: 'active',
+      provider: 'native',
+      model: 'claude-sonnet-5'
+    });
   });
 });
