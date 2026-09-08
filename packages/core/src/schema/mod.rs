@@ -7,6 +7,7 @@ use crate::behaviors::SchemaNodeBehavior;
 use crate::markdown::MarkdownError;
 use crate::models::schema::SchemaField;
 use crate::models::{Node, NodeUpdate, SchemaNode};
+use crate::services::error::NodeServiceError;
 use crate::services::{CreateNodeParams, NodeService};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -869,35 +870,63 @@ pub async fn handle_create_schema(
         properties,
     };
 
-    // Store the schema node
-    let created_schema_id = node_service
-        .create_node_with_parent(schema_node_params)
+    // ADR-069 §1b/S3: the schema node, its relationship declarations, and its
+    // description subtree land in ONE transaction. Previously three
+    // independent atomic writes — a failure on the second left a schema node
+    // live with zero relationship rows; a failure on the third left it with
+    // no description subtree, semantically undiscoverable via embedding
+    // search until someone re-ran update_schema with a description. Both are
+    // now impossible: any failure here rolls back the whole create.
+    let relationships_for_tx = relationships.clone();
+    let description_text_for_tx = description_text.clone();
+    let node_service_for_tx = Arc::clone(node_service);
+    // Same id `schema_id` above already computed (schema nodes derive their id
+    // from content) — kept as its own binding because it's the value the
+    // transaction closure actually produced, not merely asserted in advance.
+    let _created_schema_id: String = node_service
+        .with_transaction(move |tx| {
+            let node_service = Arc::clone(&node_service_for_tx);
+            let relationships = relationships_for_tx.clone();
+            let description_text = description_text_for_tx.clone();
+            Box::pin(async move {
+                let created_schema_id = node_service
+                    .create_node_with_parent_in_tx(tx, schema_node_params)
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::transaction_failed(format!(
+                            "Failed to create schema node: {e}"
+                        ))
+                    })?;
+
+                if !relationships.is_empty() {
+                    node_service
+                        .set_schema_relationships_in_tx(tx, &created_schema_id, &relationships)
+                        .await?;
+                }
+
+                create_description_subtree_in_tx(
+                    &node_service,
+                    tx,
+                    &created_schema_id,
+                    &description_text,
+                )
+                .await
+                .map_err(|e| {
+                    NodeServiceError::transaction_failed(format!(
+                        "Failed to create description subtree: {e}"
+                    ))
+                })?;
+
+                Ok(created_schema_id)
+            })
+        })
         .await
         .map_err(|e| {
             MarkdownError::internal_error(format!(
-                "Failed to create schema node for '{}': {}",
+                "Failed to create schema '{}': {}",
                 schema_id, e
             ))
         })?;
-
-    // Write relationship declarations as relationship-table rows. Runs after
-    // the node create so the declaring-schema FK endpoint exists (targets were
-    // validated to exist above).
-    if !relationships.is_empty() {
-        node_service
-            .set_schema_relationships(&created_schema_id, &relationships)
-            .await
-            .map_err(|e| {
-                MarkdownError::internal_error(format!(
-                    "Failed to store relationship declarations for '{}': {}",
-                    created_schema_id, e
-                ))
-            })?;
-    }
-
-    // Store the description as a child node subtree so it is included in the
-    // schema's embedding and enables synonym-based semantic discovery.
-    create_description_subtree(node_service, &created_schema_id, &description_text).await?;
 
     let output = CreateSchemaOutput {
         schema_id: schema_id.clone(),
@@ -1534,6 +1563,61 @@ async fn create_description_subtree(
 
     node_service
         .bulk_create_hierarchy(bulk_nodes)
+        .await
+        .map_err(|e| {
+            MarkdownError::internal_error(format!(
+                "Failed to create description subtree for schema '{}': {}",
+                schema_id, e
+            ))
+        })?;
+
+    Ok(())
+}
+
+/// `_in_tx` twin of [`create_description_subtree`] (ADR-069 §1b/S3). Same
+/// markdown-to-nodes preparation; the insert composes into the caller's
+/// transaction via `NodeService::bulk_create_hierarchy_in_tx` instead of
+/// opening a new one.
+async fn create_description_subtree_in_tx(
+    node_service: &Arc<NodeService>,
+    tx: &crate::services::node_service::NodeServiceTx<'_>,
+    schema_id: &str,
+    description: &str,
+) -> Result<(), MarkdownError> {
+    use crate::markdown::prepare_nodes_from_markdown;
+
+    if description.trim().is_empty() {
+        return Ok(());
+    }
+
+    let prepared = prepare_nodes_from_markdown(description, Some(schema_id.to_string()))?;
+    if prepared.is_empty() {
+        return Ok(());
+    }
+
+    let bulk_nodes: Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        f64,
+        serde_json::Value,
+    )> = prepared
+        .into_iter()
+        .map(|n| {
+            (
+                n.id,
+                n.node_type,
+                n.content,
+                n.parent_id,
+                n.order,
+                n.properties,
+            )
+        })
+        .collect();
+
+    node_service
+        .bulk_create_hierarchy_in_tx(tx, bulk_nodes)
         .await
         .map_err(|e| {
             MarkdownError::internal_error(format!(

@@ -280,6 +280,78 @@ impl NodeService {
         &self,
         params: CreateNodeParams,
     ) -> Result<String, NodeServiceError> {
+        let (node, parent, node_type) = self.prepare_create_node_with_parent(params).await?;
+        let has_parent = parent.is_some();
+
+        let created_id = if let Some((parent_id, position)) = parent {
+            let service = self.clone();
+            let service_for_tx = service.clone();
+            service
+                .with_transaction(move |tx| {
+                    Box::pin(async move {
+                        let created_id = service_for_tx.create_node_in_tx(tx, node).await?;
+                        service_for_tx
+                            .create_parent_edge_in_tx(tx, &created_id, &parent_id, position.as_ref())
+                            .await?;
+                        Ok(created_id)
+                    })
+                })
+                .await?
+        } else {
+            self.create_node(node).await?
+        };
+
+        self.queue_created_root_for_embedding(&created_id, &node_type, has_parent)
+            .await;
+
+        Ok(created_id)
+    }
+
+    /// `_in_tx` twin of [`Self::create_node_with_parent`] (ADR-069 §1b/S3),
+    /// composable into a caller's own transaction — e.g. `handle_create_schema`
+    /// composing the schema node create with its relationship declarations and
+    /// description subtree. Shares the same validation/preparation pipeline;
+    /// the node insert and parent edge (when there is a parent) land on the
+    /// same `tx` the caller is already holding. Embedding-marker queueing is
+    /// intentionally NOT reproduced here — it is derived state outside the
+    /// boundary by design (ADR-069 §5); a caller needing it should queue
+    /// after its own `with_transaction` commits, the way `handle_create_schema`
+    /// does not need to (schema nodes are not embedded root content).
+    pub(crate) async fn create_node_with_parent_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        params: CreateNodeParams,
+    ) -> Result<String, NodeServiceError> {
+        let (node, parent, _node_type) = self.prepare_create_node_with_parent(params).await?;
+
+        let created_id = self.create_node_in_tx(tx, node).await?;
+        if let Some((parent_id, position)) = parent {
+            self.create_parent_edge_in_tx(tx, &created_id, &parent_id, position.as_ref())
+                .await?;
+        }
+
+        Ok(created_id)
+    }
+
+    /// Shared validation/preparation pipeline for
+    /// [`Self::create_node_with_parent`] and
+    /// [`Self::create_node_with_parent_in_tx`] (steps 1-6 of the original
+    /// method): date-container bootstrap, node_type/parent/sibling
+    /// validation, ID generation, and title computation. Returns the fully
+    /// constructed `Node` plus, when a parent was requested, its resolved
+    /// `(parent_id, position)` — everything the caller needs to perform
+    /// steps 6+7 either standalone or composed into an outer transaction.
+    async fn prepare_create_node_with_parent(
+        &self,
+        params: CreateNodeParams,
+    ) -> Result<
+        (
+            Node,
+            Option<(String, crate::services::InsertPositionOwned)>,
+            String,
+        ),
+        NodeServiceError,
+    > {
         // Make params mutable so we can resolve InsertPositionOwned::End
         let mut params = params;
         let start = std::time::Instant::now();
@@ -424,6 +496,11 @@ impl NodeService {
                 .await?
         };
 
+        let parent = params
+            .parent_id
+            .clone()
+            .map(|parent_id| (parent_id, params.position.clone()));
+
         let node = Node {
             id: node_id,
             node_type: params.node_type,
@@ -438,75 +515,46 @@ impl NodeService {
             lifecycle_status: "active".to_string(),
         };
 
-        // Steps 6+7 (ADR-069 §1b/S2): the node insert and its parent edge
-        // land in ONE transaction, closing the orphaned-root hazard —
-        // previously two independent atomic writes, where a failure on the
-        // edge left the node row live with no `has_child` edge (a
-        // silently-orphaned root visible in `get_roots()`). A parent-less
-        // create (`params.parent_id.is_none()`, e.g. a root/date node) still
-        // opens its own single-statement transaction via `create_node`'s
-        // standalone wrapper — nothing to compose when there is no edge.
         tracing::debug!(
-            "create_node_with_parent: about to create node{} at {}ms",
-            if params.parent_id.is_some() {
-                " + parent edge"
-            } else {
-                ""
-            },
-            start.elapsed().as_millis()
-        );
-        let created_id = if let Some(ref parent_id) = params.parent_id {
-            let parent_id = parent_id.clone();
-            let position = params.position.clone();
-            // `with_transaction`'s closure must be `'static`, so an owned
-            // clone (cheap — `NodeService` is a handful of `Arc`s) moves in
-            // rather than borrowing `&self`.
-            let service = self.clone();
-            let service_for_tx = service.clone();
-            service
-                .with_transaction(move |tx| {
-                    Box::pin(async move {
-                        let created_id = service_for_tx.create_node_in_tx(tx, node).await?;
-                        service_for_tx
-                            .create_parent_edge_in_tx(tx, &created_id, &parent_id, position.as_ref())
-                            .await?;
-                        Ok(created_id)
-                    })
-                })
-                .await?
-        } else {
-            self.create_node(node).await?
-        };
-        tracing::debug!(
-            node_id = %created_id,
-            "create_node_with_parent: create completed at {}ms",
+            "create_node_with_parent: prepared node{} at {}ms",
+            if parent.is_some() { " + parent edge" } else { "" },
             start.elapsed().as_millis()
         );
 
-        // Step 8: Post-commit follow-up (embedding queueing — deliberately
-        // outside the transaction boundary, ADR-069 §5: derived state with
-        // its own reconciliation loop).
-        if params.parent_id.is_some() {
-            // Step 8a: Child node created - queue root for embedding regeneration
-            // The new child's content should be included in the root's aggregate embedding
-            // (root-aggregate model)
+        Ok((node, parent, node_type))
+    }
+
+    /// Post-commit follow-up for [`Self::create_node_with_parent`]: queue the
+    /// created node's aggregate root for embedding regeneration. Deliberately
+    /// outside the transaction boundary (ADR-069 §5) — embedding markers are
+    /// derived state with their own reconciliation loop, and a queueing
+    /// failure must never fail or roll back a create that already committed.
+    async fn queue_created_root_for_embedding(
+        &self,
+        created_id: &str,
+        node_type: &str,
+        has_parent: bool,
+    ) {
+        if has_parent {
+            // Child node created - queue root for embedding regeneration.
+            // The new child's content should be included in the root's
+            // aggregate embedding (root-aggregate model).
             #[cfg(feature = "nlp")]
-            self.queue_root_for_embedding(&created_id).await;
+            self.queue_root_for_embedding(created_id).await;
         } else {
-            // Step 8b: Root node created - queue for embedding if embeddable type
-            // (root-aggregate model)
-            // Stale markers are written unconditionally (even without the `nlp` feature) so
-            // that a build re-enabled with NLP picks up existing roots without a manual resync.
-            if self.is_embeddable_type(&node_type) {
-                if let Err(e) = self.store.create_stale_embedding_marker(&created_id).await {
-                    // Log warning but don't fail the creation - embedding will be regenerated later
+            // Root node created - queue for embedding if embeddable type
+            // (root-aggregate model). Stale markers are written
+            // unconditionally (even without the `nlp` feature) so a build
+            // re-enabled with NLP picks up existing roots without a manual
+            // resync.
+            if self.is_embeddable_type(node_type) {
+                if let Err(e) = self.store.create_stale_embedding_marker(created_id).await {
                     tracing::warn!(
                         "Failed to create embedding marker for new root {}: {}",
                         created_id,
                         e
                     );
                 } else {
-                    // Wake the embedding processor to process the new root
                     tracing::debug!(
                         "Queued new root {} for embedding (direct creation)",
                         created_id
@@ -518,8 +566,6 @@ impl NodeService {
                 }
             }
         }
-
-        Ok(created_id)
     }
 
     /// Auto-create date container if it doesn't exist in the database

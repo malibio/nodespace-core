@@ -194,6 +194,111 @@ impl NodeService {
         Ok(result)
     }
 
+    /// `_in_tx` twin of [`Self::bulk_create_hierarchy`] (ADR-069 §1b/S3).
+    /// Identical schema-cache/validation preamble; the insert lands on
+    /// `tx.store_tx()` via the store's own `bulk_create_hierarchy_in_tx`
+    /// instead of opening a new transaction — this is what lets
+    /// `create_description_subtree` compose into `handle_create_schema`'s
+    /// outer transaction alongside the schema node and its relationship
+    /// declarations. Root embedding-queueing is intentionally NOT
+    /// reproduced here: it is derived state outside the boundary by design
+    /// (ADR-069 §5) and the one current caller's root here is a schema
+    /// node's description subtree, which is not itself embedded — a future
+    /// caller that needs it should queue after `with_transaction` commits.
+    /// Emits one `NodeCreated` event per inserted node, buffered the same
+    /// way `create_node_in_tx` buffers its own.
+    pub(crate) async fn bulk_create_hierarchy_in_tx(
+        &self,
+        tx: &NodeServiceTx<'_>,
+        nodes: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            f64,
+            serde_json::Value,
+        )>,
+    ) -> Result<Vec<String>, NodeServiceError> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let unique_types: std::collections::HashSet<&str> = nodes
+            .iter()
+            .map(|(_, node_type, _, _, _, _)| node_type.as_str())
+            .collect();
+
+        let mut schema_cache: std::collections::HashMap<
+            String,
+            Option<Vec<crate::models::SchemaField>>,
+        > = std::collections::HashMap::new();
+        for node_type in unique_types {
+            if node_type != "schema" {
+                let fields = match self.get_schema_for_type(node_type).await? {
+                    Some(schema_json) => match schema_json.get("fields") {
+                        Some(fields_json) => serde_json::from_value(fields_json.clone()).ok(),
+                        None => None,
+                    },
+                    None => None,
+                };
+                schema_cache.insert(node_type.to_string(), fields);
+            }
+        }
+
+        let nodes_normalized: Vec<_> = nodes
+            .into_iter()
+            .map(|(id, node_type, content, parent_id, order, properties)| {
+                let normalized_props =
+                    Self::normalize_flat_properties_to_namespace(&node_type, &properties);
+                (id, node_type, content, parent_id, order, normalized_props)
+            })
+            .collect();
+
+        for (id, node_type, content, _, _, properties) in &nodes_normalized {
+            let temp_node = Node {
+                id: id.clone(),
+                node_type: node_type.clone(),
+                content: content.clone(),
+                version: 1,
+                properties: properties.clone(),
+                mentions: vec![],
+                mentioned_in: vec![],
+                created_at: chrono::Utc::now(),
+                modified_at: chrono::Utc::now(),
+                title: None,
+                lifecycle_status: "active".to_string(),
+            };
+
+            self.behaviors.validate_node(&temp_node)?;
+
+            if node_type != "schema" {
+                if let Some(Some(fields)) = schema_cache.get(node_type) {
+                    self.validate_node_with_fields(&temp_node, fields)?;
+                }
+            }
+        }
+
+        let node_types: Vec<String> = nodes_normalized
+            .iter()
+            .map(|(_, node_type, ..)| node_type.clone())
+            .collect();
+
+        let result = self
+            .store
+            .bulk_create_hierarchy_in_tx(tx.store_tx(), nodes_normalized)
+            .await
+            .map_err(|e| NodeServiceError::query_failed(e.to_string()))?;
+
+        for (id, node_type) in result.iter().zip(node_types.iter()) {
+            self.emit_event(DomainEvent::NodeCreated {
+                node_id: id.clone(),
+                node_type: node_type.clone(),
+            });
+        }
+
+        Ok(result)
+    }
+
     /// Bulk create nodes with root-only notification (for large imports)
     ///
     /// Same as `bulk_create_hierarchy` but only emits domain events for the root node,
