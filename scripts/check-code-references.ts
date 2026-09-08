@@ -8,8 +8,14 @@
 // doc-path references (all outside packages/agent/nlp-engine) were fixed in
 // that same pass, and this check's own scan of SCAN_ROOTS below — which
 // deliberately excludes packages/agent and packages/nlp-engine, outside its
-// scope — now counts 282 issue-number references and 0 doc-path references.
-// Retroactively triaging all 282 remaining issue-number references is a
+// scope — counted 282 issue-number references and 0 doc-path references at
+// that point. Since then: +2 from a concurrent PR that landed while this
+// check's baseline was in flight (packages/daemon/src/main.rs, "(see
+// core#2357)" on a still-open tracking issue, added at 5 call sites total —
+// paid back down by dropping the bare reference from all 5, since the
+// constraint each one guards was already fully spelled out in the same
+// sentence). Current count: 279.
+// Retroactively triaging all remaining issue-number references is a
 // separate, much larger undertaking — each one needs individual judgment (is
 // this constraint-bearing, provenance-only, or a doc-pointer?) — not
 // attempted here. What this DOES do: ratchet the count down-only, so the
@@ -54,7 +60,7 @@ const DOC_PATH_PATTERN = /nodespace-docs\//;
 
 // Ratchet baselines. See the file-level comment: lower on paydown, never raise.
 export const BASELINES = {
-  issueNumberReferences: 282,
+  issueNumberReferences: 279,
   docPathReferences: 0,
 };
 
