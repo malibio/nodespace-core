@@ -50,6 +50,17 @@ assertion \`left == right\` failed
   test("does not misclassify prose that merely mentions 'signal' without a number", () => {
     expect(classifyFailure("the function returns a signal to the caller")).toBe("failure");
   });
+
+  test("recognizes the bare \"process didn't exit successfully ... (signal\" wording", () => {
+    // No "signal:" + digits (so /signal:\s*\d+/i can't be the one carrying
+    // this), no SIG* name, no "segmentation fault"/"core dumped" — isolates
+    // the dedicated /process didn't exit successfully.*\(signal/i pattern.
+    expect(classifyFailure("process didn't exit successfully: `foo` (signal 9)")).toBe("abort");
+  });
+
+  test("recognizes STATUS_ACCESS_VIOLATION (the Windows equivalent) case-insensitively", () => {
+    expect(classifyFailure("Process exited with status_access_violation")).toBe("abort");
+  });
 });
 
 describe("extractFailureOutput", () => {
