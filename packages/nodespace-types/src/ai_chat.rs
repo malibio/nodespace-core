@@ -65,7 +65,12 @@ pub struct AiChatNode {
     pub properties: serde_json::Value,
     #[serde(default, skip_serializing_if = "is_active_lifecycle")]
     pub lifecycle_status: String,
-    pub status: String,
+    /// Inference turn state (`"idle"` / `"processing"`), daemon-owned.
+    pub turn_status: String,
+    /// Session lifecycle (`"active"` / `"archived"`), PTY-owned. Independent
+    /// of `turn_status` — see `nodespace_core::models::AiChatNode`'s module
+    /// docs for why these are two properties rather than one shared `status`.
+    pub session_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -79,7 +79,15 @@ describe('SharedNodeStore', () => {
 
       store.updateNode(
         aiChatNode.id,
-        { properties: { messages: [], status: 'active', provider: 'native', model: 'm1' } },
+        {
+          properties: {
+            messages: [],
+            turnStatus: 'idle',
+            sessionStatus: 'active',
+            provider: 'native',
+            model: 'm1'
+          }
+        },
         viewerSource,
         skip
       );
@@ -87,7 +95,8 @@ describe('SharedNodeStore', () => {
       const node = store.getNode(aiChatNode.id) as unknown as Record<string, unknown>;
       expect(node.provider).toBe('native');
       expect(node.model).toBe('m1');
-      expect(node.status).toBe('active');
+      expect(node.turnStatus).toBe('idle');
+      expect(node.sessionStatus).toBe('active');
       expect(Array.isArray(node.messages)).toBe(true);
     });
 
@@ -100,17 +109,18 @@ describe('SharedNodeStore', () => {
         skip
       );
 
-      // Sending a message writes messages+status but NOT provider/model
+      // Sending a message writes messages+turnStatus but NOT provider/model —
+      // and NOT sessionStatus, which belongs to the PTY path.
       store.updateNode(
         aiChatNode.id,
-        { properties: { messages: [{ role: 'user', content: 'hi' }], status: 'processing' } },
+        { properties: { messages: [{ role: 'user', content: 'hi' }], turnStatus: 'processing' } },
         viewerSource,
         skip
       );
 
       const node = store.getNode(aiChatNode.id) as unknown as Record<string, unknown>;
       expect((node.messages as unknown[]).length).toBe(1);
-      expect(node.status).toBe('processing');
+      expect(node.turnStatus).toBe('processing');
       // The omitted-field guard must leave these intact
       expect(node.provider).toBe('native');
       expect(node.model).toBe('m1');

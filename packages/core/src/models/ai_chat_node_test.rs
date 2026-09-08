@@ -23,7 +23,8 @@ mod tests {
     fn from_node_reads_nested_namespace() {
         let node = ai_chat_node(json!({
             "ai-chat": {
-                "status": "processing",
+                "turn_status": "processing",
+                "session_status": "active",
                 "provider": "native",
                 "model": "gemma-3n-e4b",
                 "messages": [
@@ -33,7 +34,8 @@ mod tests {
         }));
 
         let chat = AiChatNode::from_node(node).unwrap();
-        assert_eq!(chat.status, "processing");
+        assert_eq!(chat.turn_status, "processing");
+        assert_eq!(chat.session_status, "active");
         assert_eq!(chat.provider.as_deref(), Some("native"));
         assert_eq!(chat.model.as_deref(), Some("gemma-3n-e4b"));
         assert_eq!(chat.messages.len(), 1);
@@ -49,13 +51,15 @@ mod tests {
     fn from_node_falls_back_to_flat_properties() {
         // After flatten_properties_for_api, fields live at the top level.
         let node = ai_chat_node(json!({
-            "status": "idle",
+            "turn_status": "idle",
+            "session_status": "archived",
             "model": "gemma-3n-e4b",
             "messages": [{ "role": "assistant", "content": "Hi" }]
         }));
 
         let chat = AiChatNode::from_node(node).unwrap();
-        assert_eq!(chat.status, "idle");
+        assert_eq!(chat.turn_status, "idle");
+        assert_eq!(chat.session_status, "archived");
         assert_eq!(chat.model.as_deref(), Some("gemma-3n-e4b"));
         assert_eq!(chat.messages.len(), 1);
         assert_eq!(chat.messages[0].role, "assistant");
@@ -65,7 +69,8 @@ mod tests {
     fn from_node_defaults_when_empty() {
         let node = ai_chat_node(json!({ "ai-chat": {} }));
         let chat = AiChatNode::from_node(node).unwrap();
-        assert_eq!(chat.status, "");
+        assert_eq!(chat.turn_status, "");
+        assert_eq!(chat.session_status, "");
         assert!(chat.provider.is_none());
         assert!(chat.model.is_none());
         assert!(chat.messages.is_empty());
@@ -75,7 +80,8 @@ mod tests {
     fn round_trips_through_into_node_and_from_node() {
         let original = ai_chat_node(json!({
             "ai-chat": {
-                "status": "processing",
+                "turn_status": "processing",
+                "session_status": "active",
                 "provider": "native",
                 "model": "gemma-3n-e4b",
                 "messages": [
@@ -88,10 +94,53 @@ mod tests {
         let rebuilt = chat.clone().into_node();
         let chat2 = AiChatNode::from_node(rebuilt).unwrap();
 
-        assert_eq!(chat.status, chat2.status);
+        assert_eq!(chat.turn_status, chat2.turn_status);
+        assert_eq!(chat.session_status, chat2.session_status);
         assert_eq!(chat.provider, chat2.provider);
         assert_eq!(chat.model, chat2.model);
         assert_eq!(chat.messages, chat2.messages);
+    }
+
+    /// The split's whole point: archiving a session must not disturb whatever
+    /// the turn state happened to be, and vice versa — the two axes are
+    /// independently valued and independently persisted, never one clobbering
+    /// the other through a shared key.
+    #[test]
+    fn session_status_and_turn_status_are_independent_through_a_round_trip() {
+        let node = ai_chat_node(json!({
+            "ai-chat": {
+                "turn_status": "processing",
+                "session_status": "active",
+                "messages": []
+            }
+        }));
+
+        // The PTY path archives the session — it never touches turn_status.
+        let mut chat = AiChatNode::from_node(node).unwrap();
+        assert_eq!(chat.turn_status, "processing");
+        chat.session_status = "archived".to_string();
+
+        let rebuilt = chat.into_node();
+        let chat2 = AiChatNode::from_node(rebuilt).unwrap();
+        assert_eq!(
+            chat2.session_status, "archived",
+            "the archive write must persist"
+        );
+        assert_eq!(
+            chat2.turn_status, "processing",
+            "archiving the session must not disturb the turn state"
+        );
+
+        // The daemon then completes the turn — it never touches session_status.
+        let mut chat3 = chat2;
+        chat3.turn_status = "idle".to_string();
+        let rebuilt2 = chat3.into_node();
+        let chat4 = AiChatNode::from_node(rebuilt2).unwrap();
+        assert_eq!(chat4.turn_status, "idle", "the turn-completion write must persist");
+        assert_eq!(
+            chat4.session_status, "archived",
+            "completing the turn must not un-archive the session"
+        );
     }
 
     #[test]
@@ -127,12 +176,12 @@ mod tests {
         // Simulate the daemon's read-modify-write: a node whose properties carry
         // both the ai-chat namespace and an unrelated sibling namespace.
         let node = ai_chat_node(json!({
-            "ai-chat": { "status": "processing", "messages": [] },
+            "ai-chat": { "turn_status": "processing", "session_status": "active", "messages": [] },
             "custom": { "keep": "me" }
         }));
 
         let mut chat = AiChatNode::from_node(node.clone()).unwrap();
-        chat.status = "idle".to_string();
+        chat.turn_status = "idle".to_string();
         chat.messages.push(AiChatMessage {
             role: "assistant".to_string(),
             content: "done".to_string(),
@@ -147,22 +196,27 @@ mod tests {
         props["ai-chat"] = chat.to_properties_value();
 
         assert_eq!(props["custom"]["keep"], json!("me"));
-        assert_eq!(props["ai-chat"]["status"], json!("idle"));
+        assert_eq!(props["ai-chat"]["turn_status"], json!("idle"));
+        assert_eq!(
+            props["ai-chat"]["session_status"],
+            json!("active"),
+            "an untouched axis must survive the write unchanged"
+        );
         assert_eq!(props["ai-chat"]["messages"][0]["content"], json!("done"));
     }
 
     /// One unreadable message must not take the conversation with it.
     ///
     /// Decoding the array as a single `Vec` fails wholesale on any one bad
-    /// element, and callers that write the node back — a status update does —
-    /// re-serialise from this struct, so a read that silently yields zero
-    /// messages *persists* as an erased conversation. Per-message decoding keeps
-    /// the loss to the message actually at fault.
+    /// element, and callers that write the node back — a turn-status update
+    /// does — re-serialise from this struct, so a read that silently yields
+    /// zero messages *persists* as an erased conversation. Per-message
+    /// decoding keeps the loss to the message actually at fault.
     #[test]
     fn one_unreadable_message_does_not_erase_the_conversation() {
         let node = ai_chat_node(json!({
             "ai-chat": {
-                "status": "idle",
+                "turn_status": "idle",
                 "messages": [
                     { "role": "user", "content": "hello" },
                     // Malformed: `content` is required and must be a string.
@@ -190,7 +244,7 @@ mod tests {
     fn a_write_without_an_identity_does_not_erase_the_conversation() {
         let node = ai_chat_node(json!({
             "ai-chat": {
-                "status": "idle",
+                "turn_status": "idle",
                 "messages": [
                     { "role": "user", "content": "add a task" },
                     {
@@ -216,7 +270,7 @@ mod tests {
     fn completed_write_identity_round_trips() {
         let node = ai_chat_node(json!({
             "ai-chat": {
-                "status": "idle",
+                "turn_status": "idle",
                 "messages": [{
                     "role": "assistant",
                     "content": "Added.",

@@ -52,16 +52,18 @@ describe('nodeToAiChatNode', () => {
     expect(chat.nodeType).toBe('ai-chat');
   });
 
-  it('defaults status to "active" when absent', () => {
+  it('defaults turnStatus to "idle" and sessionStatus to "active" when absent', () => {
     const node = makeNode();
     const chat = nodeToAiChatNode(node);
-    expect(chat.status).toBe('active');
+    expect(chat.turnStatus).toBe('idle');
+    expect(chat.sessionStatus).toBe('active');
   });
 
-  it('preserves an explicit status', () => {
-    const node = makeNode({ status: 'processing' });
+  it('preserves explicit turnStatus and sessionStatus independently', () => {
+    const node = makeNode({ turnStatus: 'processing', sessionStatus: 'archived' });
     const chat = nodeToAiChatNode(node);
-    expect(chat.status).toBe('processing');
+    expect(chat.turnStatus).toBe('processing');
+    expect(chat.sessionStatus).toBe('archived');
   });
 
   it('defaults messages to [] when missing', () => {

@@ -13,15 +13,19 @@
 
   Node-as-message-queue architecture: the node is the single source of truth.
   - Frontend writes `updateNode` to append the user message and set
-    `status: 'processing'` — that status write is the trigger the daemon watches
-    for. The daemon owns every subsequent status write for the turn.
+    `turnStatus: 'processing'` — that write is the trigger the daemon watches
+    for. The daemon owns every subsequent turnStatus write for the turn.
   - LocalAgentService in the daemon reacts to node changes and drives inference.
   - Streaming tokens arrive via Tauri events (local-agent://chunk) and accumulate
     in a local `streamingContent` buffer. The buffer is cleared when WatchNodes
     delivers the completed assistant message.
-  - Typing indicator driven by the node's top-level `status === 'processing'`. The
-    daemon flattens the `ai-chat` namespace before it reaches the frontend, so
-    this reads `node.status`, never `node.properties['ai-chat'].status`.
+  - Typing indicator driven by the node's top-level `turnStatus === 'processing'`.
+    The daemon flattens the `ai-chat` namespace before it reaches the frontend, so
+    this reads `node.turnStatus`, never `node.properties['ai-chat'].turn_status`.
+  - `turnStatus` and `sessionStatus` are independent axes (turn/inference state
+    vs. PTY session lifecycle) — see `ai-chat-node.ts`'s doc comments. This
+    viewer only reads/writes `turnStatus`; `sessionStatus` belongs to
+    `AiChatPtySession`.
 -->
 
 <script lang="ts">
@@ -89,7 +93,7 @@
   const lifecycleStatus = $derived(node?.lifecycleStatus ?? 'active');
 
   /** True while the daemon is processing an inference turn for this node. */
-  const isProcessing = $derived(node?.status === 'processing');
+  const isProcessing = $derived(node?.turnStatus === 'processing');
 
   /** True once the first user message has been sent — locks model selector. */
   const hasMessages = $derived(
@@ -165,7 +169,8 @@
         {
           properties: {
             messages: current?.messages ?? [],
-            status: current?.status ?? 'active',
+            turnStatus: current?.turnStatus ?? 'idle',
+            sessionStatus: current?.sessionStatus ?? 'active',
             provider: 'native',
             model: selection.modelId,
           },
@@ -186,7 +191,8 @@
         {
           properties: {
             messages: current?.messages ?? [],
-            status: current?.status ?? 'active',
+            turnStatus: current?.turnStatus ?? 'idle',
+            sessionStatus: current?.sessionStatus ?? 'active',
             provider: 'pty',
             model: selection.modelId || null,
           },
@@ -203,7 +209,8 @@
       {
         properties: {
           messages: current?.messages ?? [],
-          status: current?.status ?? 'active',
+          turnStatus: current?.turnStatus ?? 'idle',
+          sessionStatus: current?.sessionStatus ?? 'active',
           provider: selection.provider,
           model: selection.modelId,
         },
@@ -251,7 +258,7 @@
       timestamp: new Date().toISOString(),
     };
 
-    // Ensure the model is loaded before writing status:processing to the node.
+    // Ensure the model is loaded before writing turnStatus:processing to the node.
     // For local models this may trigger a download — isEnsuringModel shows an
     // overlay so the user sees progress rather than a frozen UI.
     isEnsuringModel = true;
@@ -269,14 +276,15 @@
       ensuringModelPhase = null;
     }
 
-    // Set status:'processing' so the typing indicator appears and the daemon
-    // picks up the turn via NodeUpdated. Model is guaranteed loaded above.
+    // Set turnStatus:'processing' so the typing indicator appears and the
+    // daemon picks up the turn via NodeUpdated. Model is guaranteed loaded
+    // above. sessionStatus is untouched — this write only owns turnStatus.
     sharedNodeStore.updateNode(
       nodeId,
       {
         properties: {
           messages: [...existingMessages, newMessage],
-          status: 'processing',
+          turnStatus: 'processing',
         },
       },
       { type: 'viewer', viewerId: 'ai-chat-viewer' }

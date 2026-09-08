@@ -61,13 +61,15 @@ function buildPtyUpdate(
   agentId: string
 ): {
   messages: unknown[];
-  status: string;
+  turnStatus: string;
+  sessionStatus: string;
   provider: string;
   model: string | null;
 } {
   return {
     messages: current?.messages ?? [],
-    status: current?.status ?? 'active',
+    turnStatus: current?.turnStatus ?? 'idle',
+    sessionStatus: current?.sessionStatus ?? 'active',
     provider: 'pty',
     model: agentId || null,
   };
@@ -162,10 +164,11 @@ describe('AiChatModelSelector — PTY agent list derivation', () => {
 });
 
 describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
-  it('writes provider "pty" with the selected agent id as model, preserving existing messages/status', () => {
+  it('writes provider "pty" with the selected agent id as model, preserving existing messages/turnStatus/sessionStatus', () => {
     const current: Partial<AiChatNode> = {
       messages: [{ role: 'user', content: 'hi' }] as AiChatNode['messages'],
-      status: 'active',
+      turnStatus: 'processing',
+      sessionStatus: 'active',
     };
 
     const update = buildPtyUpdate(current, 'claude-code');
@@ -173,16 +176,18 @@ describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
     expect(update.provider).toBe('pty');
     expect(update.model).toBe('claude-code');
     expect(update.messages).toEqual(current.messages);
-    expect(update.status).toBe('active');
+    expect(update.turnStatus).toBe('processing');
+    expect(update.sessionStatus).toBe('active');
   });
 
-  it('defaults messages to [] and status to "active" for a fresh node', () => {
+  it('defaults messages to [], turnStatus to "idle", and sessionStatus to "active" for a fresh node', () => {
     const update = buildPtyUpdate(undefined, 'gemini-cli');
 
     expect(update.provider).toBe('pty');
     expect(update.model).toBe('gemini-cli');
     expect(update.messages).toEqual([]);
-    expect(update.status).toBe('active');
+    expect(update.turnStatus).toBe('idle');
+    expect(update.sessionStatus).toBe('active');
   });
 
   it('nulls model when no agent id is provided', () => {
@@ -190,7 +195,8 @@ describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
       provider: 'native',
       model: 'gemma-4-e4b-q4km',
       messages: [],
-      status: 'active',
+      turnStatus: 'idle',
+      sessionStatus: 'active',
     };
 
     const update = buildPtyUpdate(current, '');

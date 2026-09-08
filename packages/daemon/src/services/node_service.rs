@@ -2876,10 +2876,10 @@ mod tests {
 
     /// A generic-path (non-task) VersionConflict must embed `current_node` in the
     /// FLATTENED wire shape the frontend's typed converters expect — the same shape
-    /// every successful read/write returns. An ai-chat node whose `status` and
+    /// every successful read/write returns. An ai-chat node whose `turnStatus` and
     /// `messages` sit under `properties["ai-chat"]` instead of at the top level
-    /// hydrates the store with a node whose `status` is undefined, which strands
-    /// the viewer's typing indicator after a conflict.
+    /// hydrates the store with a node whose `turnStatus` is undefined, which
+    /// strands the viewer's typing indicator after a conflict.
     #[tokio::test]
     async fn update_node_version_conflict_embeds_flattened_current_node() {
         let (svc, _tmp) = make_service().await;
@@ -2895,14 +2895,14 @@ mod tests {
             collection_ids: Vec::new(),
             lifecycle_status: None,
             properties: serde_json::json!({
-                "ai-chat": { "status": "processing", "messages": [] }
+                "ai-chat": { "turn_status": "processing", "messages": [] }
             })
             .to_string(),
             position: None,
         });
         svc.create_node(create_req).await.unwrap();
 
-        // Concurrent winner: daemon completes the turn and writes status idle.
+        // Concurrent winner: daemon completes the turn and writes turn_status idle.
         svc.node_service
             .update_node(
                 chat_id,
@@ -2912,7 +2912,7 @@ mod tests {
                     node_type: None,
                     properties: Some(serde_json::json!({
                         "ai-chat": {
-                            "status": "idle",
+                            "turn_status": "idle",
                             "messages": [{ "role": "assistant", "content": "hi" }]
                         }
                     })),
@@ -2930,7 +2930,7 @@ mod tests {
             node_type: None,
             content: None,
             properties: Some(
-                serde_json::json!({ "ai-chat": { "status": "processing" } }).to_string(),
+                serde_json::json!({ "ai-chat": { "turn_status": "processing" } }).to_string(),
             ),
             add_to_collections: Vec::new(),
             add_to_collection_ids: Vec::new(),
@@ -2954,8 +2954,8 @@ mod tests {
 
         // The frontend reads these at the TOP level (AiChatNode is a flat shape).
         assert_eq!(
-            current["status"], "idle",
-            "current_node must carry flattened top-level status (got {current})"
+            current["turnStatus"], "idle",
+            "current_node must carry flattened top-level turnStatus (got {current})"
         );
         assert!(
             current["messages"].is_array(),

@@ -1781,7 +1781,8 @@ impl NodeBehavior for CollectionNodeBehavior {
 ///     json!({
 ///         "provider": "native",
 ///         "model": "ministral-3b-instruct-q4_k_m",
-///         "status": "active",
+///         "turn_status": "idle",
+///         "session_status": "active",
 ///         "messages": [
 ///             {"role": "user", "content": "Help me implement the webhook handler", "timestamp": "2026-04-03T10:28:00Z"},
 ///             {"role": "assistant", "content": "I can help with that.", "timestamp": "2026-04-03T10:28:05Z"}
@@ -1817,15 +1818,33 @@ impl NodeBehavior for AiChatNodeBehavior {
             }
         }
 
-        // Validate status if present
-        if let Some(status) = node.properties.get("status") {
-            if let Some(status_str) = status.as_str() {
-                match status_str {
+        // Validate turn_status if present — daemon-owned axis, independent of
+        // session_status below (see the module docs on `AiChatNode` for why
+        // these are two properties rather than one shared `status`).
+        if let Some(turn_status) = node.properties.get("turn_status") {
+            if let Some(turn_status_str) = turn_status.as_str() {
+                match turn_status_str {
+                    "idle" | "processing" => {}
+                    _ => {
+                        return Err(NodeValidationError::InvalidProperties(format!(
+                            "Invalid turn_status '{}': must be one of idle, processing",
+                            turn_status_str
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Validate session_status if present — PTY-owned axis, independent of
+        // turn_status above.
+        if let Some(session_status) = node.properties.get("session_status") {
+            if let Some(session_status_str) = session_status.as_str() {
+                match session_status_str {
                     "active" | "archived" => {}
                     _ => {
                         return Err(NodeValidationError::InvalidProperties(format!(
-                            "Invalid status '{}': must be one of active, archived",
-                            status_str
+                            "Invalid session_status '{}': must be one of active, archived",
+                            session_status_str
                         )));
                     }
                 }
@@ -1856,7 +1875,8 @@ impl NodeBehavior for AiChatNodeBehavior {
         serde_json::json!({
             "provider": "native",
             "model": "",
-            "status": "active",
+            "turn_status": "idle",
+            "session_status": "active",
             "last_active": null,
             "context_tokens": 0,
             "created_nodes": [],
@@ -4780,7 +4800,8 @@ mod tests {
             json!({
                 "provider": "native",
                 "model": "ministral-3b-instruct-q4_k_m",
-                "status": "active",
+                "turn_status": "idle",
+                "session_status": "active",
                 "messages": []
             }),
         );
@@ -4810,21 +4831,56 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_chat_node_invalid_status() {
+    fn test_ai_chat_node_invalid_turn_status() {
         let behavior = AiChatNodeBehavior;
         let node = Node::new(
             "ai-chat".to_string(),
             "Chat".to_string(),
-            json!({"status": "deleted"}),
+            json!({"turn_status": "deleted"}),
         );
         let err = behavior.validate(&node).unwrap_err();
         match err {
             NodeValidationError::InvalidProperties(msg) => {
-                assert!(msg.contains("Invalid status"));
+                assert!(msg.contains("Invalid turn_status"));
                 assert!(msg.contains("deleted"));
             }
             _ => panic!("Expected InvalidProperties error"),
         }
+    }
+
+    #[test]
+    fn test_ai_chat_node_invalid_session_status() {
+        let behavior = AiChatNodeBehavior;
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Chat".to_string(),
+            json!({"session_status": "deleted"}),
+        );
+        let err = behavior.validate(&node).unwrap_err();
+        match err {
+            NodeValidationError::InvalidProperties(msg) => {
+                assert!(msg.contains("Invalid session_status"));
+                assert!(msg.contains("deleted"));
+            }
+            _ => panic!("Expected InvalidProperties error"),
+        }
+    }
+
+    /// The whole point of the split: a session archived mid-turn is a legal
+    /// combination now, where a single shared `status` key could never
+    /// represent both axes at once.
+    #[test]
+    fn test_ai_chat_node_archived_while_processing_is_legal() {
+        let behavior = AiChatNodeBehavior;
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Chat".to_string(),
+            json!({"turn_status": "processing", "session_status": "archived"}),
+        );
+        assert!(
+            behavior.validate(&node).is_ok(),
+            "turn_status and session_status must validate independently"
+        );
     }
 
     #[test]
@@ -4874,7 +4930,8 @@ mod tests {
         let behavior = AiChatNodeBehavior;
         let meta = behavior.default_metadata();
         assert_eq!(meta["provider"], "native");
-        assert_eq!(meta["status"], "active");
+        assert_eq!(meta["turn_status"], "idle");
+        assert_eq!(meta["session_status"], "active");
         assert_eq!(meta["context_tokens"], 0);
         assert!(meta["messages"].as_array().unwrap().is_empty());
         assert!(meta["created_nodes"].as_array().unwrap().is_empty());
