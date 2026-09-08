@@ -148,30 +148,45 @@ pub async fn ensure_sqlite_vec_registered() {
 /// can race that check-then-act, or torn-write the shared refcount,
 /// corrupting a struct every connection in the process then shares —
 /// including connections that opened cleanly and never personally raced
-/// anything. Because the corrupted state is a process-global struct that
-/// ordinary SQLite operations (not just opens) read, the failure surfaces
-/// unpredictably: as `SQLITE_MISUSE` ("bad parameter or other API misuse")
-/// on a `PRAGMA`, a query, or a transaction rollback — observed both at
-/// `SqliteStore::new()`/`create_test_service()` setup time and against
-/// already-established connections mid-test, with no code change between a
-/// failing and passing run of the identical test.
+/// anything. The corrupted state is a process-global struct that ordinary
+/// SQLite operations (not just opens) read, which matches every symptom
+/// observed: `SQLITE_MISUSE` ("bad parameter or other API misuse") on a
+/// `PRAGMA`, a query, or a transaction rollback, at `SqliteStore::new()`/
+/// `create_test_service()` setup time and against already-established
+/// connections mid-test, with no code change between a failing and passing
+/// run of the identical test. No crash was ever captured under a debugger,
+/// so this is the strongest available explanation given the vendored source
+/// and the observed failure shapes, not a confirmed-by-backtrace mechanism.
 ///
-/// This is vendored C we cannot patch, and this crate is the workspace's
-/// only dependent on `libsql-ffi` (`cargo tree -i libsql-ffi`), so no other
-/// crate's tests carry this hazard. In production there is exactly one
-/// `SqliteStore` per daemon lifetime, so the race needs genuine test-suite
-/// concurrency (many independent stores opening across real OS threads) to
-/// trigger — confirmed empirically: `--test-threads=1` was 100% clean across
-/// 50+ consecutive runs, while `--test-threads=16` reproduced the failure in
-/// roughly 5-15% of runs. A prior attempt at a narrower fix (a mutex around
-/// just the connection-open call, in `connections.rs`) did not hold up: one
-/// clean 40-run verification still failed twice, including once on an
-/// ordinary query against an already-open connection nowhere near an open
-/// call — proof the corruption isn't bounded to the instant of opening, so
-/// there is no principled guarded region narrower than "every operation on
-/// every connection, for the life of the process" — which is `--test-threads=1`
-/// implemented as a hand-rolled lock, with strictly more surface for a missed
-/// call site. Serializing the whole binary is the direct fix, not a
+/// This is vendored C we cannot patch. This crate is the only workspace
+/// member with a DIRECT `libsql`/`libsql-ffi` dependency, but `libsql-ffi`
+/// is also linked TRANSITIVELY into `nodespace-agent`, `nodespace-daemon`,
+/// and `nodespace-cli` (`cargo tree -i libsql-ffi`), and each of those
+/// crates has its own non-`#[ignore]`d integration tests that call
+/// `SqliteStore::new()` directly and still run at `--test-threads=2` under
+/// `rust:test:workspace`. The same race is reachable there in principle;
+/// it just hasn't been observed to trigger — plausibly because those
+/// suites are far smaller (tens of tests, not 1000+), so two connections
+/// opening at literally the same instant is far less likely. That gap is
+/// a deliberate, tracked deferral, not an oversight — do NOT read "no
+/// other crate's tests carry this hazard" into this comment; they can, at
+/// lower observed odds, and a similar fix may be warranted there if that
+/// changes.
+///
+/// In production there is exactly one `SqliteStore` per daemon lifetime, so
+/// the race needs genuine test-suite concurrency (many independent stores
+/// opening across real OS threads) to trigger — confirmed empirically:
+/// `--test-threads=1` was 100% clean across 50+ consecutive runs, while
+/// `--test-threads=16` reproduced the failure in roughly 5-15% of runs. A
+/// prior attempt at a narrower fix (a mutex around just the connection-open
+/// call, in `connections.rs`) did not hold up: one clean 40-run verification
+/// still failed twice, including once on an ordinary query against an
+/// already-open connection nowhere near an open call — evidence the
+/// corruption isn't bounded to the instant of opening, so there is no
+/// principled guarded region narrower than "every operation on every
+/// connection, for the life of the process" — which is `--test-threads=1`
+/// implemented as a hand-rolled lock, with strictly more surface for a
+/// missed call site. Serializing the whole binary is the direct fix, not a
 /// workaround: see `rust:test:core` in `package.json`.
 pub struct SqliteStore {
     /// The store's SQLite connections. Reachable only through
