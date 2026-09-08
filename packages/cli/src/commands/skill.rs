@@ -118,6 +118,9 @@ fn uninstall() -> Result<()> {
     for agent in &outcome.installed {
         println!("✓ {agent}: removed");
     }
+    for skipped in &outcome.skipped {
+        println!("⚠ {}: {}", skipped.agent, skipped.reason);
+    }
     Ok(())
 }
 
@@ -213,6 +216,15 @@ fn bundled_sidecar_name(name: &str) -> String {
 /// to [`resolve_script_installer`].
 fn resolve_compiled_installer() -> Option<Installer> {
     let exe = std::env::current_exe().ok()?;
+    compiled_installer_beside(&exe)
+}
+
+/// Pure form of [`resolve_compiled_installer`]: takes the executable path as
+/// a parameter (rather than calling `current_exe()` itself) so this is
+/// exercisable against a synthetic directory in a unit test, independent of
+/// where cargo actually places the test binary -- the same seam
+/// `daemon_setup::sidecar_path_from_exe` uses for the identical reason.
+fn compiled_installer_beside(exe: &Path) -> Option<Installer> {
     let dir = exe.parent()?;
     let binary = dir.join(bundled_sidecar_name("nodespace-skill-installer"));
     if !binary.exists() {
@@ -362,6 +374,65 @@ mod tests {
                 bundled_sidecar_name("nodespace-skill-installer"),
                 "nodespace-skill-installer"
             );
+        }
+    }
+
+    #[test]
+    fn compiled_installer_beside_is_none_when_the_sidecar_binary_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_exe = dir.path().join("nodespace");
+        std::fs::write(&fake_exe, b"").expect("write fake exe");
+        // No sidecar written -- resource root present would be irrelevant.
+        std::fs::create_dir_all(dir.path().join("skill")).expect("mkdir skill");
+        std::fs::write(dir.path().join("skill").join("SKILL.md"), b"").expect("write SKILL.md");
+
+        assert!(compiled_installer_beside(&fake_exe).is_none());
+    }
+
+    #[test]
+    fn compiled_installer_beside_is_none_when_the_resource_root_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_exe = dir.path().join("nodespace");
+        std::fs::write(&fake_exe, b"").expect("write fake exe");
+        std::fs::write(
+            dir.path()
+                .join(bundled_sidecar_name("nodespace-skill-installer")),
+            b"",
+        )
+        .expect("write fake sidecar");
+        // No skill/SKILL.md staged alongside it.
+
+        assert!(compiled_installer_beside(&fake_exe).is_none());
+    }
+
+    #[test]
+    fn compiled_installer_beside_resolves_both_pieces_when_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_exe = dir.path().join("nodespace");
+        std::fs::write(&fake_exe, b"").expect("write fake exe");
+        std::fs::write(
+            dir.path()
+                .join(bundled_sidecar_name("nodespace-skill-installer")),
+            b"",
+        )
+        .expect("write fake sidecar");
+        std::fs::create_dir_all(dir.path().join("skill")).expect("mkdir skill");
+        std::fs::write(dir.path().join("skill").join("SKILL.md"), b"").expect("write SKILL.md");
+
+        let installer = compiled_installer_beside(&fake_exe).expect("both pieces staged");
+        match installer {
+            Installer::Compiled {
+                binary,
+                resource_root,
+            } => {
+                assert_eq!(
+                    binary,
+                    dir.path()
+                        .join(bundled_sidecar_name("nodespace-skill-installer"))
+                );
+                assert_eq!(resource_root, dir.path().join("skill"));
+            }
+            Installer::Script { .. } => panic!("expected a compiled installer to resolve"),
         }
     }
 
