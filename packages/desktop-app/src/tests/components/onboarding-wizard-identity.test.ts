@@ -199,7 +199,7 @@ describe('OnboardingWizard identity step (core#2388)', () => {
   });
 
   it('Skip during the main wizard sets identityPromptDismissed via complete_onboarding', async () => {
-    // Regression test (core#2451): a user who declines identity during the
+    // Regression test: a user who declines identity during the
     // main onboarding wizard must not be hit with the separate backfill
     // nudge on their very next launch for the exact thing they just said no
     // to. Skipping here has no direct dismiss command like identityOnly mode

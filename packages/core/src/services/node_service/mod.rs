@@ -1127,13 +1127,19 @@ impl NodeService {
     /// Falls back to the first `person` node when no owner edge is found —
     /// a database whose data predates ADR-037 seeding still resolves to *a*
     /// local person rather than surfacing "no identity" on an otherwise
-    /// healthy install. Returns `None` only when there is no person node at
-    /// all (should not happen post-seed, but this must not panic on data
-    /// that predates it).
+    /// healthy install. That fallback is silent when there are zero
+    /// `has_role` edges at all (the legitimate pre-ADR-037 case), but emits a
+    /// `tracing::warn!` when one or more `has_role` edges exist without any
+    /// carrying `role == "owner"` — today's only seeding path always seeds
+    /// "owner", so a non-empty, non-matching edge set signals a
+    /// data-integrity anomaly rather than expected pre-seeding state.
+    /// Returns `None` only when there is no person node at all (should not
+    /// happen post-seed, but this must not panic on data that predates it).
     pub async fn get_local_person(&self) -> Result<Option<Node>, NodeServiceError> {
         let owners = self
             .get_related_nodes_with_edges(DATABASE_SETTINGS_NODE_ID, "has_role", "in")
             .await?;
+        let has_role_edges_exist = !owners.is_empty();
         let mut owner_edges = owners.into_iter().filter(|(_, edge_properties)| {
             edge_properties
                 .get("role")
@@ -1155,6 +1161,21 @@ impl NodeService {
         }
         if let Some(owner) = owner {
             return Ok(Some(owner));
+        }
+        if has_role_edges_exist {
+            // Data-integrity anomaly: has_role edges exist on the
+            // DatabaseSettingsNode singleton but none carries role == "owner".
+            // Today's only seeding path (`seed_database_settings_if_needed`)
+            // always seeds "owner", so this should be unreachable — warn
+            // rather than silently falling back to "pick any person node",
+            // which would mask a real anomaly once multi-role RBAC lands.
+            // Zero edges at all is the legitimate pre-ADR-037 fallback case
+            // and stays silent.
+            tracing::warn!(
+                settings_node_id = DATABASE_SETTINGS_NODE_ID,
+                "has_role edges found on DatabaseSettingsNode but none has role \"owner\"; \
+                 falling back to the first person node"
+            );
         }
         Ok(self
             .query_nodes_by_type("person", None)
@@ -5046,6 +5067,109 @@ mod tests {
             .unwrap()
             .expect("fallback must still resolve a local person");
         assert_eq!(local.id, seeded_id);
+    }
+
+    // Minimal tracing subscriber that records whether a `WARN`-level event
+    // fired during a closure, without needing a dedicated test-capture crate.
+    struct WarnFlag(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl tracing::subscriber::Subscriber for WarnFlag {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    async fn warn_fired_during<F, Fut, T>(f: F) -> (T, bool)
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = T>,
+    {
+        let fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let subscriber = WarnFlag(fired.clone());
+        // `with_default` only covers the *synchronous* extent of the closure
+        // passed to it — an `.await`ed future keeps running after that
+        // closure returns, on whatever context polls it next, so the guard
+        // must stay entered across the whole await rather than just the
+        // call that constructs the future.
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+        let result = f().await;
+        drop(_guard);
+        (result, fired.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn test_get_local_person_warns_when_has_role_edges_exist_without_owner_role() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let seeded_id = people[0].id.clone();
+
+        // Replace the seeded owner edge with a non-owner-role edge, so
+        // has_role edges exist on the singleton but none has role "owner" —
+        // the anomaly this warning exists to surface.
+        service
+            .delete_relationship(&seeded_id, "has_role", DATABASE_SETTINGS_NODE_ID)
+            .await
+            .unwrap();
+        service
+            .create_relationship(
+                &seeded_id,
+                "has_role",
+                DATABASE_SETTINGS_NODE_ID,
+                serde_json::json!({"role": "member", "status": "active"}),
+            )
+            .await
+            .unwrap();
+
+        let (local, warned) = warn_fired_during(|| service.get_local_person()).await;
+        let local = local
+            .unwrap()
+            .expect("fallback must still resolve a local person");
+        assert_eq!(
+            local.id, seeded_id,
+            "behavior is unchanged: still falls back to the first person node"
+        );
+        assert!(
+            warned,
+            "must warn when has_role edges exist but none has role \"owner\""
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_local_person_does_not_warn_when_no_has_role_edges_exist() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let seeded_id = people[0].id.clone();
+
+        // Legitimate pre-ADR-037 state: no has_role edge at all.
+        service
+            .delete_relationship(&seeded_id, "has_role", DATABASE_SETTINGS_NODE_ID)
+            .await
+            .unwrap();
+
+        let (local, warned) = warn_fired_during(|| service.get_local_person()).await;
+        let local = local
+            .unwrap()
+            .expect("fallback must still resolve a local person");
+        assert_eq!(local.id, seeded_id);
+        assert!(
+            !warned,
+            "must not warn when there are zero has_role edges (expected pre-seeding state)"
+        );
     }
 
     #[tokio::test]
