@@ -9,8 +9,16 @@ INSTALL_DIR="$HOME/.nodespace/bin"
 SOCKET_PATH="$HOME/.nodespace/daemon.sock"
 PLIST_PATH="$HOME/Library/LaunchAgents/app.nodespace.daemon.plist"
 SYSTEMD_SERVICE="$HOME/.config/systemd/user/nodespace.service"
-SKILL_DIR="$HOME/.claude/skills/nodespace"
 LAUNCHD_LABEL="app.nodespace.daemon"
+
+# Skill install dirs for every harness the installer supports (kept in sync
+# by hand with the AGENTS table in packages/skill/src/agents.ts).
+SKILL_DIRS="
+Claude Code:$HOME/.claude/skills/nodespace
+Codex:$HOME/.codex/skills/nodespace
+Gemini:$HOME/.gemini/skills/nodespace
+OpenCode:$HOME/.opencode/skills/nodespace
+"
 
 OS=$(uname -s)
 
@@ -57,11 +65,19 @@ if [ -e "$SOCKET_PATH" ]; then
     printf 'Removed socket %s\n' "$SOCKET_PATH"
 fi
 
-# ── Remove Claude Code skill ───────────────────────────────────────────────────
-if [ -d "$SKILL_DIR" ]; then
-    rm -rf "$SKILL_DIR"
-    printf 'Removed Claude Code skill at %s\n' "$SKILL_DIR"
-fi
+# ── Remove installed skills ───────────────────────────────────────────────────
+IFS='
+'
+for entry in $SKILL_DIRS; do
+    [ -z "$entry" ] && continue
+    name=${entry%%:*}
+    dir=${entry#*:}
+    if [ -d "$dir" ]; then
+        rm -rf "$dir"
+        printf 'Removed %s skill at %s\n' "$name" "$dir"
+    fi
+done
+unset IFS
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 printf '\nNodeSpace uninstalled. Your data at ~/.nodespace/database/ has been preserved.\n'
