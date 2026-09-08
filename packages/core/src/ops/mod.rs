@@ -38,6 +38,13 @@ pub enum OpsError {
     #[error("Delete refused: subtree contains {inaccessible_count} node(s) not accessible to the current actor")]
     SubtreeAccessDenied { inaccessible_count: u64 },
 
+    #[error("Subtree at node '{node_id}' has {count} nodes, exceeding the maximum of {max} supported by GetChildrenTree")]
+    TreeTooLarge {
+        node_id: String,
+        count: usize,
+        max: usize,
+    },
+
     #[error("Validation failed: {0}")]
     ValidationFailed(String),
 
@@ -87,6 +94,15 @@ impl From<NodeServiceError> for OpsError {
             NodeServiceError::CorruptHierarchy(msg) => {
                 OpsError::Internal(format!("Corrupt stored hierarchy: {}", msg))
             }
+            NodeServiceError::TreeTooLarge {
+                node_id,
+                count,
+                max,
+            } => OpsError::TreeTooLarge {
+                node_id,
+                count,
+                max,
+            },
             NodeServiceError::NotAContainer {
                 parent_id,
                 node_type,

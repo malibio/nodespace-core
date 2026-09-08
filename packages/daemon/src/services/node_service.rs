@@ -2100,6 +2100,34 @@ fn ops_error_to_status(err: OpsError) -> Status {
             }
             status
         }
+        OpsError::TreeTooLarge {
+            node_id,
+            count,
+            max,
+        } => {
+            // RESOURCE_EXHAUSTED, not INTERNAL or INVALID_ARGUMENT: the request is
+            // well-formed and the server is healthy, but this RPC has a stated
+            // maximum document size the subtree exceeds. The count/max in metadata
+            // let a caller report or log the concrete numbers without parsing the
+            // message.
+            let message = format!(
+                "Subtree at node '{node_id}' has {count} nodes, exceeding the maximum of {max} supported by GetChildrenTree"
+            );
+            let mut status = Status::resource_exhausted(message);
+            if let Ok(val) = count
+                .to_string()
+                .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
+            {
+                status.metadata_mut().insert("x-tree-node-count", val);
+            }
+            if let Ok(val) = max
+                .to_string()
+                .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
+            {
+                status.metadata_mut().insert("x-tree-node-max", val);
+            }
+            status
+        }
         OpsError::ValidationFailed(msg) => {
             Status::invalid_argument(format!("Validation failed: {}", msg))
         }
@@ -3025,6 +3053,28 @@ mod tests {
             .get("x-subtree-inaccessible-count")
             .expect("x-subtree-inaccessible-count header missing");
         assert_eq!(header.to_str().unwrap(), "3");
+    }
+
+    #[test]
+    fn error_mapping_tree_too_large_returns_resource_exhausted() {
+        // GetChildrenTree refusing an oversized subtree must surface as a distinct,
+        // actionable status (RESOURCE_EXHAUSTED) carrying the concrete count/max in
+        // metadata — not the opaque transport-level OutOfRange a caller would
+        // otherwise see if the oversized JSON were sent and then failed to decode.
+        let s = to_status(NodeServiceError::tree_too_large("root-1", 20_001, 20_000));
+        assert_eq!(s.code(), tonic::Code::ResourceExhausted);
+        assert!(s.message().contains("root-1"));
+        assert!(s.message().contains("20001") || s.message().contains("20,001"));
+        let count_header = s
+            .metadata()
+            .get("x-tree-node-count")
+            .expect("x-tree-node-count header missing");
+        assert_eq!(count_header.to_str().unwrap(), "20001");
+        let max_header = s
+            .metadata()
+            .get("x-tree-node-max")
+            .expect("x-tree-node-max header missing");
+        assert_eq!(max_header.to_str().unwrap(), "20000");
     }
 
     #[test]

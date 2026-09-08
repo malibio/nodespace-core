@@ -125,6 +125,21 @@ pub enum NodeServiceError {
     /// than being counted as client misuse.
     #[error("Corrupt stored hierarchy: {0}")]
     CorruptHierarchy(String),
+
+    /// The requested subtree has more nodes than `get_children_tree` will
+    /// serialize into a single response. Distinct from [`Self::CorruptHierarchy`]:
+    /// the stored data is fine, the tree is just larger than one gRPC message
+    /// should carry — the caller's request is valid but this RPC cannot answer
+    /// it, which is a `resource_exhausted` case, not a server bug or a bad
+    /// argument.
+    #[error(
+        "Subtree at node '{node_id}' has {count} nodes, exceeding the maximum of {max} supported by GetChildrenTree"
+    )]
+    TreeTooLarge {
+        node_id: String,
+        count: usize,
+        max: usize,
+    },
 }
 
 impl NodeServiceError {
@@ -157,6 +172,15 @@ impl NodeServiceError {
     /// Create a corrupt-stored-hierarchy error
     pub fn corrupt_hierarchy(msg: impl Into<String>) -> Self {
         Self::CorruptHierarchy(msg.into())
+    }
+
+    /// Create a tree-too-large error
+    pub fn tree_too_large(node_id: impl Into<String>, count: usize, max: usize) -> Self {
+        Self::TreeTooLarge {
+            node_id: node_id.into(),
+            count,
+            max,
+        }
     }
 
     /// Create a hierarchy violation error
