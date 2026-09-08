@@ -5,10 +5,9 @@
  * A factory that hand-lists only the bindings a given test happens to need
  * leaves every OTHER binding `undefined` for any importer reachable from
  * that test file's import graph — which fails at *import time* the moment
- * anything in the graph imports the missing binding (see core#2170, and
- * core#2165 for the incident that motivated this file: `daemon-status.ts`
- * importing `isTauri`, silently red for five nightly runs because 34 of 35
- * mock factories only listed `invoke`).
+ * anything in the graph imports the missing binding. This file exists
+ * because `daemon-status.ts` importing `isTauri` went silently red for five
+ * nightly runs when 34 of 35 mock factories only listed `invoke`.
  *
  * This helper closes the omission class entirely rather than just
  * centralizing it: it starts from `vi.importActual`'s real export object —
@@ -20,7 +19,7 @@
  * every test tier, but is pinned here as an explicit, controllable default
  * rather than relying on that incidentally).
  *
- * Measured (core#2170): a `vi.mock` factory returning a Promise — which is
+ * Measured: a `vi.mock` factory returning a Promise — which is
  * what an `async` helper like this produces — is supported by Vitest under
  * `bun run test` (Happy-DOM) and `bun run test:browser` (real Chromium via
  * Playwright); `bun run test:webkit` could not be exercised locally in this

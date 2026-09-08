@@ -336,7 +336,7 @@ describe('CreateNodeCommand', () => {
   // (meant for cursor-at-start of a NON-empty node, to push its content down)
   // fired on every Enter — inserting before the node and keeping focus on it
   // (`focusOriginalNode`), so nodes stacked above instead of advancing down.
-  describe('execute - empty node (#1421)', () => {
+  describe('execute - empty node', () => {
     it('creates a sibling BELOW (not above) when the node is empty', async () => {
       const context = createContext({ key: 'Enter', content: '', cursorPosition: 0 });
 

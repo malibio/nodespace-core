@@ -125,7 +125,7 @@ describe('Free-user guardrail: Pro features stay inert in the community build', 
   // coalescing window must NOT engage. The guarantee for free users is simply:
   // live node updates still land in the store.
   // -------------------------------------------------------------------------
-  describe('Reconnect-replay coalescer (#188) does not alter community behavior', () => {
+  describe('Reconnect-replay coalescer does not alter community behavior', () => {
     it('a node:updated event still applies to the store (per-event path)', async () => {
       await initializeTauriSyncListeners();
       const handler = mockListeners.get('node:updated');

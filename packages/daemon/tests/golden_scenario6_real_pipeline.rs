@@ -1,7 +1,7 @@
 //! Validates the REAL history-rendering pipeline
 //! (`nodespace_daemon::services::local_agent_service::{completed_writes_from,
 //! node_history_from_messages}`) against the confirmed golden sequence for
-//! agent-matrix scenario 6, per issue #1925.
+//! agent-matrix scenario 6.
 //!
 //! `packages/agent/tests/golden_scenario6_sequence.rs` established, with
 //! hand-authored terse "Fact: ..." history strings, that turn 3 of the

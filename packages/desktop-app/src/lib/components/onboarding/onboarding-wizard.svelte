@@ -14,7 +14,7 @@
     open: boolean;
     onClose: () => void;
     /**
-     * core#2388 backfill nudge: an already-onboarded install whose seeded
+     * Backfill nudge: an already-onboarded install whose seeded
      * local person is still blank gets ONLY the identity step (no
      * path/skill/summary) — a lightweight, dismissible one-time reminder
      * rather than re-running the whole first-launch wizard.
@@ -68,7 +68,7 @@
   let stepSuccess = $state(false);
   let stepError = $state<string | null>(null);
 
-  // ── identity step state (core#2388) ─────────────────────────────────────────
+  // ── identity step state ──────────────────────────────────────────────────
 
   // Whether to include the 'identity' step at all — true only while the
   // seeded local person is still blank; a node that already has a name/email
@@ -155,7 +155,7 @@
   });
 
   /**
-   * core#2388: load the seeded local person's current identity. When it's
+   * Load the seeded local person's current identity. When it's
    * still blank, include the 'identity' step (asked first, before
    * path/skill) and fetch a best-effort git/OS prefill to show for
    * confirmation — never written until the user explicitly saves.
@@ -343,7 +343,7 @@
         </div>
       {/if}
 
-      <!-- ── Identity step (core#2388) ──────────────────────────────────── -->
+      <!-- ── Identity step ─────────────────────────────────────────────── -->
       {#if currentStep === 'identity'}
         <div class="onboarding-header">
           <h2>Who are you?</h2>

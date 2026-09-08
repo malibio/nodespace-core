@@ -194,7 +194,7 @@ describe('TauriSyncListener', () => {
     });
   });
 
-  describe('Node Events - Issue #724 ID-Only Optimization', () => {
+  describe('Node Events - ID-Only Optimization', () => {
     beforeEach(async () => {
       await initializeTauriSyncListeners();
     });
@@ -276,12 +276,12 @@ describe('TauriSyncListener', () => {
     });
   });
 
-  // core#2219: a schema's plugin registration (hasTitleTemplate/titleTemplate)
+  // A schema's plugin registration (hasTitleTemplate/titleTemplate)
   // was only ever refreshed on node:created — node:updated (e.g. update_schema
   // adding a title_template to an existing custom type mid-session) never
   // touched it, so resolveDisplayTitle kept using the stale flag until a full
   // app restart.
-  describe('Schema plugin refresh on node:updated (core#2219)', () => {
+  describe('Schema plugin refresh on node:updated', () => {
     beforeEach(async () => {
       await initializeTauriSyncListeners();
     });
@@ -344,12 +344,12 @@ describe('TauriSyncListener', () => {
     });
   });
 
-  // core#2221: the AI Chats sidebar list had no node:created/node:updated
+  // The AI Chats sidebar list had no node:created/node:updated
   // wiring at all — unlike collections and schemas (scheduleCollectionRefresh/
   // scheduleSchemaRefresh), so an externally-created chat never appeared and
   // background titling's node:updated (which writes the real title into
   // content) never refreshed the list's "Untitled chat" placeholder.
-  describe('AI chats sidebar refresh on node:created / node:updated (core#2221)', () => {
+  describe('AI chats sidebar refresh on node:created / node:updated', () => {
     beforeEach(async () => {
       await initializeTauriSyncListeners();
     });
@@ -441,7 +441,7 @@ describe('TauriSyncListener', () => {
   // When sync is active, a reconnect-replay burst of node events is
   // coalesced — collected over a short window, then applied in one synchronous
   // pass so the caught-up set renders once instead of once per node.
-  describe('Pro reconnect-replay render coalescing (#188)', () => {
+  describe('Pro reconnect-replay render coalescing', () => {
     beforeEach(async () => {
       await initializeTauriSyncListeners();
       proSync.tier = 'pro'; // activate the Pro coalescing path
@@ -760,7 +760,7 @@ describe('TauriSyncListener', () => {
     });
   });
 
-  describe('Unified Relationship Events - has_child (Issue #811)', () => {
+  describe('Unified Relationship Events - has_child', () => {
     beforeEach(async () => {
       await initializeTauriSyncListeners();
     });
@@ -847,7 +847,7 @@ describe('TauriSyncListener', () => {
     });
   });
 
-  describe('Relationship Events — node: prefix normalization (Issue #1209)', () => {
+  describe('Relationship Events — node: prefix normalization', () => {
     // Backend's `RelationshipEvent` serialization contract emits
     // `from_id` / `to_id` already prefixed with `node:`. The
     // listener's `stripNodePrefix`

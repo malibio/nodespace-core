@@ -1,6 +1,6 @@
 /**
  * Read-side accessor for the convergence "possible duplicate" marker
- * (ADR-065 §4, core#2116).
+ * (ADR-065 §4).
  *
  * `NodeService::mark_possible_duplicates` (core) and `nodespace-sync`'s
  * pulled-write handler both stamp `properties.<node_type>._possible_duplicate

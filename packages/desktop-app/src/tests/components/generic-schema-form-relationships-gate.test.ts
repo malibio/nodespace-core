@@ -1,5 +1,5 @@
 /**
- * GenericSchemaForm — Relationships trigger visibility gate (#2007).
+ * GenericSchemaForm — Relationships trigger visibility gate.
  *
  * The Relationships entry point must render only when the node's type actually
  * has a typed relationship (outbound declared on its schema, or inbound declared
@@ -43,7 +43,7 @@ const groupsResult = (n: number) => ({
   groups: Array.from({ length: n }, (_, i) => ({ key: `g${i}` }))
 });
 
-describe('GenericSchemaForm — Relationships trigger gate (#2007)', () => {
+describe('GenericSchemaForm — Relationships trigger gate', () => {
   beforeEach(() => {
     loadNodeRelationshipsView.mockReset();
     // Spy (don't module-mock) the shared singleton so this never leaks into other

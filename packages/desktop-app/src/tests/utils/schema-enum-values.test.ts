@@ -1,5 +1,5 @@
 /**
- * Shared enum-field helpers (core#2132): merging coreValues/userValues, and
+ * Shared enum-field helpers: merging coreValues/userValues, and
  * resolving a stored value to its display label. Extracted out of
  * schema-field-leaf.svelte (the enum <Select> case) so TaskSchemaForm's
  * collapsed-header status badge can reuse the exact same lookup instead of

@@ -1,5 +1,5 @@
 /**
- * Sync-status → settings-node re-hydration (#1674).
+ * Sync-status → settings-node re-hydration.
  *
  * The Pro-sync variant machine resolves from the active database's
  * DatabaseSettingsNode (axis 2), which used to be read once per app life and
@@ -78,7 +78,7 @@ function seedSettings(props: { sync_enabled?: boolean; auth_status?: string }): 
   );
 }
 
-describe('sync:status transition → DatabaseSettingsNode re-hydration (#1674)', () => {
+describe('sync:status transition → DatabaseSettingsNode re-hydration', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     listeners.clear();

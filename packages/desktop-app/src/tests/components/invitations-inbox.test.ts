@@ -111,7 +111,7 @@ describe('InvitationsInbox', () => {
 		cleanup();
 	});
 
-	it('shows a Log out button only when onLogout is provided, and invokes it (#248)', async () => {
+	it('shows a Log out button only when onLogout is provided, and invokes it', async () => {
 		// No onLogout → no logout affordance (existing callers unaffected).
 		const { queryByText, unmount } = render(InvitationsInbox, {
 			props: { open: true, onClose: vi.fn() }

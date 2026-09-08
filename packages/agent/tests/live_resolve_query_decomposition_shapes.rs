@@ -477,7 +477,7 @@ async fn measure_decomposition_filter_shapes() {
     for line in &outcomes {
         println!("{line}");
     }
-    println!("\n=== filter shape tally (#2185) ===");
+    println!("\n=== filter shape tally ===");
     println!("{tally:#?}");
     println!("\nresolved: {resolved_count}/{} requests", outcomes.len());
 

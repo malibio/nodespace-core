@@ -63,7 +63,7 @@
 
   // First-launch onboarding wizard.
   let showOnboarding = $state(false);
-  // core#2388: true when this is the backfill nudge (an already-onboarded
+  // True when this is the backfill nudge (an already-onboarded
   // install whose seeded local person is still blank) rather than the full
   // first-launch wizard — see the `identityOnly` prop on OnboardingWizard.
   let onboardingIdentityOnly = $state(false);
@@ -315,7 +315,7 @@
       startDaemonStatusListener();
 
       // Show first-launch onboarding wizard if setup has not been completed.
-      // Otherwise (core#2388), an already-onboarded install whose seeded
+      // Otherwise, an already-onboarded install whose seeded
       // local person is still blank gets the lightweight backfill nudge
       // instead — never both in the same launch.
       invoke<{ completed: boolean }>('check_onboarding_status')
@@ -689,7 +689,7 @@
       <StatusBar />
     </div>
 
-    <!-- First-launch onboarding wizard (or the core#2388 identity backfill nudge) -->
+    <!-- First-launch onboarding wizard (or the identity backfill nudge) -->
     <OnboardingWizard
       open={showOnboarding}
       identityOnly={onboardingIdentityOnly}

@@ -1,5 +1,5 @@
 /**
- * SharedNodeStore - reconnect staleness (#1979)
+ * SharedNodeStore - reconnect staleness
  *
  * The desktop app's WatchNodes bridge (`watcher.rs`) reconnects with backoff
  * on any daemon disruption (crash, restart, transient h2 error) but opens a
@@ -7,7 +7,7 @@
  * `node:updated` / `node:deleted` events that would have landed during the
  * outage are gone, not delayed. A node already cached before the outage was
  * never told it might be missing an update, so `ensureNode`'s cache-first
- * check trusted mere presence forever — the observed symptom (#1979) was an
+ * check trusted mere presence forever — the observed symptom was an
  * AI chat conversation with a full, intact multi-turn history in the
  * database rendering as empty in the UI after navigating away and back
  * across a daemon restart, because the frontend never re-confirmed a cache
@@ -31,7 +31,7 @@ import type { Node } from '../../lib/types';
 import type { UpdateSource } from '../../lib/types/update-protocol';
 import type { AiChatMessage } from '../../lib/types/ai-chat-node';
 
-describe('SharedNodeStore - reconnect staleness (#1979)', () => {
+describe('SharedNodeStore - reconnect staleness', () => {
   let store: SharedNodeStore;
 
   const databaseSource: UpdateSource = { type: 'database', reason: 'ensure-node' };
@@ -116,8 +116,8 @@ describe('SharedNodeStore - reconnect staleness (#1979)', () => {
       store.markPossiblyStaleAfterReconnect();
       expect(store.isPossiblyStale('chat-1')).toBe(true);
 
-      // Backend is asked again — DB content was intact all along (#1979's
-      // core finding: this was never a persistence bug).
+      // Backend is asked again — DB content was intact all along; this was
+      // never a persistence bug.
       vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(makeChatNode('chat-1', 6, 2));
 
       const result = await store.ensureNode('chat-1');

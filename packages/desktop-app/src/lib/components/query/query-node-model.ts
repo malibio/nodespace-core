@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the query-node viewer (issue #1919).
+ * Pure helpers for the query-node viewer.
  *
  * The viewer serves two shapes from one component, branching on the node it was
  * handed:

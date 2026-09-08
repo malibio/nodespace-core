@@ -72,7 +72,7 @@ import { backendAdapter } from '$lib/services/backend-adapter';
 // Get the mocked function
 const mockMoveNode = vi.mocked(backendAdapter.moveNode);
 
-describe('Rapid Hierarchy Operations - Stress Tests (Issue #870)', () => {
+describe('Rapid Hierarchy Operations - Stress Tests', () => {
   let service: ReactiveNodeService;
   let events: NodeManagerEvents;
   let sharedNodeStore: SharedNodeStore;

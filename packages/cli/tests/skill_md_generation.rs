@@ -124,9 +124,9 @@ fn visible(cmd: &ClapCommand) -> Vec<&ClapCommand> {
 /// Every command and subcommand reachable from the clap root appears in
 /// SKILL.md.
 ///
-/// This is the test that closes the drift documented on issue #1958, where
-/// `session`, `uninstall`, and `model` had zero occurrences in a hand-written
-/// CLI reference. Because the expected set is derived from the parser itself,
+/// This is the test that closes the drift where `session`, `uninstall`, and
+/// `model` had zero occurrences in a hand-written CLI reference. Because the
+/// expected set is derived from the parser itself,
 /// a command added later is covered with no change here.
 #[test]
 fn every_cli_command_is_documented() {
@@ -161,8 +161,8 @@ fn every_cli_command_is_documented() {
 /// Every non-global, non-hidden flag on every leaf command appears in
 /// SKILL.md.
 ///
-/// Commands were the coarse drift; flags were the fine drift — issue #1958
-/// recorded the whole `import dir` flag set (`--exclude`,
+/// Commands were the coarse drift; flags were the fine drift — the whole
+/// `import dir` flag set (`--exclude`,
 /// `--include-agent-files`, `--include-hidden`, `--no-recursive`, `--replace`,
 /// `--collection`, `--use-filename-as-title`) and `node query --id` as
 /// undocumented while their parent commands were present. A flag an agent
@@ -284,7 +284,7 @@ fn every_global_cli_flag_is_documented() {
 
 /// Every seeded skill is represented in SKILL.md.
 ///
-/// Issue #1958 recorded that `seed_skill_nodes()` defines **eight** skills, not
+/// `seed_skill_nodes()` defines **eight** skills, not
 /// the six built from named `*_guidance()` functions: **Research & Search** and
 /// **Node Creation** are inline raw strings with no builder function. Any check
 /// keyed on function names would silently skip both — and Research & Search is

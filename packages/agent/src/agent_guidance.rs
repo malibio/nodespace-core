@@ -316,7 +316,7 @@ mod tests {
             // parser reads on to the next quote, capturing a span of comment
             // prose as one enormous "prompt". That inflates the site count and
             // is a latent false positive, since arbitrary comment text could
-            // collide with guidance wording (#2237).
+            // collide with guidance wording.
             //
             // Deliberately NOT extended to `"` or `'`. Those cannot appear here
             // as a key's own quote anyway — a JSON-style key writes `prompt":`,
@@ -706,7 +706,7 @@ mod tests {
     }
 
     /// A fixture's own doc comment may name `prompt:` as inline code without
-    /// that mention being taken for a scenario prompt (#2237).
+    /// that mention being taken for a scenario prompt.
     ///
     /// Before the backtick exclusion, the mention below counted as a site and
     /// the parser read on to the next quote, swallowing the following prose

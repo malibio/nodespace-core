@@ -1,5 +1,5 @@
-// Regression guard for the .pkg version-derivation logic in scripts/build-pkg.sh
-// (nodespace-core#2310). That script's `PKG_VERSION` default previously read
+// Regression guard for the .pkg version-derivation logic in scripts/build-pkg.sh.
+// That script's `PKG_VERSION` default previously read
 // packages/daemon/Cargo.toml — a file `release:bump` (scripts/release.ts) never
 // touches — so the .pkg's filename and its own pkgbuild/productbuild version
 // metadata silently drifted to a stale hardcoded value while every other release
@@ -93,7 +93,7 @@ function makeFixtureRepo(opts: { tauriVersion: string; daemonCargoVersion?: stri
   return root;
 }
 
-describe("build-pkg.sh version derivation (#2310)", () => {
+describe("build-pkg.sh version derivation", () => {
   test("derives PKG_VERSION from the real repo's canonical tauri.conf.json", () => {
     const tauriConfig = JSON.parse(
       readFileSync(

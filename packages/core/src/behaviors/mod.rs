@@ -2714,49 +2714,49 @@ mod tests {
         node.content = "\u{200B}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Zero-width space should be allowed per Issue #479"
+            "Zero-width space should be allowed"
         );
 
         // Zero-width non-joiner (U+200C) - now allowed
         node.content = "\u{200C}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Zero-width non-joiner should be allowed per Issue #479"
+            "Zero-width non-joiner should be allowed"
         );
 
         // Zero-width joiner (U+200D) - now allowed
         node.content = "\u{200D}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Zero-width joiner should be allowed per Issue #479"
+            "Zero-width joiner should be allowed"
         );
 
         // Non-breaking space (U+00A0) - now allowed
         node.content = "\u{00A0}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Non-breaking space should be allowed per Issue #479"
+            "Non-breaking space should be allowed"
         );
 
         // Line separator (U+2028) - now allowed
         node.content = "\u{2028}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Line separator should be allowed per Issue #479"
+            "Line separator should be allowed"
         );
 
         // Paragraph separator (U+2029) - now allowed
         node.content = "\u{2029}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Paragraph separator should be allowed per Issue #479"
+            "Paragraph separator should be allowed"
         );
 
         // Mixed Unicode whitespace - now allowed
         node.content = "\u{200B}\u{00A0}\u{2028}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Mixed Unicode whitespace should be allowed per Issue #479"
+            "Mixed Unicode whitespace should be allowed"
         );
 
         // Valid: Actual content with Unicode whitespace mixed in - should be accepted
@@ -2810,7 +2810,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank header nodes should be allowed per Issue #484"
+            "Blank header nodes should be allowed"
         );
 
         // Whitespace-only headers are allowed
@@ -2818,7 +2818,7 @@ mod tests {
         whitespace_node.content = "   ".to_string();
         assert!(
             behavior.validate(&whitespace_node).is_ok(),
-            "Whitespace-only header nodes should be allowed per Issue #484"
+            "Whitespace-only header nodes should be allowed"
         );
     }
 
@@ -2839,7 +2839,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank code blocks should be allowed per Issue #484"
+            "Blank code blocks should be allowed"
         );
 
         // Whitespace-only code blocks are allowed
@@ -2847,7 +2847,7 @@ mod tests {
         whitespace_node.content = "   ".to_string();
         assert!(
             behavior.validate(&whitespace_node).is_ok(),
-            "Whitespace-only code blocks should be allowed per Issue #484"
+            "Whitespace-only code blocks should be allowed"
         );
     }
 
@@ -2868,7 +2868,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank quote blocks should be allowed per Issue #484"
+            "Blank quote blocks should be allowed"
         );
 
         // Quote with just prefix and whitespace
@@ -2876,7 +2876,7 @@ mod tests {
         prefix_only_node.content = ">".to_string();
         assert!(
             behavior.validate(&prefix_only_node).is_ok(),
-            "Quote blocks with just '>' should be allowed per Issue #484"
+            "Quote blocks with just '>' should be allowed"
         );
 
         // Quote with prefix and space
@@ -2884,7 +2884,7 @@ mod tests {
         prefix_space_node.content = "> ".to_string();
         assert!(
             behavior.validate(&prefix_space_node).is_ok(),
-            "Quote blocks with just '> ' should be allowed per Issue #484"
+            "Quote blocks with just '> ' should be allowed"
         );
     }
 
@@ -2905,7 +2905,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank ordered list nodes should be allowed per Issue #484"
+            "Blank ordered list nodes should be allowed"
         );
 
         // Ordered list with just prefix
@@ -2913,7 +2913,7 @@ mod tests {
         prefix_only_node.content = "1. ".to_string();
         assert!(
             behavior.validate(&prefix_only_node).is_ok(),
-            "Ordered lists with just '1. ' should be allowed per Issue #484"
+            "Ordered lists with just '1. ' should be allowed"
         );
 
         // Whitespace-only ordered lists are allowed
@@ -2921,7 +2921,7 @@ mod tests {
         whitespace_node.content = "   ".to_string();
         assert!(
             behavior.validate(&whitespace_node).is_ok(),
-            "Whitespace-only ordered list nodes should be allowed per Issue #484"
+            "Whitespace-only ordered list nodes should be allowed"
         );
     }
 

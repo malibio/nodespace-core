@@ -172,7 +172,7 @@ pub(crate) fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
 /// ambiguity is left to the caller's existing broader fallback rather than
 /// guessed at here.
 ///
-/// This is the narrower, per-query retrieval pass core#2148 calls for: a
+/// This is the narrower, per-query retrieval pass this module implements: a
 /// request that plainly says "create a ticket" scopes `schema_metadata` to
 /// just `ticket` instead of `find_skills`' unscoped top-N fallback, which
 /// would otherwise sweep in every other non-core type in the same fallback
@@ -187,13 +187,13 @@ pub(crate) fn mentions_phrase(haystack: &str, phrase: &str) -> bool {
 /// skill still contributes a scoped `schema_metadata` when the query itself
 /// determines the type.
 ///
-/// **Known, accepted tradeoff, MEASURED (core#2158)**: a lexical match can
+/// **Known, accepted tradeoff, measured empirically (see below)**: a lexical match can
 /// be a false positive if a user-defined schema's id or display name
 /// happens to also be a common word or phrase (e.g. a schema literally
 /// named `Note`), narrowing to a confidently WRONG type rather than the old
 /// broad-but-safe top-N fallback.
 ///
-/// core#2158 measured this rather than guessing at it (see
+/// This was measured rather than guessed at (see
 /// `schema_named_in_query_measured_zero_false_positives_on_precedent_schema_names`
 /// and `schema_named_in_query_measured_false_positive_rate_on_risky_common_word_names`
 /// below for the corpora and pinned aggregate results):
@@ -517,14 +517,14 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // core#2158 measurement: false-positive rate of the lexical narrowing.
+    // Measurement: false-positive rate of the lexical narrowing.
     // -------------------------------------------------------------------
     //
-    // core#2158 required measuring, not guessing, whether the risk flagged
-    // in review of #2156 (a schema id/display-name that happens to also be
-    // a common English word narrows `schema_metadata` to a confidently
-    // WRONG type) is practically significant. The two corpora below are the
-    // measurement; the tests after them pin its result.
+    // This required measuring, not guessing, whether the risk that a schema
+    // id/display-name happening to also be a common English word narrows
+    // `schema_metadata` to a confidently WRONG type is practically
+    // significant. The two corpora below are the measurement; the tests
+    // after them pin its result.
 
     /// Every non-core schema id/display-name pair that actually appears
     /// anywhere in this codebase's tests, golden fixtures, or docs (grepped
@@ -619,12 +619,12 @@ mod tests {
 
     #[test]
     fn schema_named_in_query_measured_zero_false_positives_on_precedent_schema_names() {
-        // MEASURED (core#2158): every schema id/display-name with real
-        // precedent in this codebase, checked against every query in
+        // MEASURED: every schema id/display-name with real precedent in
+        // this codebase, checked against every query in
         // `realistic_unrelated_queries()`, produces no match at all — never
         // an incidental false positive. 7 names x 52 queries = 364 pairs, 0
-        // false positives. This is the basis for closing core#2158 with the
-        // narrowing left as-is for domain-specific names.
+        // false positives. This is the basis for leaving the narrowing
+        // as-is for domain-specific names.
         let schemas: Vec<SchemaNode> = precedent_schema_names()
             .into_iter()
             .map(|(id, content)| make_schema(id, content, false))
@@ -665,8 +665,8 @@ mod tests {
     /// that are nonetheless names a NodeSpace user could reasonably give a
     /// custom type, since NodeSpace is a personal knowledge tool, not only
     /// a dev tracker. Companion corpus to `precedent_schema_names()`, used
-    /// to measure the risk class review of #2156 flagged rather than the
-    /// class that's actually seen precedent.
+    /// to measure the risk class of a schema name colliding with a common
+    /// English word, rather than the class that's actually seen precedent.
     fn risky_schema_names() -> Vec<(&'static str, &'static str)> {
         vec![
             ("note", "Note"),
@@ -703,9 +703,9 @@ mod tests {
 
     #[test]
     fn schema_named_in_query_measured_false_positive_rate_on_risky_common_word_names() {
-        // MEASURED (core#2158): the risk flagged in review of #2156 is
-        // real, not hypothetical, for schema names that are common English
-        // words. Each of the 29 `risky_schema_names()` is checked in
+        // MEASURED: the risk of a false-positive lexical match is real, not
+        // hypothetical, for schema names that are common English words.
+        // Each of the 29 `risky_schema_names()` is checked in
         // isolation (one schema at a time — matching
         // `precedent_schema_names()`'s "no other type is around to create
         // ambiguity" setup, so this measures the same thing the doc
@@ -730,7 +730,7 @@ mod tests {
             (false_positives, total_pairs),
             (33, 1508),
             "false-positive count or corpus size drifted from the measured \
-             core#2158 baseline (33/1508, 2.2%) — if `mentions_phrase` or \
+             baseline (33/1508, 2.2%) — if `mentions_phrase` or \
              either corpus changed intentionally, re-measure and update \
              both this assertion and the doc comment on \
              `schema_named_in_query`"
@@ -740,11 +740,11 @@ mod tests {
     #[test]
     fn schema_named_in_query_confirmed_false_positive_class_common_word_schema_names() {
         // Two concrete, easy-to-read instances of the false-positive class
-        // the aggregate test above measures — including the exact scenario
-        // raised in review of #2156, and a mixed schema list (alongside an
-        // unrelated precedent name) rather than an isolated one, so this
-        // doubles as a check that the risk isn't an artifact of testing
-        // risky names in isolation.
+        // the aggregate test above measures — a common-word schema name
+        // colliding with an unrelated query, and a mixed schema list
+        // (alongside an unrelated precedent name) rather than an isolated
+        // one, so this doubles as a check that the risk isn't an artifact
+        // of testing risky names in isolation.
         let schemas = vec![
             make_schema("ticket", "Ticket", false),
             make_schema("note", "Note", false),

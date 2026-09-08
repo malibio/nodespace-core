@@ -4,7 +4,7 @@ import { isActiveTextSelection } from '$lib/utils/text-selection';
 /**
  * Guards the view-container click handler's decision: focus (click-to-edit) only
  * on a collapsed selection; leave a real drag-selection alone so it can be copied
- * across node boundaries (#278).
+ * across node boundaries.
  */
 describe('isActiveTextSelection', () => {
   it('is false for no selection', () => {

@@ -1112,7 +1112,7 @@ impl NodeService {
         Ok(())
     }
 
-    /// ADR-037 / core#2388: resolve the seeded local-user PersonNode — the
+    /// ADR-037: resolve the seeded local-user PersonNode — the
     /// person with an outgoing `has_role` edge carrying `role: "owner"` to
     /// the DatabaseSettingsNode singleton (the owner edge
     /// `seed_database_settings_if_needed` seeds). The DatabaseSettingsNode
@@ -1184,7 +1184,7 @@ impl NodeService {
             .next())
     }
 
-    /// ADR-037 / core#2388: write the local user's name/email into the
+    /// ADR-037: write the local user's name/email into the
     /// SEEDED PersonNode resolved by [`Self::get_local_person`] — never a
     /// newly created one. `content` is kept in sync with `name` (matching
     /// how every other person edit path in the app stores the display name;
@@ -2596,7 +2596,7 @@ mod tests {
         }
     }
 
-    /// The batched edge-sweep primitive (#345) reproduces the sender's sibling order
+    /// The batched edge-sweep primitive reproduces the sender's sibling order
     /// and is idempotent — it never re-parents a child that already has a parent.
     #[tokio::test]
     async fn bulk_create_has_child_edges_reproduces_order_and_is_idempotent() {
@@ -4968,7 +4968,7 @@ mod tests {
         assert_eq!(edge.properties["status"], "active");
     }
 
-    // --- get_local_person / set_local_person_identity (ADR-037, core#2388) ---
+    // --- get_local_person / set_local_person_identity (ADR-037) ---
 
     #[tokio::test]
     async fn test_get_local_person_resolves_the_seeded_owner() {
@@ -5402,7 +5402,7 @@ mod tests {
     async fn test_get_node_relationships_emits_empty_declared_groups() {
         // A declared relationship must surface even with zero edges — on BOTH
         // sides — so the viewer can add the first edge and the visibility gate
-        // (#2007) can tell "declared but unlinked" from "no relationship at all".
+        // can tell "declared but unlinked" from "no relationship at all".
         // Regression for the inbound branch, which previously skipped empties
         // while the outbound branch emitted them.
         let (service, _temp) = create_test_service().await;
@@ -5496,7 +5496,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_node_relationships_inbound_multiple_sources_not_duplicated() {
-        // Regression (#1918): the inbound query keys only on relationship_type,
+        // Regression: the inbound query keys only on relationship_type,
         // so two schemas declaring the SAME relationship name targeting the same
         // type must land in SEPARATE groups, each restricted to its own source
         // type — never doubled or cross-attributed.

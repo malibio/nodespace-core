@@ -116,7 +116,7 @@ const BLENDED_HISTORY_TURNS: usize = 2;
 /// prose elsewhere in the prompt. A prose-only rule measured no effect: the
 /// model still copied an unrelated schema's fields verbatim onto a new type
 /// even with a rule against it present in the Schema Creation skill
-/// instructions (#1846).
+/// instructions.
 ///
 /// A single constant, not independently-worded copies at each call site: this
 /// heading is rendered at two of them (this module's resident workspace

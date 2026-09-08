@@ -7,8 +7,7 @@
 //! one measured model (`mistral:7b`) loses tool-calling outright as soon as
 //! any candidate block is present, independent of the block's content.
 //!
-//! [ADR-038](../../../../../nodespace-docs/decisions/038-skill-mediated-tool-routing.md)
-//! names this as the load-bearing open question the routing design carried;
+//! ADR-038 names this as the load-bearing open question the routing design carried;
 //! this probe is Option C from the decision that closed it: run one synthetic
 //! routed turn per model load, cache the verdict, and skip Stage-2 injection
 //! for a model that fails it — rather than paying a retry on every ambiguous

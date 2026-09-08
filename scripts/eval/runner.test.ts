@@ -726,7 +726,7 @@ describe("parseTurnOutput", () => {
   });
 });
 
-describe("agent-matrix minProperties scoring (issue #1937)", () => {
+describe("agent-matrix minProperties scoring", () => {
   // The scenario-9 assertion exists to score a state-change that never reached
   // storage as RED. Both realistic post-fix outcomes previously scored green:
   // a gate-rejected call was skipped as `isError`, and a content-only write was

@@ -538,7 +538,7 @@ export const queryNodePlugin: PluginDefinition = {
   description: 'Saved query definition for filtering and searching nodes',
   version: '1.0.0',
   config: {
-    // No manual `/query` slash command (issue #1919): it created definition-less
+    // No manual `/query` slash command: it created definition-less
     // query nodes (no targetType/filters) that cannot render. Query nodes are now
     // materialized from a type's default view, or created by AI/MCP. The node,
     // viewer, and reference registrations below are intentionally retained so

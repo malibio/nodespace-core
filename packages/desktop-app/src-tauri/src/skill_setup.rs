@@ -178,7 +178,7 @@ async fn write_setup_state(state: &SetupState) -> Result<()> {
 /// shell-configured locations, since those are only added by shell startup
 /// files a GUI-launched process never sources. Without augmentation, this
 /// check reports "not found" even when the CLI is genuinely correctly
-/// installed and would resolve fine from a terminal (core#2350).
+/// installed and would resolve fine from a terminal.
 pub fn check_cli_on_path() -> bool {
     Command::new("nodespace")
         .args(["--version"])
@@ -833,7 +833,7 @@ mod tests {
         assert!(cli_warning(true).is_none());
     }
 
-    /// core#2350: `check_cli_on_path()` must search Homebrew's bin dirs and
+    /// `check_cli_on_path()` must search Homebrew's bin dirs and
     /// common per-user install dirs, not just whatever bare PATH the app
     /// process happened to inherit -- a LaunchServices-launched app never
     /// gets those from shell startup files. Uses injected fake values, not

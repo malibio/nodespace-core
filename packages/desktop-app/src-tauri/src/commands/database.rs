@@ -20,7 +20,7 @@ use tonic::Request;
 /// The frontend compares this against its own version on startup to detect a
 /// stale *detached* daemon left over from a previous install still bound to the
 /// socket, so it can boot out the mismatched daemon and relaunch a matching one
-/// (issue #1686). Daemon-wide, never routed.
+/// Daemon-wide, never routed.
 #[tauri::command]
 pub async fn get_daemon_version(
     grpc_client: tauri::State<'_, GrpcClient>,
@@ -49,8 +49,8 @@ pub struct DatabaseEntry {
     /// The cloud tenant schema this database is bound to (ADR-053); `None` when
     /// the database is local-only (not bound to any tenant).
     pub bound_tenant_schema: Option<String>,
-    /// The default (landing) collection id within the bound tenant (ADR-053 /
-    /// sync#297 per-install root); `None` on the public/legacy tenant, where the
+    /// The default (landing) collection id within the bound tenant (ADR-053), a
+    /// per-install root; `None` on the public/legacy tenant, where the
     /// frontend falls back to the well-known root id for tree filtering.
     pub bound_tenant_collection: Option<String>,
 }

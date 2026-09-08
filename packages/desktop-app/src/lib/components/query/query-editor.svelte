@@ -1,5 +1,5 @@
 <!--
-  QueryEditor - structured filter builder for a QueryDefinition (issue #1920)
+  QueryEditor - structured filter builder for a QueryDefinition
 
   Replaces the raw-JSON textarea with property/operator/value rows built from the
   target type's schema fields:

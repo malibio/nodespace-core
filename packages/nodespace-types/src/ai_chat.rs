@@ -38,7 +38,7 @@ pub struct AiChatMessage {
     /// The clarifying question, when this message is a `route_clarify` turn
     /// (ADR-038) rather than an ordinary reply. `content` still carries the
     /// flattened text; this plus `options` is the same data unflattened, for
-    /// the frontend to render clickable options with (#1930).
+    /// the frontend to render clickable options with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<String>,
 

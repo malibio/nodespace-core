@@ -187,9 +187,9 @@ describe('Collection Refresh', () => {
     });
   });
 
-  // core#2221: the AI Chats sidebar list had no node:created/node:updated
-  // wiring at all — scheduleAiChatRefresh is the missing counterpart to
-  // scheduleCollectionRefresh/scheduleSchemaRefresh above.
+  // scheduleAiChatRefresh is the counterpart to scheduleCollectionRefresh/
+  // scheduleSchemaRefresh above: without it, the AI Chats sidebar list has no
+  // node:created/node:updated wiring at all.
   describe('scheduleAiChatRefresh', () => {
     afterEach(() => {
       clearAiChatRefreshTimer();

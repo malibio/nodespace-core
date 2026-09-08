@@ -63,7 +63,7 @@
     fields: Snippet<[(_field: SchemaField) => void]>;
   } = $props();
 
-  // Relationships viewer entry point (issue #1918). Gated on whether this
+  // Relationships viewer entry point. Gated on whether this
   // node's type actually has any typed relationship — otherwise it opens
   // only to say "no typed relationships". The viewer's own load resolves
   // both sides (outbound declared on this schema + inbound declared by
@@ -157,7 +157,7 @@
     </Collapsible.Root>
   {/if}
 
-  <!-- Relationships entry point (read-only viewer, issue #1918). Gated on the
+  <!-- Relationships entry point (read-only viewer). Gated on the
        type actually having typed relationships (outbound declared or inbound). -->
   {#if hasRelationships}
     <button

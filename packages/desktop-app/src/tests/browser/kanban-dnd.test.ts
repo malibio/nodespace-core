@@ -21,11 +21,11 @@ import type { SchemaNode } from '$lib/types/schema-node';
 import type { Node } from '$lib/types';
 import { mockTauriCore } from '../helpers/mock-tauri-core';
 
-// mockTauriCore() declares the full mocked export surface once (see
-// core#2170), so a binding any transitive import needs — e.g.
-// `daemon-status.ts` importing `isTauri` — can never be silently omitted
-// here. Its default `isTauri` returns false: the true branch calls `listen`
-// from @tauri-apps/api/event, which this file does not mock.
+// mockTauriCore() declares the full mocked export surface once, so a binding
+// any transitive import needs — e.g. `daemon-status.ts` importing `isTauri`
+// — can never be silently omitted here. Its default `isTauri` returns false:
+// the true branch calls `listen` from @tauri-apps/api/event, which this file
+// does not mock.
 vi.mock('@tauri-apps/api/core', () => mockTauriCore());
 
 import KanbanView from '$lib/components/query/kanban-view.svelte';

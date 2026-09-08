@@ -1174,7 +1174,7 @@ impl GrpcNodeService for NodeServiceImpl {
         }))
     }
 
-    // -- Local identity (ADR-037, core#2388) ---------------------------------
+    // -- Local identity (ADR-037) ---------------------------------
 
     async fn get_local_person(
         &self,
@@ -2286,7 +2286,7 @@ mod tests {
         assert!(Arc::ptr_eq(&svc.node_service(), &core_svc));
     }
 
-    /// The FindDuplicate RPC (core#1734) surfaces an existing node on a
+    /// The FindDuplicate RPC surfaces an existing node on a
     /// uniqueness-flagged match (case-folded), and returns an EMPTY response
     /// (empty node_id, no node_data) — never NotFound, never an error — when there
     /// is no duplicate. That empty-not-error convention is the suggest-don't-block
@@ -2399,7 +2399,7 @@ mod tests {
         );
     }
 
-    /// ADR-037 / core#2388: the RPC wiring for `GetLocalPerson` resolves the
+    /// ADR-037: the RPC wiring for `GetLocalPerson` resolves the
     /// SAME seeded PersonNode a direct core query sees — proves the proto
     /// conversion (node_to_proto / OptionalNodeResponse) round-trips, not
     /// just the already-covered core logic.

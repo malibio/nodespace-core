@@ -11,8 +11,6 @@
  * - Schemas and fields (e.g., SchemaField, EventType)
  * - AST nodes (e.g., ASTNode, DocumentNode - markdown parsing structures)
  * - Test helpers (e.g., TestNode, TestHierarchyNode - test fixtures)
- *
- * Related: Issue #507, identifier-naming-conventions.md
  */
 
 export default {

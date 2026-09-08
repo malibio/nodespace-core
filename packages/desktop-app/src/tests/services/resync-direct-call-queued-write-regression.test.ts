@@ -76,7 +76,7 @@ const makeVersionConflictErrorNoCurrentNode = (nodeId: string) => ({
   }
 });
 
-describe('resyncNodeFromServer direct call — queued-write regression (#2069)', () => {
+describe('resyncNodeFromServer direct call — queued-write regression', () => {
   let store: SharedNodeStore;
 
   beforeEach(() => {

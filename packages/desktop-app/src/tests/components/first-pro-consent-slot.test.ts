@@ -73,7 +73,7 @@ describe('FirstProConsentSlot', () => {
     await waitFor(() => expect(proSync.consentPromptOpen).toBe(false));
   });
 
-  it('merge re-pulls the settings node so the consent → connected flip does not depend on a watch event (#1674)', async () => {
+  it('merge re-pulls the settings node so the consent → connected flip does not depend on a watch event', async () => {
     const refreshSpy = vi
       .spyOn(databaseStore, 'refreshDatabaseSettings')
       .mockImplementation(() => {});

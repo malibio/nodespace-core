@@ -1,10 +1,10 @@
 /**
- * TaskSchemaForm — real component regression coverage (core#2132).
+ * TaskSchemaForm — real component regression coverage.
  *
  * TaskSchemaForm used to carry its own hardcoded STATUS_OPTIONS/PRIORITY_OPTIONS
  * enum constants and bespoke date-picker markup, duplicating what the real task
- * schema's coreValues/userValues and SchemaFieldLeaf already provide. core#2132
- * removed that duplication: the 6 core fields now render through the shared
+ * schema's coreValues/userValues and SchemaFieldLeaf already provide. That
+ * duplication was removed: the 6 core fields now render through the shared
  * SchemaFieldLeaf (driven by the schema TaskSchemaForm fetches from the backend),
  * and the Collapsible shell / trigger row / gated Relationships button / nested-
  * field modal now come from the shared TypedFormShell (also used by
@@ -28,7 +28,7 @@
  *     before
  *   - the Relationships button is now gated on the node's type actually having a
  *     typed relationship, matching GenericSchemaForm — previously it showed
- *     unconditionally, which core#2132 called out as a real inconsistency to fix
+ *     unconditionally, a real inconsistency that has now been fixed
  *   - the assignee field's bespoke combobox (unrelated to the enum/date-picker
  *     duplication) is untouched
  *   - user-defined (non-core) schema fields still render dynamically

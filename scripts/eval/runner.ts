@@ -1019,7 +1019,7 @@ function runRep(fixture: EvalFixture, env: EvalEnv): ScenarioResult[] {
       // trajectory and outcome verdicts red out — for a turn the model had no
       // way to complete. Observed live: "Put down that we went with
       // event-based cache clearing, Priya's call" retrieved Node Deletion, so
-      // the surface carried delete/search tools and no create_node (#2240).
+      // the surface carried delete/search tools and no create_node.
       //
       // Excluded on the same grounds as a degenerate empty generation: the
       // assertion was unreachable, so neither verdict is a statement about the

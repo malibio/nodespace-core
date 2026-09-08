@@ -1,8 +1,8 @@
 /**
- * Regression test for core#2061: dev-proxy's grpcError() never attached
+ * dev-proxy's grpcError() never attached
  * conflictData, so isSubtreeAccessDenied/isVersionConflict could never fire
  * against live browser/dev-server traffic — only hand-constructed HTTP test
- * bodies exercised the success path added by core#2048/PR#2059.
+ * bodies exercised the success path.
  *
  * This drives packages/dev-tools/src/grpc-error-mapping.ts's mapGrpcError()
  * DIRECTLY against fake gRPC-js ServiceErrors carrying the same trailer

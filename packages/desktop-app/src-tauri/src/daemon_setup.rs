@@ -630,7 +630,7 @@ fn resign_binary(_path: &Path) -> Result<()> {
 /// file leaves a freshly-quarantined destination, not an unquarantined one).
 /// The observed failure is `syspolicyd: rejecting due to lack of matching
 /// active rule`, `bundle_id: NOT_A_BUNDLE` — the daemon never stays up long
-/// enough to do anything (core#2287).
+/// enough to do anything.
 ///
 /// `xattr -d` exits non-zero both when the attribute is simply absent (the
 /// common case: a source that was never quarantined) and on a genuine
@@ -783,7 +783,7 @@ fn launch_agents_dir(home: &Path) -> PathBuf {
 /// Write the launchd plist for the nodespaced user agent.
 ///
 /// `KeepAlive` is the conditional `{SuccessfulExit: false}` form, NOT bare
-/// `true` (core#2353). Bare `true` restarts the job on *any* exit, with no
+/// `true`. Bare `true` restarts the job on *any* exit, with no
 /// way to distinguish a crash from a deliberate, successful shutdown --
 /// which meant the tray's "Quit" item was undone by launchd relaunching the
 /// process within about half a second, regardless of how cleanly it had
@@ -1419,7 +1419,7 @@ mod macos_codesign_tests {
         // `xattr -w` on a freshly-copied scratch file — not a claim about how
         // the daemon's own extraction path acquires the attribute (that's a
         // plain `cp` of an already-quarantined source, verified separately
-        // during core#2287's investigation), just a controlled fixture for
+        // during this function's initial investigation), just a controlled fixture for
         // this function's own removal behavior.
         std::process::Command::new("xattr")
             .args(["-w", "com.apple.quarantine", "0081;00000000;test;"])
@@ -1437,7 +1437,7 @@ mod macos_codesign_tests {
             !has_quarantine_attr(&bin),
             "com.apple.quarantine must be gone after clear_quarantine — this is the exact \
              attribute that makes syspolicyd reject an ad-hoc-signed extracted binary \
-             (core#2287)"
+"
         );
     }
 
@@ -1519,7 +1519,7 @@ mod macos_codesign_tests {
     }
 }
 
-/// core#2353 regression guard: launchd's `KeepAlive` must be the conditional
+/// Regression guard: launchd's `KeepAlive` must be the conditional
 /// `{SuccessfulExit: false}` form, not bare `true`. Bare `true` restarted the
 /// daemon on ANY exit -- crash or a fully clean, deliberate shutdown (e.g.
 /// the tray "Quit" item) alike -- since launchd has no way to distinguish
@@ -1554,7 +1554,7 @@ mod macos_plist_keepalive_tests {
         assert!(
             !contents.contains("<key>KeepAlive</key>\n    <true/>"),
             "KeepAlive must not be the unconditional bare `true` form -- that restarts the \
-             daemon on every exit, including a clean, deliberate shutdown (core#2353): {contents}"
+             daemon on every exit, including a clean, deliberate shutdown: {contents}"
         );
         assert!(
             contents.contains("<key>SuccessfulExit</key>\n        <false/>"),

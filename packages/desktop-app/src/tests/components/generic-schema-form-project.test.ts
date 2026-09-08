@@ -1,12 +1,12 @@
 /**
- * GenericSchemaForm rendering the REAL `project` schema (core#2102).
+ * GenericSchemaForm rendering the REAL `project` schema.
  *
  * `project` is a core node type (`core_schemas.rs`) with no hardcoded schema
  * form and no plugin registration at all — `needsGenericSchemaForm('project')`
  * is true (node-type-predicates.ts), so opening a project node falls back to
- * this component for its properties panel. Before core#2013, `project` was
- * incorrectly classified as core-and-therefore-excluded from the generic
- * fallback, so opening one rendered no properties panel whatsoever.
+ * this component for its properties panel. `project` used to be incorrectly
+ * classified as core-and-therefore-excluded from the generic fallback, so
+ * opening one rendered no properties panel whatsoever.
  *
  * schema-form-loader.svelte.test.ts and schema-field-resolution.test.ts prove
  * the *plumbing* (the loader fetches project's schema; the read/write helpers

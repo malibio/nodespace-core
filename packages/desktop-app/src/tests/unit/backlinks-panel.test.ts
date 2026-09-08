@@ -141,7 +141,7 @@ describe('BacklinksPanel Utility Functions', () => {
   });
 });
 
-describe('BacklinksPanel Props API (Issue #1384)', () => {
+describe('BacklinksPanel Props API', () => {
   it('accepts backlinks array directly as a prop', () => {
     const backlinks = createMockBacklinks();
     // Simulate component receiving props — no store dependency required

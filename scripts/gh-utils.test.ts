@@ -1,9 +1,9 @@
-// Regression test for nodespace-core#2288: `bun run gh:assign <n> "@me"` and
+// Regression test: `bun run gh:assign <n> "@me"` and
 // `bun run gh:unassign <n> "@me"` used to resolve "@me" to the hardcoded
 // literal string "malibio" regardless of who was actually authenticated via
 // `gh`, then print a success message even though the wrong account got
-// assigned. This silently mis-assigned real issues (nodespace-core#2283,
-// #2280) to the wrong GitHub account.
+// assigned. This silently mis-assigned real issues to the wrong GitHub
+// account.
 //
 // This exercises NodeSpaceGitHubManager.assignIssues/unassignIssues against a
 // stubbed GitHubClient (constructor-injected) so the assertions don't depend

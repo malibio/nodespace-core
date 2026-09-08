@@ -1269,8 +1269,7 @@ mod uds_permission_tests {
         assert!(!sock.exists(), "nothing may be bound when the check fails");
     }
 
-    /// Regression test for the flakiness class behind this issue (mirrored
-    /// from sync#450/#452, fixed there in sync#456): binding the daemon's UDS
+    /// Regression test for a flakiness class where binding the daemon's UDS
     /// must never perturb ambient-umask-governed directory creation happening
     /// concurrently elsewhere in the process. `cargo test` runs the whole
     /// suite on one process's thread pool, so the old implementation — which

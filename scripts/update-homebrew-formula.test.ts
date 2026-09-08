@@ -76,7 +76,7 @@ describe("renderFormula", () => {
     // Pinned to the actual published digests so this test fails the moment
     // renderFormula's output drifts from what's live on
     // NodeSpaceAI/homebrew-nodespace -- confirmed against a live fetch of
-    // that file's content during nodespace-core#2162.
+    // that file's content.
     const publishedDigests: FormulaDigests = {
       macosArm: {
         cli: {

@@ -1,8 +1,8 @@
 /**
  * Unit tests for resolveTitleOrContent — the shared title-vs-content rule.
  *
- * Consolidation for issue #2012: computeHeaderDisplayValue (design/node-type-predicates.ts)
- * and PluginRegistry.resolveDisplayTitle/getNodeTitle both delegate here, so these tests
+ * computeHeaderDisplayValue (design/node-type-predicates.ts) and
+ * PluginRegistry.resolveDisplayTitle/getNodeTitle both delegate here, so these tests
  * pin the core rule once rather than being re-verified per call site.
  */
 

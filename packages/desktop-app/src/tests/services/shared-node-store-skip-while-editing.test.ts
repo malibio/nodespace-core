@@ -176,7 +176,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
     expect(store.computeOccVersionForUpdate('foreign')).toBe(3);
   });
 
-  it('preserves insertAfterNodeId when structureTree agrees on parent (sync#77)', () => {
+  it('preserves insertAfterNodeId when structureTree agrees on parent', () => {
     // The persistence-time stale-sibling check consults `structureTree`
     // (the authoritative source for hierarchy via has_child edges) so the
     // hint survives whenever the tree confirms the same parent.
@@ -227,7 +227,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   // batchSetNodes (used by doLoadChildrenTree with a database source)
   // must apply the SAME skip-while-editing guard as setNode — a concurrent tree
   // reload would otherwise overwrite a child being edited mid-keystroke.
-  describe('batchSetNodes guard (#1436)', () => {
+  describe('batchSetNodes guard', () => {
     it('skips clobbering a focused node in a database-source batch', () => {
       const optimistic = makeNode('b1', 'hello world', 1);
       store.setNode(optimistic, viewerSource);
@@ -283,7 +283,7 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   // A foreign write to an actively-edited node is skipped to protect the
   // optimistic text — but it must NOT be silent. Surface a version-mismatch
   // conflict notification so the user knows another writer changed the node.
-  describe('foreign-write conflict signal (#1437)', () => {
+  describe('foreign-write conflict signal', () => {
     const versionMismatchFor = (nodeId: string) =>
       conflictNotifications.notifications.filter(
         (n) => n.nodeId === nodeId && n.conflictType === 'version-mismatch'
@@ -478,11 +478,11 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   // `updateNode()`'s OCC-conflict catch handler has two hydration paths: a
   // DIRECT one when the daemon embeds `current_node` in the conflict payload
   // (`this.nodesSet(nodeId, currentNode)`), and a FALLBACK
-  // (`resyncNodeFromServer`, tested above) when it doesn't. #2066 added the
-  // skip-while-editing guard to the fallback only — the direct path wrote
+  // (`resyncNodeFromServer`, tested above) when it doesn't. The
+  // skip-while-editing guard was added to the fallback only — the direct path wrote
   // straight into the store with no equivalent check. This block is the
   // direct-path counterpart to the `resyncNodeFromServer guard` block above.
-  describe('OCC direct-hydration guard (#2068)', () => {
+  describe('OCC direct-hydration guard', () => {
     const makeVersionConflictError = (currentNode: Node | null) => ({
       message: 'Version conflict',
       code: 'VERSION_CONFLICT' as const,
@@ -640,12 +640,12 @@ describe('SharedNodeStore — skip-while-editing guard', () => {
   });
 
   // updateTaskNode()'s OCC-conflict catch handler has the identical
-  // direct-hydration shape updateNode() had before #2071: a DIRECT path when
+  // direct-hydration shape updateNode() had before it was fixed: a DIRECT path when
   // the daemon embeds `current_node` in the conflict payload
   // (`this.nodesSet(nodeId, currentNode)`), unguarded against a node the
   // user is actively editing. This block is the task-node counterpart to the
-  // `OCC direct-hydration guard (#2068)` block above.
-  describe('updateTaskNode OCC direct-hydration guard (#2072)', () => {
+  // `OCC direct-hydration guard` block above.
+  describe('updateTaskNode OCC direct-hydration guard', () => {
     type TaskLikeNode = Node & {
       status: string;
       priority?: string;

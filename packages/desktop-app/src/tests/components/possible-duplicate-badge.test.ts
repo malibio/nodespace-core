@@ -1,6 +1,6 @@
 /**
  * PossibleDuplicateBadge — inline node-view indicator for the convergence
- * "possible duplicate" marker (ADR-065 §4, core#2116).
+ * "possible duplicate" marker (ADR-065 §4).
  *
  * Mirrors the RecoveredItemsBadge inline-pill-with-popover pattern: renders
  * nothing unless the node it's attached to is flagged, and reuses the same

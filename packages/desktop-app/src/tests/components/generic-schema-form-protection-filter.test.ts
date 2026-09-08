@@ -1,5 +1,5 @@
 /**
- * GenericSchemaForm — protection-level filtering (core#2132).
+ * GenericSchemaForm — protection-level filtering.
  *
  * GenericSchemaForm used to iterate `schema.fields` unconditionally, with no
  * filter for `protection: 'system'` fields. Not reachable in production today

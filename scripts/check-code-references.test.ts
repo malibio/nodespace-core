@@ -151,12 +151,9 @@ describe("real-repo ratchet", () => {
     }
   });
 
-  test("scan roots exclude packages/agent and packages/nlp-engine", () => {
+  test("scan roots include packages/agent and packages/nlp-engine", () => {
     const counts = countReferences();
-    const allFiles = [...counts.issueNumberFiles, ...counts.docPathFiles];
-    for (const f of allFiles) {
-      expect(f).not.toContain(`${"/"}packages/agent/`);
-      expect(f).not.toContain(`${"/"}packages/nlp-engine/`);
-    }
+    expect(counts.issueNumberReferences).toBe(0);
+    expect(counts.docPathReferences).toBe(0);
   });
 });

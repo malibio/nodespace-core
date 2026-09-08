@@ -1,5 +1,5 @@
 /**
- * KanbanView — stale-title regression (issue #2012).
+ * KanbanView — stale-title regression.
  *
  * See list-view.test.ts for the full root-cause explanation. KanbanView's `titleOf` used
  * `node.title || node.content`, so a card for a node whose title went stale showed the wrong

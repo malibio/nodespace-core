@@ -424,7 +424,7 @@ describe('Core Plugins Integration', () => {
     });
   });
 
-  describe('Task Node extractMetadata (Issue #838)', () => {
+  describe('Task Node extractMetadata', () => {
     it('should extract status from top-level field (TaskNode format)', () => {
       // TaskNode format: status is at top level (from typed APIs like updateTaskNode)
       const node = {

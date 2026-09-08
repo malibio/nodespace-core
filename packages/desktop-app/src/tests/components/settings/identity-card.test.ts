@@ -1,5 +1,5 @@
 /**
- * IdentityCard (ADR-037, core#2388) — the Settings → Database edit path for
+ * IdentityCard (ADR-037) — the Settings → Database edit path for
  * the seeded local-user PersonNode, and the "editable afterwards" surface
  * the onboarding wizard's identity step points to.
  */
@@ -20,7 +20,7 @@ import IdentityCard from '$lib/components/settings/sections/identity-card.svelte
 const BLANK = { nodeId: 'person-1', name: '', email: '', isBlank: true };
 const FILLED = { nodeId: 'person-1', name: 'Alice Example', email: 'alice@example.com', isBlank: false };
 
-describe('IdentityCard (core#2388)', () => {
+describe('IdentityCard', () => {
   beforeEach(() => {
     mockInvoke.mockReset();
   });

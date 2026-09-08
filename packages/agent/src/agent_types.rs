@@ -503,7 +503,7 @@ pub struct PriorWrite {
 /// flattened text for the internal LLM-facing history — a bare string is what
 /// `session_already_clarified` scans for and what any plain-text reader of
 /// `response` still gets. This struct is the additional structured channel
-/// the UI needs, per issue #1930.
+/// the UI needs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClarifyPrompt {
     /// The specific question put to the user.
