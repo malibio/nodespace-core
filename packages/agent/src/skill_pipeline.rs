@@ -110,14 +110,17 @@ CALL create_schema NOW: your next action is the tool call, not planning text.
 /// defect: an omission from this list is visible in review, where an
 /// omission from `schema_creation_guidance()` alone was not.
 ///
-/// All five entries below are field/enum **shape** rules that ADR-064 moved
-/// onto `create_schema`'s own tool-schema descriptions
+/// All five entries below are field/enum **shape** rules that ADR-064 says
+/// belong on `create_schema`'s own tool-schema descriptions
 /// (`local_agent/tools.rs`) instead of the prompt, to stop the schema and the
 /// prompt from being two independently-maintained copies of the same rule
 /// (the `coreValues`/`core_values` casing contradiction ADR-064 records is
 /// exactly that drift). The model reads the tool schema immediately before
 /// calling `create_schema`, so shape rules belong there rather than in prose
-/// interpolated earlier in the prompt.
+/// interpolated earlier in the prompt. Four of the five actually have that
+/// tool-schema coverage today; `enum-edge-fields` does not (see its own
+/// comment below) — it is excluded from the prompt per the same doctrine,
+/// but the tool-schema side ADR-064 calls for hasn't been built yet.
 #[cfg(test)]
 const SCHEMA_RULES_NOT_IN_PROMPT: &[&str] = &[
     // Field-naming shape: stated on create_schema's own field description.
@@ -132,8 +135,18 @@ const SCHEMA_RULES_NOT_IN_PROMPT: &[&str] = &[
     // Enum value/label casing: stated on create_schema's enum field
     // description.
     "enum-format",
-    // Edge field shape (coreValues, closed vocabulary): stated on
-    // create_schema's relationships/edgeFields description.
+    // Edge field shape (coreValues, closed vocabulary): NOT currently stated
+    // anywhere in create_schema's or update_schema's tool schema — neither
+    // takes an `edgeFields` parameter at all (packages/agent/src/local_agent/tools.rs).
+    // The only enforcement is the post-hoc validator in
+    // packages/core/src/schema/mod.rs, which runs after the model has
+    // already committed to a shape — exactly the "too late" failure mode
+    // ADR-064 exists to prevent for this category of rule. This entry
+    // belongs here per ADR-064's *intent* (argument shape moves off the
+    // prompt and onto the tool schema), but that tool-schema side doesn't
+    // exist yet, so today this rule reaches the in-app agent through
+    // neither channel. A follow-up should add an `edgeFields` property to
+    // both tool schemas and only then can this comment claim real coverage.
     "enum-edge-fields",
 ];
 
