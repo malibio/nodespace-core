@@ -69,8 +69,8 @@ pub struct CompletedSession {
 /// them — the loser's read predates the winner's write and its merge can
 /// still land a stale value. Acceptable today because capture fires once, at
 /// session end, when no turn is normally in flight; a real fix (e.g. routing
-/// through the checked update path, or a seam like ADR-067's proposed
-/// unit-of-work boundary) is a separate, larger change.
+/// through the checked update path, or a future transaction/unit-of-work
+/// seam once one exists) is a separate, larger change.
 pub async fn finalize_capture(
     session: &CompletedSession,
     capture: &SessionCapture,
