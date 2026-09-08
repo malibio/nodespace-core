@@ -73,14 +73,17 @@ export const AGENTS: AgentConfig[] = [
     skillFrontmatter: SKILL_FRONTMATTER,
   },
   {
-    name: 'gemini',
-    detectionDir: join(home, '.gemini'),
-    installDir: join(home, '.gemini', 'skills', 'nodespace'),
+    name: 'antigravity',
+    // Antigravity CLI stores its config, plugins, and skills under the
+    // Gemini config dir (a holdover from its Gemini CLI lineage) —
+    // ~/.gemini/antigravity-cli/, not a separate ~/.antigravity.
+    detectionDir: join(home, '.gemini', 'antigravity-cli'),
+    installDir: join(home, '.gemini', 'antigravity-cli', 'skills', 'nodespace'),
     shims: [
       'SKILL.md',
       'references/cli.md',
-      'shims/gemini/nodespace-handler.ts',
-      'shims/gemini/nodespace-tools.json',
+      'shims/antigravity/nodespace-mcp-server.ts',
+      'shims/antigravity/nodespace-mcp-config.json',
     ],
     skillFrontmatter: SKILL_FRONTMATTER,
   },

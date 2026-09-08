@@ -196,7 +196,7 @@ pub enum ModelStatus {
 pub enum AgentType {
     ClaudeCode,
     Codex,
-    GeminiCli,
+    AntigravityCli,
     Pi,
     OpenCode,
 }

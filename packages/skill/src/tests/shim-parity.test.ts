@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 // description edit in one shim (without the others) fails here.
 //
 // What each shim declares:
-//  - gemini   (`nodespace-tools.json`): machine-readable name + description — the reference.
+//  - antigravity (`nodespace-mcp-server.ts`): `name` + `description` per tool object — the reference.
 //  - codex / opencode (`nodespace-plugin.ts`): `name` + `description` per tool object.
 //  - claude-code (`nodespace-hook.ts`): registers by NAME via `hook('name', …)`;
 //    it carries no per-tool description, so only its tool NAMES are comparable.
@@ -25,16 +25,6 @@ const EXPECTED_TOOLS = [
   "nodespace_search_semantic",
   "nodespace_update_node",
 ];
-
-/** gemini manifest → `{ name: description }` (the reference definitions). */
-function geminiToolMap(): Record<string, string> {
-  const json = JSON.parse(read("gemini/nodespace-tools.json")) as {
-    tools: Array<{ name: string; description: string }>;
-  };
-  const map: Record<string, string> = {};
-  for (const t of json.tools) map[t.name] = t.description;
-  return map;
-}
 
 /**
  * Extract `{ name: description }` from a `.ts` plugin shim. A tool's own
@@ -60,18 +50,18 @@ function claudeCodeToolNames(): string[] {
 }
 
 describe("ACP shim tool parity", () => {
-  const gemini = geminiToolMap();
+  const antigravity = tsPluginToolMap("antigravity/nodespace-mcp-server.ts");
 
-  it("gemini declares exactly the expected tool set", () => {
-    expect(Object.keys(gemini).sort()).toEqual(EXPECTED_TOOLS);
+  it("antigravity declares exactly the expected tool set", () => {
+    expect(Object.keys(antigravity).sort()).toEqual(EXPECTED_TOOLS);
   });
 
-  it("codex tool names + descriptions match gemini", () => {
-    expect(tsPluginToolMap("codex/nodespace-plugin.ts")).toEqual(gemini);
+  it("codex tool names + descriptions match antigravity", () => {
+    expect(tsPluginToolMap("codex/nodespace-plugin.ts")).toEqual(antigravity);
   });
 
-  it("opencode tool names + descriptions match gemini", () => {
-    expect(tsPluginToolMap("opencode/nodespace-plugin.ts")).toEqual(gemini);
+  it("opencode tool names + descriptions match antigravity", () => {
+    expect(tsPluginToolMap("opencode/nodespace-plugin.ts")).toEqual(antigravity);
   });
 
   it("claude-code registers exactly the expected tool names", () => {

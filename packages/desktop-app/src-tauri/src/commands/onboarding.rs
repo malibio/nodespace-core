@@ -260,7 +260,7 @@ pub async fn get_integrations_status() -> Result<OnboardingStatus, String> {
 }
 
 /// Remove the NodeSpace skill files from every installed-into agent's skill
-/// directory (Claude Code, Codex, Gemini CLI, OpenCode -- whichever the
+/// directory (Claude Code, Codex, Antigravity CLI, OpenCode -- whichever the
 /// installer's `AGENTS` config currently lists), by delegating to
 /// `install.ts`'s own `uninstall` command. Resets both setup.json
 /// (authoritative for get_skill_setup_status) and config.json.

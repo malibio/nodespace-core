@@ -2,8 +2,9 @@
  * After `configure_skill` resolves, the wizard must name which agents
  * actually got the skill, not just say "Claude Code skill" regardless of
  * what happened. The bug this covers had a correct multi-agent install
- * (Claude Code AND Gemini CLI) reading as if Gemini had never been touched
- * at all, because nothing in the UI ever showed the real per-agent result.
+ * (Claude Code AND Antigravity CLI) reading as if Antigravity had never been
+ * touched at all, because nothing in the UI ever showed the real per-agent
+ * result.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -49,7 +50,7 @@ describe('OnboardingWizard skill-install reporting', () => {
       if (cmd === 'configure_skill') {
         return Promise.resolve({
           success: true,
-          agentsInstalled: ['claude-code', 'gemini'],
+          agentsInstalled: ['claude-code', 'antigravity'],
           agentsSkipped: [],
           cliOnPath: true,
           cliWarning: null,
@@ -72,14 +73,14 @@ describe('OnboardingWizard skill-install reporting', () => {
 
     const banner = container.querySelector('.success-banner');
     expect(banner?.textContent).toContain('Claude Code');
-    expect(banner?.textContent).toContain('Gemini CLI');
+    expect(banner?.textContent).toContain('Antigravity CLI');
 
     await fireEvent.click(buttonByText(container, 'Next')); // -> summary step
     await tick();
 
     const summary = container.querySelector('.summary-list');
     expect(summary?.textContent).toContain('Claude Code');
-    expect(summary?.textContent).toContain('Gemini CLI');
+    expect(summary?.textContent).toContain('Antigravity CLI');
   });
 
   it('reports a detected-but-skipped agent with its reason, distinct from a successful install', async () => {

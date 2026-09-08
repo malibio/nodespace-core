@@ -81,9 +81,7 @@ fn install_hint_for(agent_type: AgentType) -> &'static str {
             "npm install -g @anthropic-ai/claude-code — https://claude.ai/code"
         }
         AgentType::Codex => "npm install -g @openai/codex — https://openai.com/codex",
-        AgentType::GeminiCli => {
-            "brew install gemini-cli — https://github.com/google-gemini/gemini-cli"
-        }
+        AgentType::AntigravityCli => "curl -fsSL https://antigravity.google/cli/install.sh | bash",
         AgentType::Pi => "https://pi.dev",
         AgentType::OpenCode => "https://opencode.ai",
     }
@@ -207,7 +205,7 @@ mod tests {
         let expected = [
             AgentType::ClaudeCode,
             AgentType::Codex,
-            AgentType::GeminiCli,
+            AgentType::AntigravityCli,
             AgentType::Pi,
             AgentType::OpenCode,
         ];

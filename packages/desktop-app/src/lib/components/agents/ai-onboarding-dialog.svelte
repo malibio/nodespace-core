@@ -100,7 +100,7 @@
               </svg>
             </div>
             <h3>Use an existing AI provider</h3>
-            <p>Connect to Claude Code, Gemini CLI, or other ACP-compatible agents</p>
+            <p>Connect to Claude Code, Antigravity CLI, or other ACP-compatible agents</p>
             {#if availableAgents.length > 0}
               <span class="path-badge">{availableAgents.length} agent{availableAgents.length === 1 ? '' : 's'} detected</span>
             {/if}
@@ -156,7 +156,7 @@
           {#if agents.length === 0}
             <div class="no-agents">
               <p>No ACP agents detected on your system.</p>
-              <p class="hint-text">Install Claude Code, Gemini CLI, or another ACP-compatible agent to get started.</p>
+              <p class="hint-text">Install Claude Code, Antigravity CLI, or another ACP-compatible agent to get started.</p>
             </div>
           {/if}
         </div>

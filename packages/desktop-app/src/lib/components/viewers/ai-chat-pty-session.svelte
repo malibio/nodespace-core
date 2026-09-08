@@ -33,7 +33,7 @@
   const AGENT_OPTIONS = [
     { id: 'claude-code', label: 'Claude Code' },
     { id: 'codex', label: 'Codex' },
-    { id: 'gemini-cli', label: 'Gemini CLI' },
+    { id: 'antigravity-cli', label: 'Antigravity CLI' },
     { id: 'pi', label: 'Pi' },
     { id: 'open-code', label: 'Open Code' },
   ];

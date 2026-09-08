@@ -652,7 +652,7 @@ Manage PTY agent sessions (launch, attach, list, kill)
 
 **`nodespace session launch`** — Launch a new agent session and stream its output to stdout
 
-- `<AGENT>` — Agent to launch: claude-code, codex, gemini, pi, opencode (required)
+- `<AGENT>` — Agent to launch: claude-code, codex, antigravity, pi, opencode (required)
 - `--prompt <PROMPT>` — Initial prompt passed to the agent at launch time
 - `--cols <COLS>` — Terminal width in columns (defaults to current terminal width)
 - `--rows <ROWS>` — Terminal height in rows (defaults to current terminal height)
