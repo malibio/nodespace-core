@@ -277,6 +277,31 @@ export function groupSupportsEdgeEditing(group: RelationshipGroupView): boolean 
   return group.direction === 'out' && group.edgeFields.length > 0;
 }
 
+/**
+ * The ids of nodes already linked into a group — the single source of truth
+ * for "already linked" checks in the target picker. Both entry paths (typed
+ * search results and a pasted id) filter against this same set, so pasting
+ * the id of an already-linked node can never slip past the guard that search
+ * results are already filtered by.
+ */
+export function linkedTargetIds(group: RelationshipGroupView): Set<string> {
+  return new Set(group.rows.map((row) => row.id));
+}
+
+/** Whether a node id is already linked into this group. */
+export function isTargetLinked(group: RelationshipGroupView, id: string): boolean {
+  return linkedTargetIds(group).has(id);
+}
+
+/** Drop nodes already linked into the group from a set of candidate targets. */
+export function filterUnlinkedTargets<T extends { id: string }>(
+  group: RelationshipGroupView,
+  nodes: T[]
+): T[] {
+  const existing = linkedTargetIds(group);
+  return nodes.filter((node) => !existing.has(node.id));
+}
+
 /** The groups a node's relationship panel renders, partitioned by what each needs. */
 export interface PartitionedGroups {
   /** Groups with at least one edge — rendered as full sections, either direction. */
