@@ -484,26 +484,85 @@ mod shutdown_watchdog_tests {
     }
 }
 
+/// Wraps a shutdown-trigger future (e.g. `combined_shutdown`) so that the
+/// instant it resolves, a watchdog is armed for whatever tonic does next --
+/// its own connection/stream draining inside `serve_with_incoming_shutdown`.
+///
+/// Live investigation localized the actual hang to exactly this
+/// window: `shutdown_all`/`release_shared_gpu` (bounded by
+/// [`drain_and_release_gpu`]'s own watchdog) are always fast, microseconds
+/// to milliseconds, even during a stalled run -- the delay sits entirely
+/// between the shutdown signal firing and `serve_with_incoming_shutdown`'s
+/// future resolving. A client with an in-flight streaming RPC open at the
+/// moment of shutdown (the `WatchNodes` live-update subscription is the
+/// leading suspect) can make tonic's graceful drain wait; killing the GUI
+/// client before signaling the daemon made the stall disappear entirely
+/// across repeated trials, while leaving it connected reproduced it
+/// intermittently. Neither existing watchdog covers this: `main`'s outer
+/// one never arms at all on the signal path (see
+/// [`bridge_grpc_completion_to_tray`]'s doc comment), and
+/// `drain_and_release_gpu`'s only starts once its own timer is taken, which
+/// is *after* this gap.
+///
+/// Returns a slot the caller must pass to
+/// [`defuse_serve_drain_watchdog`] once `serve_with_incoming_shutdown`
+/// itself has returned. Tonic hands nothing back through the shutdown
+/// future's own output (it stays `()`), so this side channel is how the
+/// armed watchdog's handle escapes the future's scope and reaches the code
+/// after the `.await`.
+///
+/// `timeout`/`on_timeout` are taken as parameters rather than hardcoded --
+/// same reason [`arm_shutdown_watchdog`] does -- so the arm-only-after-
+/// resolution timing is unit-testable with a short timeout and an
+/// observable side effect instead of a real 15-second wait and a real
+/// process exit. Production passes [`SHUTDOWN_WATCHDOG_TIMEOUT`] and
+/// `std::process::exit`.
+fn watch_for_shutdown_signal(
+    shutdown_future: impl std::future::Future<Output = ()> + Send + 'static,
+    timeout: Duration,
+    on_timeout: impl FnOnce() + Send + 'static,
+) -> (
+    impl std::future::Future<Output = ()>,
+    Arc<std::sync::Mutex<Option<Arc<AtomicBool>>>>,
+) {
+    let slot: Arc<std::sync::Mutex<Option<Arc<AtomicBool>>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let slot_for_future = slot.clone();
+    let wrapped = async move {
+        shutdown_future.await;
+        let defused = arm_shutdown_watchdog(timeout, on_timeout);
+        *slot_for_future.lock().unwrap() = Some(defused);
+    };
+    (wrapped, slot)
+}
+
+/// Defuses the watchdog [`watch_for_shutdown_signal`] armed, once
+/// `serve_with_incoming_shutdown` has actually returned. A no-op if the
+/// shutdown future never got the chance to arm one -- shouldn't happen in
+/// practice, since `serve_with_incoming_shutdown` cannot return before its
+/// own shutdown future resolves, but a missing watchdog is a strictly safer
+/// failure mode here than panicking on it.
+fn defuse_serve_drain_watchdog(slot: &std::sync::Mutex<Option<Arc<AtomicBool>>>) {
+    if let Some(defused) = slot.lock().unwrap().take() {
+        defused.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Drain every open database's compute, then release the shared GPU context
 /// once. Common to both platforms' tray-mode `serve_grpc`.
 ///
-/// Bounded by its own watchdog rather than relying on `main`'s
-/// [`SHUTDOWN_WATCHDOG_TIMEOUT`] alone. `main`'s watchdog only arms once
-/// `tray::run()` has returned -- and on a signal-triggered shutdown
-/// (SIGTERM/SIGINT), `tray::run()` does not return until this exact drain
-/// has already finished (see [`bridge_grpc_completion_to_tray`]'s doc
-/// comment: the bridge that lets the tray loop exit on a signal only fires
-/// once `serve_grpc`'s whole body, including this drain, has already
-/// resolved). So on the tray-Quit path `main`'s watchdog happens to cover
-/// this segment (tray::run() returns immediately on a Quit click, well
-/// before this drain runs) -- but on the signal path it never arms at all,
-/// leaving a stall here completely unprotected even though this is the
-/// exact segment already confirmed to be where the observed hangs occur.
-/// Arming the same bound directly around this drain protects both trigger
-/// paths symmetrically; `main`'s watchdog becomes a secondary safety net
-/// for whatever runs before this (mainly tonic's own drain of in-flight
-/// requests) rather than the only line of defense for the part already
-/// known to hang.
+/// Bounded by its own watchdog for the same reason
+/// [`watch_for_shutdown_signal`] bounds tonic's connection drain: `main`'s
+/// outer watchdog only arms once `tray::run()` has returned, which on a
+/// signal-triggered shutdown doesn't happen until `serve_grpc`'s whole body
+/// -- this drain included -- has already resolved (see
+/// [`bridge_grpc_completion_to_tray`]'s doc comment). Live investigation
+/// found this specific drain is not actually where the hang lives (see
+/// `watch_for_shutdown_signal`'s doc comment for where it is),
+/// but the watchdog stays here regardless as real, correct protection for
+/// this segment too -- both are true simultaneously: this drain has always
+/// measured fast, and an unprotected window here would still be a bug
+/// waiting to happen the day that stops being true.
 async fn drain_and_release_gpu(
     shutdown_manager: Arc<DatabaseManager>,
     shared_model: watch::Receiver<Option<Arc<EmbeddingService>>>,
@@ -628,6 +687,94 @@ mod drain_and_release_gpu_tests {
                 "{label} serve_grpc must route its post-serve drain through drain_and_release_gpu, \
                  not call shutdown_all/release_shared_gpu inline"
             );
+            assert!(
+                body.contains("watch_for_shutdown_signal(")
+                    && body.contains("defuse_serve_drain_watchdog("),
+                "{label} serve_grpc must wrap its shutdown-trigger future with \
+                 watch_for_shutdown_signal and defuse it with defuse_serve_drain_watchdog after \
+                 serve_with_incoming_shutdown returns -- a platform missing either call silently \
+                 loses watchdog coverage for tonic's own connection/stream drain"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod watch_for_shutdown_signal_tests {
+    use super::{defuse_serve_drain_watchdog, watch_for_shutdown_signal};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// The watchdog must not fire while the shutdown-trigger future hasn't
+    /// resolved yet -- it has to arm only once shutdown is actually
+    /// signaled, not for the server's whole normal-operation lifetime
+    /// (which would fire on every healthy run, not just a stalled
+    /// shutdown). `std::future::pending` never resolves, so if
+    /// `on_timeout` ever fires here, arming happened before resolution.
+    /// Multi-threaded runtime: the test thread blocks on the synchronous
+    /// `recv_timeout` below, so the spawned task needs a real worker thread
+    /// of its own to be polled at all -- on the default single-threaded
+    /// runtime it would never run, making this pass vacuously regardless
+    /// of whether the code under test is correct.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn does_not_arm_before_the_shutdown_future_resolves() {
+        let (tx, rx) = mpsc::channel();
+        let (wrapped, _slot) = watch_for_shutdown_signal(
+            std::future::pending::<()>(),
+            Duration::from_millis(30),
+            move || {
+                let _ = tx.send(());
+            },
+        );
+        tokio::spawn(wrapped);
+
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            other => panic!(
+                "the watchdog must not fire before the shutdown future resolves (it never does \
+                 here), got {other:?}"
+            ),
+        }
+    }
+
+    /// Once the shutdown-trigger future resolves, the watchdog is armed for
+    /// real and fires on schedule if nothing defuses it -- this is what
+    /// bounds a stall inside `serve_with_incoming_shutdown` itself.
+    /// Multi-threaded runtime -- same reason as the test above: the spawned
+    /// task needs a real worker thread to be polled while the test thread
+    /// blocks on `recv_timeout`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn arms_and_fires_once_the_shutdown_future_resolves_if_never_defused() {
+        let (tx, rx) = mpsc::channel();
+        let (wrapped, _slot) =
+            watch_for_shutdown_signal(async {}, Duration::from_millis(30), move || {
+                let _ = tx.send(());
+            });
+        tokio::spawn(wrapped);
+
+        match rx.recv_timeout(Duration::from_millis(300)) {
+            Ok(()) => {}
+            other => panic!("the watchdog must fire once armed and never defused, got {other:?}"),
+        }
+    }
+
+    /// `defuse_serve_drain_watchdog`, called once `serve_with_incoming_shutdown`
+    /// has actually returned, must prevent the watchdog from firing --
+    /// otherwise a perfectly healthy drain would still force-exit the
+    /// process every time.
+    #[tokio::test]
+    async fn defusing_after_resolution_prevents_the_watchdog_from_firing() {
+        let (tx, rx) = mpsc::channel();
+        let (wrapped, slot) =
+            watch_for_shutdown_signal(async {}, Duration::from_millis(30), move || {
+                let _ = tx.send(());
+            });
+        wrapped.await; // resolves immediately, arming the watchdog
+        defuse_serve_drain_watchdog(&slot);
+
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+            Ok(()) => panic!("defuse_serve_drain_watchdog must prevent the watchdog from firing"),
         }
     }
 }
@@ -746,12 +893,25 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let listener = bind_uds_owner_only(&sock)?;
 
     let shutdown_controller = controller.clone();
-    let combined_shutdown = async move {
-        tokio::select! {
-            _ = signal_shutdown => tracing::info!("OS signal triggered shutdown"),
-            _ = shutdown_controller.shutdown() => tracing::info!("Tray Quit triggered shutdown"),
-        }
-    };
+    let (combined_shutdown, serve_drain_watchdog) = watch_for_shutdown_signal(
+        async move {
+            tokio::select! {
+                _ = signal_shutdown => tracing::info!("OS signal triggered shutdown"),
+                _ = shutdown_controller.shutdown() => tracing::info!("Tray Quit triggered shutdown"),
+            }
+        },
+        SHUTDOWN_WATCHDOG_TIMEOUT,
+        || {
+            tracing::error!(
+                timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
+                "serve_with_incoming_shutdown did not finish draining connections/streams in \
+                 time -- forcing exit. If you see this, please report it: a client (e.g. an \
+                 open WatchNodes stream) is likely stalling tonic's own graceful shutdown \
+                 (see core#2357)."
+            );
+            std::process::exit(0);
+        },
+    );
 
     tracing::info!(sock = %sock.display(), "gRPC server listening");
 
@@ -774,6 +934,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     .serve_with_incoming_shutdown(UnixListenerStream::new(listener), combined_shutdown)
     .await
     .context("gRPC server terminated with error")?;
+    defuse_serve_drain_watchdog(&serve_drain_watchdog);
     let _ = tokio::fs::remove_file(&sock_cleanup).await;
     drain_and_release_gpu(shutdown_manager, shared_model).await;
     Ok(())
@@ -937,12 +1098,25 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     let shutdown_manager = manager.clone();
 
     let shutdown_controller = controller.clone();
-    let combined_shutdown = async move {
-        tokio::select! {
-            _ = signal_shutdown => tracing::info!("OS signal triggered shutdown"),
-            _ = shutdown_controller.shutdown() => tracing::info!("Tray Quit triggered shutdown"),
-        }
-    };
+    let (combined_shutdown, serve_drain_watchdog) = watch_for_shutdown_signal(
+        async move {
+            tokio::select! {
+                _ = signal_shutdown => tracing::info!("OS signal triggered shutdown"),
+                _ = shutdown_controller.shutdown() => tracing::info!("Tray Quit triggered shutdown"),
+            }
+        },
+        SHUTDOWN_WATCHDOG_TIMEOUT,
+        || {
+            tracing::error!(
+                timeout_secs = SHUTDOWN_WATCHDOG_TIMEOUT.as_secs(),
+                "serve_with_incoming_shutdown did not finish draining connections/streams in \
+                 time -- forcing exit. If you see this, please report it: a client (e.g. an \
+                 open WatchNodes stream) is likely stalling tonic's own graceful shutdown \
+                 (see core#2357)."
+            );
+            std::process::exit(0);
+        },
+    );
 
     tracing::info!(pipe = %name, "gRPC server listening (Named Pipe)");
 
@@ -994,6 +1168,7 @@ async fn serve_grpc(controller: tray::TrayController) -> Result<()> {
     })
     .await
     .context("gRPC server terminated with error")?;
+    defuse_serve_drain_watchdog(&serve_drain_watchdog);
     drain_and_release_gpu(shutdown_manager, shared_model).await;
     Ok(())
 }
