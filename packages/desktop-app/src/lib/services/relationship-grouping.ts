@@ -260,6 +260,33 @@ export function groupSupportsEdgeEditing(group: RelationshipGroupView): boolean 
   return group.direction === 'out' && group.edgeFields.length > 0;
 }
 
+/**
+ * The ids of nodes already linked into a group — the single source of truth
+ * for "already linked" checks in the target picker, so a target search never
+ * offers a node the group already has an edge to.
+ *
+ * Lowercased so the comparison is case-insensitive: callers may compare
+ * against an id from a source that doesn't guarantee the same casing as the
+ * backend's canonical (lowercase) form.
+ */
+export function linkedTargetIds(group: RelationshipGroupView): Set<string> {
+  return new Set(group.rows.map((row) => row.id.toLowerCase()));
+}
+
+/** Whether a node id is already linked into this group, case-insensitively. */
+export function isTargetLinked(group: RelationshipGroupView, id: string): boolean {
+  return linkedTargetIds(group).has(id.toLowerCase());
+}
+
+/** Drop nodes already linked into the group from a set of candidate targets. */
+export function filterUnlinkedTargets<T extends { id: string }>(
+  group: RelationshipGroupView,
+  nodes: T[]
+): T[] {
+  const existing = linkedTargetIds(group);
+  return nodes.filter((node) => !existing.has(node.id.toLowerCase()));
+}
+
 /** The groups a node's relationship panel renders, partitioned by what each needs. */
 export interface PartitionedGroups {
   /** Groups with at least one edge — rendered as full sections, either direction. */
