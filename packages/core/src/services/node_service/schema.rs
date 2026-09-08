@@ -588,59 +588,94 @@ impl NodeService {
             )));
         }
 
-        // Step 1: Migrate all node property data
-        let affected = self
-            .store
-            .rename_schema_field(type_id, from, to)
-            .await
-            .map_err(|e| {
-                NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
-                    context: format!(
-                        "Failed to migrate field data '{}' -> '{}' for type '{}': {}",
-                        from, to, type_id, e
-                    ),
+        // ADR-069 §1b/S3, closing F3: the data migration and the schema
+        // definition rewrite land in ONE transaction. Previously two
+        // independent atomic writes — a failure rewriting the definition
+        // left every instance's property data rekeyed to `to` while the
+        // schema still declared `from`, breaking `compute_title`, CEL
+        // expressions, and query filters for the whole type. Any failure now
+        // rolls back both.
+        let type_id_owned = type_id.to_string();
+        let from_owned = from.to_string();
+        let to_owned = to.to_string();
+        let service = self.clone();
+        let service_for_tx = service.clone();
+        let affected: u64 = service
+            .with_transaction(move |tx| {
+                let service = service_for_tx.clone();
+                let type_id = type_id_owned.clone();
+                let from = from_owned.clone();
+                let to = to_owned.clone();
+                let schema = schema.clone();
+                Box::pin(async move {
+                    // Step 1: Migrate all node property data
+                    let affected = crate::db::SqliteStore::rename_schema_field_in_tx(
+                        tx.store_tx(),
+                        &type_id,
+                        &from,
+                        &to,
+                    )
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
+                            context: format!(
+                                "Failed to migrate field data '{}' -> '{}' for type '{}': {}",
+                                from, to, type_id, e
+                            ),
+                        })
+                    })?;
+
+                    // Step 2: Update schema definition — rename field in the fields list
+                    let updated_fields: Vec<crate::models::schema::SchemaField> = schema
+                        .fields
+                        .into_iter()
+                        .map(|mut f| {
+                            if f.name == from {
+                                f.name = to.clone();
+                            }
+                            f
+                        })
+                        .collect();
+
+                    // Declarations live in the relationship table, not in
+                    // properties — the rebuilt properties carry fields only.
+                    let mut properties = serde_json::json!({
+                        "isCore": schema.is_core,
+                        "schemaVersion": schema.schema_version,
+                        "fields": updated_fields,
+                    });
+                    if let Some(ref t) = schema.title_template {
+                        properties["titleTemplate"] = serde_json::Value::String(t.clone());
+                    }
+                    if let Some(ref t) = schema.properties_header_summary_template {
+                        properties["propertiesHeaderSummaryTemplate"] =
+                            serde_json::Value::String(t.clone());
+                    }
+
+                    let update = crate::models::NodeUpdate {
+                        properties: Some(properties),
+                        ..Default::default()
+                    };
+
+                    service
+                        .update_node_unchecked_in_tx(tx, &type_id, update)
+                        .await
+                        .map_err(|e| {
+                            NodeServiceError::DatabaseError(
+                                crate::db::DatabaseError::SqlExecutionError {
+                                    context: format!(
+                                        "Failed to update schema definition after field rename \
+                                         '{}' -> '{}' for type '{}': {}",
+                                        from, to, type_id, e
+                                    ),
+                                },
+                            )
+                        })?;
+
+                    Ok(affected)
                 })
-            })?;
-
-        // Step 2: Update schema definition — rename field in the fields list
-        let updated_fields: Vec<crate::models::schema::SchemaField> = schema
-            .fields
-            .into_iter()
-            .map(|mut f| {
-                if f.name == from {
-                    f.name = to.to_string();
-                }
-                f
             })
-            .collect();
-
-        // Declarations live in the relationship table, not in properties — the
-        // rebuilt properties carry fields only.
-        let mut properties = serde_json::json!({
-            "isCore": schema.is_core,
-            "schemaVersion": schema.schema_version,
-            "fields": updated_fields,
-        });
-        if let Some(ref t) = schema.title_template {
-            properties["titleTemplate"] = serde_json::Value::String(t.clone());
-        }
-        if let Some(ref t) = schema.properties_header_summary_template {
-            properties["propertiesHeaderSummaryTemplate"] = serde_json::Value::String(t.clone());
-        }
-
-        let update = crate::models::NodeUpdate {
-            properties: Some(properties),
-            ..Default::default()
-        };
-
-        self.update_node_unchecked(type_id, update)
-            .await
-            .map_err(|e| NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
-                context: format!(
-                    "Failed to update schema definition after field rename '{}' -> '{}' for type '{}': {}",
-                    from, to, type_id, e
-                ),
-            }))?;
+            .await?;
 
         Ok(affected)
     }
