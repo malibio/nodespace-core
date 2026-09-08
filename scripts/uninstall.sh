@@ -73,8 +73,11 @@ for entry in $SKILL_DIRS; do
     name=${entry%%:*}
     dir=${entry#*:}
     if [ -d "$dir" ]; then
-        rm -rf "$dir"
-        printf 'Removed %s skill at %s\n' "$name" "$dir"
+        if rm -rf "$dir"; then
+            printf 'Removed %s skill at %s\n' "$name" "$dir"
+        else
+            printf 'Warning: failed to remove %s skill at %s\n' "$name" "$dir" >&2
+        fi
     fi
 done
 unset IFS
