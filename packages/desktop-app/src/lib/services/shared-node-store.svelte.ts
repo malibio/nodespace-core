@@ -2993,7 +2993,7 @@ export class SharedNodeStore {
       // didn't save — matches updateNode()'s/deleteNode()'s/setNode()'s
       // outer catch, which all have this same fallback. Without it, a task
       // status/priority/due-date edit that fails outside an OCC conflict
-      // reverted (or, post-#2088, stayed as the optimistic value) with zero
+      // reverted (or, in a later revision, stayed as the optimistic value) with zero
       // user-visible signal.
       conflictNotifications.add({
         nodeId,

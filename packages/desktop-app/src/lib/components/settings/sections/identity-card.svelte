@@ -21,13 +21,15 @@
 
   interface LocalIdentity {
     nodeId: string;
-    name: string;
+    firstName: string;
+    lastName: string;
     email: string;
     isBlank: boolean;
   }
 
   let identity = $state<LocalIdentity | null>(null);
-  let name = $state('');
+  let firstName = $state('');
+  let lastName = $state('');
   let email = $state('');
   let saving = $state(false);
   let feedback = $state<{ ok: boolean; message: string } | null>(null);
@@ -36,7 +38,8 @@
     try {
       identity = await invoke<LocalIdentity | null>('get_local_identity');
       if (identity) {
-        name = identity.name;
+        firstName = identity.firstName;
+        lastName = identity.lastName;
         email = identity.email;
       }
     } catch (err) {
@@ -51,10 +54,12 @@
     feedback = null;
     try {
       identity = await invoke<LocalIdentity>('set_local_identity', {
-        name: name.trim(),
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
         email: email.trim(),
       });
-      name = identity.name;
+      firstName = identity.firstName;
+      lastName = identity.lastName;
       email = identity.email;
       feedback = { ok: true, message: 'Saved.' };
     } catch (err) {
@@ -94,10 +99,26 @@
       </div>
     {/if}
     <div class="mb-3 flex flex-col gap-1.5">
-      <label for="identity-card-name" class="text-muted-foreground text-xs font-medium"
-        >Name</label
+      <label for="identity-card-first-name" class="text-muted-foreground text-xs font-medium"
+        >First name</label
       >
-      <Input id="identity-card-name" type="text" bind:value={name} placeholder="Your name" />
+      <Input
+        id="identity-card-first-name"
+        type="text"
+        bind:value={firstName}
+        placeholder="First name"
+      />
+    </div>
+    <div class="mb-3 flex flex-col gap-1.5">
+      <label for="identity-card-last-name" class="text-muted-foreground text-xs font-medium"
+        >Last name</label
+      >
+      <Input
+        id="identity-card-last-name"
+        type="text"
+        bind:value={lastName}
+        placeholder="Last name"
+      />
     </div>
     <div class="mb-4 flex flex-col gap-1.5">
       <label for="identity-card-email" class="text-muted-foreground text-xs font-medium"

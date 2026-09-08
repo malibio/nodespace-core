@@ -1484,7 +1484,7 @@ mod macos_codesign_tests {
 
     #[test]
     fn extraction_skip_path_still_clears_a_pre_existing_quarantine_flag() {
-        // Regresses the gap an adversarial review of PR#2290 caught: a
+        // Regresses a gap an adversarial review caught: a
         // same-size, validly-signed binary can still be quarantined if it was
         // extracted before this fix existed, and a naive skip-when-unchanged
         // check would leave it that way forever on any upgrade whose bundled

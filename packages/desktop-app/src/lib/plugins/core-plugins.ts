@@ -674,6 +674,11 @@ export const personNodePlugin: PluginDefinition = {
     canHaveChildren: false,
     canBeChild: true
   },
+  // person is a static core plugin (not schema-plugin-loader-driven), so its
+  // title_template-derived flags are declared here rather than read off the
+  // stored schema — must match core_schemas.rs's person title_template.
+  hasTitleTemplate: true,
+  titleTemplate: '{first_name} {last_name}',
   node: {
     lazyLoad: () => import('../design/components/person-node.svelte'),
     priority: 1

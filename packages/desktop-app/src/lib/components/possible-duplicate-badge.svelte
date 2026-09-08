@@ -110,11 +110,9 @@
     match = null;
   }
 
-  const matchDisplayName = $derived(
-    (match?.properties?.['person'] as Record<string, unknown> | undefined)?.['name'] as
-      | string
-      | undefined
-  );
+  // match.title is the person schema's title_template-composed display name
+  // (server-computed) — not hand-recomposed from first_name/last_name here.
+  const matchDisplayName = $derived(match?.title || undefined);
 </script>
 
 {#if flagged}

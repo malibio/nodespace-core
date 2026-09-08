@@ -57,7 +57,14 @@ const EXCLUDE_FILE_NAMES = new Set([
   "search_skills_latency.rs",
 ]);
 
-const ISSUE_NUMBER_PATTERNS: RegExp[] = [/core#\d+/, /\(#\d+\)/, /\b[Ii]ssue #\d+\b/];
+const ISSUE_NUMBER_PATTERNS: RegExp[] = [
+  /core#\d+/,
+  /\(#\d+\)/,
+  /\b[Ii]ssue #\d+\b/,
+  /\bPR#\d+\b/,
+  /\b(?:pre|post)-#\d+\b/,
+  /\b(?:pre|post)-issue-\d+\b/,
+];
 const DOC_PATH_PATTERN = /nodespace-docs\//;
 
 // Ratchet baselines. See the file-level comment: lower on paydown, never raise.

@@ -44,7 +44,7 @@ describe('getEnumValues', () => {
   });
 
   it('drops a userValue whose value collides with an existing coreValue, keeping the core label', () => {
-    // Matches the pre-#2132 TaskSchemaForm behavior (statusOptionsWithExtensions'
+    // Matches the original TaskSchemaForm behavior (statusOptionsWithExtensions'
     // `if (!coreValues.has(uv.value))` guard) — an extension adds choices, it
     // doesn't shadow one that already exists.
     const field = enumField({

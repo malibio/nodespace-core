@@ -17,8 +17,14 @@ vi.mock('@tauri-apps/api/core', () =>
 
 import IdentityCard from '$lib/components/settings/sections/identity-card.svelte';
 
-const BLANK = { nodeId: 'person-1', name: '', email: '', isBlank: true };
-const FILLED = { nodeId: 'person-1', name: 'Alice Example', email: 'alice@example.com', isBlank: false };
+const BLANK = { nodeId: 'person-1', firstName: '', lastName: '', email: '', isBlank: true };
+const FILLED = {
+  nodeId: 'person-1',
+  firstName: 'Alice',
+  lastName: 'Example',
+  email: 'alice@example.com',
+  isBlank: false
+};
 
 describe('IdentityCard', () => {
   beforeEach(() => {
@@ -36,7 +42,10 @@ describe('IdentityCard', () => {
     await tick();
 
     expect(container.textContent).toContain('Not set');
-    expect(container.querySelector<HTMLInputElement>('#identity-card-name')?.value).toBe('');
+    expect(container.querySelector<HTMLInputElement>('#identity-card-first-name')?.value).toBe(
+      ''
+    );
+    expect(container.querySelector<HTMLInputElement>('#identity-card-last-name')?.value).toBe('');
   });
 
   it('loads and displays the current name/email when already set', async () => {
@@ -51,8 +60,11 @@ describe('IdentityCard', () => {
 
     expect(container.textContent).toContain('Set');
     expect(container.textContent).not.toContain('Not set');
-    expect(container.querySelector<HTMLInputElement>('#identity-card-name')?.value).toBe(
-      'Alice Example'
+    expect(container.querySelector<HTMLInputElement>('#identity-card-first-name')?.value).toBe(
+      'Alice'
+    );
+    expect(container.querySelector<HTMLInputElement>('#identity-card-last-name')?.value).toBe(
+      'Example'
     );
     expect(container.querySelector<HTMLInputElement>('#identity-card-email')?.value).toBe(
       'alice@example.com'
@@ -70,9 +82,13 @@ describe('IdentityCard', () => {
     await tick();
     await tick();
 
-    const nameInput = container.querySelector<HTMLInputElement>('#identity-card-name')!;
+    const firstNameInput = container.querySelector<HTMLInputElement>(
+      '#identity-card-first-name'
+    )!;
+    const lastNameInput = container.querySelector<HTMLInputElement>('#identity-card-last-name')!;
     const emailInput = container.querySelector<HTMLInputElement>('#identity-card-email')!;
-    await fireEvent.input(nameInput, { target: { value: 'Alice Example' } });
+    await fireEvent.input(firstNameInput, { target: { value: 'Alice' } });
+    await fireEvent.input(lastNameInput, { target: { value: 'Example' } });
     await fireEvent.input(emailInput, { target: { value: 'alice@example.com' } });
 
     const saveButton = Array.from(container.querySelectorAll('button')).find(
@@ -83,7 +99,8 @@ describe('IdentityCard', () => {
     await tick();
 
     expect(mockInvoke).toHaveBeenCalledWith('set_local_identity', {
-      name: 'Alice Example',
+      firstName: 'Alice',
+      lastName: 'Example',
       email: 'alice@example.com'
     });
     expect(container.textContent).toContain('Saved.');

@@ -41,10 +41,17 @@ const BLANK_STATUS = {
   pathAlreadyConfigured: true // so the PATH step, once reached, shows "Next" immediately
 };
 
-const BLANK_IDENTITY = { nodeId: 'person-1', name: '', email: '', isBlank: true };
+const BLANK_IDENTITY = {
+  nodeId: 'person-1',
+  firstName: '',
+  lastName: '',
+  email: '',
+  isBlank: true
+};
 const FILLED_IDENTITY = {
   nodeId: 'person-1',
-  name: 'Alice Example',
+  firstName: 'Alice',
+  lastName: 'Example',
   email: 'alice@example.com',
   isBlank: false
 };
@@ -70,7 +77,8 @@ describe('OnboardingWizard identity step', () => {
     await tick(); // let both onMount invoke() calls resolve
 
     expect(container.textContent).toContain('Who are you?');
-    expect(container.querySelector<HTMLInputElement>('#identity-name')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('#identity-first-name')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('#identity-last-name')).not.toBeNull();
     // 3 real steps for this scenario (identity, path, summary — no skill
     // step, claudeCodeDetected is false): the step SEQUENCE — not just the
     // step currently rendered — must actually include 'identity', or
@@ -110,9 +118,11 @@ describe('OnboardingWizard identity step', () => {
     await tick();
     await tick(); // get_local_identity then get_identity_prefill are two sequential awaits
 
-    const nameInput = container.querySelector<HTMLInputElement>('#identity-name')!;
+    const firstNameInput = container.querySelector<HTMLInputElement>('#identity-first-name')!;
+    const lastNameInput = container.querySelector<HTMLInputElement>('#identity-last-name')!;
     const emailInput = container.querySelector<HTMLInputElement>('#identity-email')!;
-    expect(nameInput.value).toBe('Alice Example');
+    expect(firstNameInput.value).toBe('Alice');
+    expect(lastNameInput.value).toBe('Example');
     expect(emailInput.value).toBe('alice@example.com');
 
     // Prefill alone must never call the write command.
@@ -153,9 +163,11 @@ describe('OnboardingWizard identity step', () => {
     await tick();
     await tick();
 
-    const nameInput = container.querySelector<HTMLInputElement>('#identity-name')!;
+    const firstNameInput = container.querySelector<HTMLInputElement>('#identity-first-name')!;
+    const lastNameInput = container.querySelector<HTMLInputElement>('#identity-last-name')!;
     const emailInput = container.querySelector<HTMLInputElement>('#identity-email')!;
-    await fireEvent.input(nameInput, { target: { value: '  Alice Example  ' } });
+    await fireEvent.input(firstNameInput, { target: { value: '  Alice  ' } });
+    await fireEvent.input(lastNameInput, { target: { value: '  Example  ' } });
     await fireEvent.input(emailInput, { target: { value: '  alice@example.com  ' } });
 
     await fireEvent.click(buttonByText(container, 'Save'));
@@ -163,7 +175,8 @@ describe('OnboardingWizard identity step', () => {
     await tick();
 
     expect(mockInvoke).toHaveBeenCalledWith('set_local_identity', {
-      name: 'Alice Example',
+      firstName: 'Alice',
+      lastName: 'Example',
       email: 'alice@example.com'
     });
     expect(container.textContent).toContain("You're recorded as the owner");
@@ -193,7 +206,11 @@ describe('OnboardingWizard identity step', () => {
     await tick();
     await tick();
 
-    expect(mockInvoke).toHaveBeenCalledWith('set_local_identity', { name: '', email: '' });
+    expect(mockInvoke).toHaveBeenCalledWith('set_local_identity', {
+      firstName: '',
+      lastName: '',
+      email: ''
+    });
     expect(mockInvoke).toHaveBeenCalledWith('dismiss_identity_backfill_prompt');
     expect(onClose).toHaveBeenCalledTimes(1);
   });

@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { createLogger } from '$lib/utils/logger';
   import { focusTrap } from '$lib/actions/focus-trap';
+  import { splitFullName } from '$lib/utils/split-full-name';
 
   const log = createLogger('OnboardingWizard');
 
@@ -36,7 +37,8 @@
 
   interface LocalIdentity {
     nodeId: string;
-    name: string;
+    firstName: string;
+    lastName: string;
     email: string;
     isBlank: boolean;
   }
@@ -74,7 +76,8 @@
   // seeded local person is still blank; a node that already has a name/email
   // (e.g. this wizard re-running after a prior backfill save) is left alone.
   let showIdentity = $state(false);
-  let identityName = $state('');
+  let identityFirstName = $state('');
+  let identityLastName = $state('');
   let identityEmail = $state('');
   let identityPrefilled = $state(false);
   let identityDone = $state(false);
@@ -177,7 +180,11 @@
       }
       try {
         const prefill = await invoke<IdentityPrefill>('get_identity_prefill');
-        if (prefill.name) identityName = prefill.name;
+        if (prefill.name) {
+          const { firstName, lastName } = splitFullName(prefill.name);
+          identityFirstName = firstName;
+          identityLastName = lastName;
+        }
         if (prefill.email) identityEmail = prefill.email;
         identityPrefilled = Boolean(prefill.name || prefill.email);
       } catch (err) {
@@ -193,7 +200,8 @@
     stepError = null;
     try {
       await invoke('set_local_identity', {
-        name: identityName.trim(),
+        firstName: identityFirstName.trim(),
+        lastName: identityLastName.trim(),
         email: identityEmail.trim(),
       });
       identityDone = true;
@@ -372,13 +380,24 @@
             <div class="error-banner">{stepError}</div>
           {/if}
           <div class="field">
-            <label for="identity-name">Name</label>
+            <label for="identity-first-name">First name</label>
             <input
-              id="identity-name"
+              id="identity-first-name"
               type="text"
               class="text-input"
-              bind:value={identityName}
-              placeholder="Your name"
+              bind:value={identityFirstName}
+              placeholder="First name"
+              disabled={isLoading}
+            />
+          </div>
+          <div class="field">
+            <label for="identity-last-name">Last name</label>
+            <input
+              id="identity-last-name"
+              type="text"
+              class="text-input"
+              bind:value={identityLastName}
+              placeholder="Last name"
               disabled={isLoading}
             />
           </div>
