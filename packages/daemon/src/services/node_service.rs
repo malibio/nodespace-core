@@ -535,6 +535,11 @@ impl GrpcNodeService for NodeServiceImpl {
             )
         };
 
+        // Clamp negative/oversized values rather than trusting the wire —
+        // search_ops::search_semantic already clamps to 5 internally, but
+        // negative i32 -> usize would otherwise wrap to a huge number.
+        let include_markdown = Some(req.include_markdown.clamp(0, 5) as usize);
+
         let input = SearchSemanticInput {
             query: req.query,
             threshold,
@@ -542,7 +547,7 @@ impl GrpcNodeService for NodeServiceImpl {
             collection_id: req.collection_id,
             collection: req.collection,
             exclude_collections: None,
-            include_markdown: Some(0),
+            include_markdown,
             include_archived: None,
             scope: None,
             node_types,
@@ -559,10 +564,33 @@ impl GrpcNodeService for NodeServiceImpl {
         // from the store by id. The re-fetch was one query and one
         // reader-connection checkout per result — work that scales with the
         // result count to reproduce rows search is already holding.
+        //
+        // `output.nodes` (JSON-shaped) and `output.matched_nodes` (typed) are
+        // both built from the same ranked result set in the same order, but
+        // matched by id rather than by index — a defensive choice that costs
+        // nothing here and doesn't rely on that ordering staying in sync.
+        // `output.nodes` is the only place a requested `include_markdown`
+        // attachment lives; `matched_nodes` carries none of it.
+        let markdown_by_id: std::collections::HashMap<&str, &str> = output
+            .nodes
+            .iter()
+            .filter_map(|value| {
+                let id = value.get("id").and_then(|v| v.as_str())?;
+                let markdown = value.get("markdown").and_then(|v| v.as_str())?;
+                Some((id, markdown))
+            })
+            .collect();
+
         let nodes: Vec<NodeData> = output
             .matched_nodes
             .into_iter()
-            .map(node_to_proto)
+            .map(|node| {
+                let mut node_data = node_to_proto(node);
+                if let Some(markdown) = markdown_by_id.get(node_data.id.as_str()) {
+                    node_data.markdown = markdown.to_string();
+                }
+                node_data
+            })
             .collect();
 
         let count = nodes.len() as i32;
@@ -1910,6 +1938,7 @@ pub(crate) fn node_to_proto(node: Node) -> NodeData {
         lifecycle_status: node.lifecycle_status,
         created_at: node.created_at.to_rfc3339(),
         modified_at: node.modified_at.to_rfc3339(),
+        markdown: String::new(),
     }
 }
 

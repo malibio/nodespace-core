@@ -87,6 +87,12 @@ fn write_human_node(node: &NodeData) {
     if node.content.is_empty() {
         println!("    (empty)");
     }
+    if !node.markdown.is_empty() {
+        println!("markdown:");
+        for line in node.markdown.lines() {
+            println!("    {}", line);
+        }
+    }
 }
 
 /// Parse the wire `properties` string into the flat API shape.
@@ -221,7 +227,7 @@ pub fn node_to_json(node: &NodeData) -> serde_json::Value {
     // JSON so scripts can `jq '.properties.foo'` without a second parse.
     let properties = properties_to_json(node);
 
-    json!({
+    let mut value = json!({
         "id": node.id,
         "node_type": node.node_type,
         "content": node.content,
@@ -230,7 +236,14 @@ pub fn node_to_json(node: &NodeData) -> serde_json::Value {
         "lifecycle_status": node.lifecycle_status,
         "created_at": node.created_at,
         "modified_at": node.modified_at,
-    })
+    });
+    // Only present when the request opted in (e.g. `search --include-content`)
+    // — omitted rather than emitted empty, so scripts that don't ask for it
+    // see the same node shape as every other command.
+    if !node.markdown.is_empty() {
+        value["markdown"] = json!(node.markdown);
+    }
+    value
 }
 
 #[cfg(test)]
@@ -247,6 +260,7 @@ mod tests {
             lifecycle_status: "active".into(),
             created_at: "2026-05-17T12:00:00Z".into(),
             modified_at: "2026-05-17T12:00:01Z".into(),
+            markdown: String::new(),
         }
     }
 

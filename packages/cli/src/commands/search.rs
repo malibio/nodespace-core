@@ -3,9 +3,9 @@
 //! This wraps `SearchRequest` (the `NodeService.SearchNodes` RPC), not the
 //! richer `search_semantic` local-agent tool (which calls the separate
 //! `EmbeddingsService.SearchSemantic` RPC via `SearchSemanticInput`).
-//! `SearchRequest` exposes `collection`/`collection_id`/`filters`/`threshold`,
-//! all wired here. It does NOT have `graph_boost`, `scope`, or
-//! `exclude_collections`/`include_edges`/`include_markdown` — those are
+//! `SearchRequest` exposes `collection`/`collection_id`/`filters`/`threshold`/
+//! `include_markdown`, all wired here. It does NOT have `graph_boost`,
+//! `scope`, or `exclude_collections`/`include_edges` — those are
 //! `SearchSemanticInput`-only fields with no proto/RPC surface on
 //! `NodeService` today. Full `search_semantic` parity (a new RPC exposing
 //! `EmbeddingsService.SearchSemantic` to the CLI, or extending `SearchRequest`)
@@ -43,6 +43,13 @@ pub struct SearchArgs {
     /// Maximum number of results to return (0 = server default, currently 20).
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(i32).range(0..))]
     pub limit: i32,
+    /// Attach each top result's aggregated subtree markdown to the response,
+    /// so a hit can be answered from directly instead of needing a
+    /// follow-up `node get`/`node export` per result. Bounded server-side to
+    /// the top 5 results regardless of `--limit`; off by default so a plain
+    /// search stays cheap.
+    #[arg(long)]
+    pub include_content: bool,
 }
 
 pub async fn run(client: &mut NodeClient, args: SearchArgs, json: bool) -> Result<()> {
@@ -57,6 +64,7 @@ pub async fn run(client: &mut NodeClient, args: SearchArgs, json: bool) -> Resul
             threshold: args.threshold,
             semantic: true,
             filters: args.filters.unwrap_or_default(),
+            include_markdown: if args.include_content { 5 } else { 0 },
         })
         .await
         .context("SearchNodes RPC failed")?
