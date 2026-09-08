@@ -1986,16 +1986,17 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 };
 
                 // Fabricated-id guard: a `nodespace://<id>` in the model's text
-                // that no tool call this turn returned or received is invented —
-                // ids are never something the model should originate, they come
-                // from a tool result (or a prior turn's args) or they do not
-                // exist. This catches the shape #2257's zero-tool-call guard
-                // above cannot: the write genuinely succeeded and the model DID
-                // call a tool, but then narrated a different id than the one the
-                // tool actually returned. A fabricated id in `nodespace://` form
-                // is worse than a vague hallucination — it reads as a durable,
-                // pastable reference and resolves to nothing.
-                let normalized = if !normalized.is_empty() {
+                // that no tool result (this turn or an earlier one in this
+                // session) ever produced is invented — ids are never something
+                // the model should originate, they come from a tool result or
+                // they do not exist. This catches the shape #2257's
+                // zero-tool-call guard above cannot: the write genuinely
+                // succeeded and the model DID call a tool, but then narrated a
+                // different id than the one the tool actually returned. A
+                // fabricated id in `nodespace://` form is worse than a vague
+                // hallucination — it reads as a durable, pastable reference and
+                // resolves to nothing.
+                let normalized = if !normalized.is_empty() && normalized.contains("nodespace://") {
                     let bad_ids = ungrounded_node_uris(&normalized, &all_tool_executions, session);
                     if bad_ids.is_empty() {
                         normalized
