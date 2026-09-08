@@ -75,13 +75,15 @@
     onRowClick: (_nodeId: string) => void;
   } = $props();
 
-  // The user's explicit picker choice this session; null means "use the default
-  // resolved from the query node's stored group-by / first eligible field".
+  // The user's explicit picker choice this session; null means "use the
+  // query node's stored group-by, or no selection at all" — an unset
+  // group-by no longer falls back to an arbitrary eligible field.
   let picked = $state<string | null>(null);
   let draggingId = $state<string | null>(null);
   let dragOverColumn = $state<string | null>(null);
 
   const eligible = $derived(eligibleGroupByFields(schema));
+  const noEnumField = $derived(eligible.length === 0);
   const activeGroupBy = $derived(picked ?? resolveActiveGroupBy(eligible, groupBy));
   const activeField = $derived(eligible.find((f) => f.name === activeGroupBy) ?? null);
 
@@ -364,27 +366,39 @@
   }
 </script>
 
-{#if eligible.length === 0}
-  <div class="kanban-empty">
-    <p>This type has no enum field to group by, so there's no board to show.</p>
-    <p class="kanban-empty-hint">Add an enum field to the schema to use the Kanban view.</p>
+<div class="kanban">
+  <div class="kanban-toolbar">
+    <label class="groupby">
+      <span>Group by</span>
+      <select
+        value={activeGroupBy ?? ''}
+        disabled={noEnumField}
+        aria-label="Group by"
+        onchange={(e) => onPickGroupBy(e.currentTarget.value)}
+      >
+        {#if !activeGroupBy}
+          <option value="" disabled selected>Choose a field…</option>
+        {/if}
+        {#each eligible as f (f.name)}
+          <option value={f.name}>{labelForField(f)}</option>
+        {/each}
+      </select>
+    </label>
+    {#if noEnumField}
+      <span class="kanban-groupby-hint" role="status">
+        This type has no enum field to group by. Add one to the schema to use the Kanban view.
+      </span>
+    {/if}
   </div>
-{:else}
-  <div class="kanban">
-    <div class="kanban-toolbar">
-      <label class="groupby">
-        <span>Group by</span>
-        <select
-          value={activeGroupBy ?? ''}
-          onchange={(e) => onPickGroupBy(e.currentTarget.value)}
-        >
-          {#each eligible as f (f.name)}
-            <option value={f.name}>{labelForField(f)}</option>
-          {/each}
-        </select>
-      </label>
-    </div>
 
+  {#if noEnumField}
+    <!-- Control stays visible (disabled) above so its absence isn't mistaken
+         for a rendering failure — only the board itself is withheld. -->
+  {:else if !activeGroupBy}
+    <div class="kanban-empty">
+      <p>Choose a field to group this board by.</p>
+    </div>
+  {:else}
     <div class="kanban-board">
       {#each displayColumns as col (col.value)}
         {@const ids = buckets.get(col.value) ?? []}
@@ -441,8 +455,8 @@
         </section>
       {/each}
     </div>
-  </div>
-{/if}
+  {/if}
+</div>
 
 <style>
   .kanban {
@@ -474,6 +488,16 @@
     border-radius: 0.375rem;
     background: hsl(var(--background));
     color: hsl(var(--foreground));
+  }
+
+  .groupby select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .kanban-groupby-hint {
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
   }
 
   .kanban-board {
@@ -605,9 +629,5 @@
 
   .kanban-empty p {
     margin: 0;
-  }
-
-  .kanban-empty-hint {
-    font-size: 0.8125rem;
   }
 </style>

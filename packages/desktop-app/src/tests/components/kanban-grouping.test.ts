@@ -178,8 +178,12 @@ describe('resolveActiveGroupBy', () => {
     expect(resolveActiveGroupBy(eligible, 'priority')).toBe('priority');
   });
 
-  it('falls back to the first eligible field when the stored one is gone', () => {
-    expect(resolveActiveGroupBy(eligible, 'removed')).toBe('status');
+  it('returns null (not an arbitrary field) when the stored selection is no longer eligible', () => {
+    expect(resolveActiveGroupBy(eligible, 'removed')).toBeNull();
+  });
+
+  it('returns null when there is no stored selection at all — no arbitrary pre-selection', () => {
+    expect(resolveActiveGroupBy(eligible, undefined)).toBeNull();
   });
 
   it('returns null when there are no eligible fields', () => {

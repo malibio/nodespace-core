@@ -207,7 +207,18 @@
     try {
       // Load the raw node and branch on what it actually is — the tab's
       // decorative `nodeType: 'query'` is not trusted (issue #1919).
-      const raw = await backendAdapter.getNode(id);
+      //
+      // Prefer an already-hydrated copy from sharedNodeStore over a fresh
+      // network round-trip: this is the remount path immediately after
+      // materializeQuery — rerouteTab already seeded the store with the
+      // freshly created node synchronously before the {#key} in pane-content
+      // swapped nodeId, so it is present here on this instance's very first
+      // load, with no dependency on the backend's create→get round-trip
+      // having settled. Without this, a `getNode` that raced ahead of the
+      // create would resolve this fresh mount to the DEFAULT branch —
+      // resetting activeView/kanbanGroupBy to their defaults — even though a
+      // real query node now exists with the view the user just chose.
+      const raw = sharedNodeStore.getNode(id) ?? (await backendAdapter.getNode(id));
       if (loadId !== currentLoadId) return;
       mode = resolveViewerMode(raw);
 

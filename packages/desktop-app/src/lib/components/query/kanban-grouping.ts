@@ -170,15 +170,19 @@ export function groupByColumn(
 
 /**
  * Pick the group-by field to use: the stored selection if it is still an
- * eligible field, otherwise the first eligible field, otherwise `null` (the
- * schema has no enum field and the view should show an empty state).
+ * eligible field, otherwise `null`. An arbitrary eligible field is
+ * deliberately NOT offered as a fallback — a board grouped by a field the
+ * user never chose would be meaningless for the type, so an unset selection
+ * means "no board yet", not "the first field found". The caller
+ * (kanban-view.svelte) renders the group-by picker with a prompt and
+ * withholds the columns until the user actually picks one.
  */
 export function resolveActiveGroupBy(
   eligible: SchemaField[],
   stored: string | undefined
 ): string | null {
   if (stored && eligible.some((f) => f.name === stored)) return stored;
-  return eligible[0]?.name ?? null;
+  return null;
 }
 
 /**
