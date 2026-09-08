@@ -65,6 +65,14 @@ fn should_skip_scope_filter(
 /// Maximum depth for markdown tree traversal
 const MARKDOWN_MAX_DEPTH: usize = 20;
 
+/// Hard cap on how many top-ranked results `include_markdown` will attach
+/// full subtree markdown to, regardless of what a caller requests — the
+/// single source of truth every layer that also bounds this value (the
+/// `SearchRequest.include_markdown` clamp in `packages/daemon`, the CLI's
+/// `--include-content` flag) should read from or stay in sync with by hand
+/// if it can't depend on this crate directly.
+pub const MAX_INCLUDE_MARKDOWN_RESULTS: usize = 5;
+
 // ============================================================================
 // Input / Output types
 // ============================================================================
@@ -281,7 +289,10 @@ pub async fn search_semantic(
     // Apply defaults
     let threshold = input.threshold.unwrap_or(0.7);
     let limit = input.limit.unwrap_or(20);
-    let include_markdown = input.include_markdown.unwrap_or(1).min(5);
+    let include_markdown = input
+        .include_markdown
+        .unwrap_or(1)
+        .min(MAX_INCLUDE_MARKDOWN_RESULTS);
     let include_archived = input.include_archived.unwrap_or(false);
     let include_edges = input.include_edges.unwrap_or(false);
     let graph_boost = input.graph_boost.unwrap_or(false);
@@ -552,29 +563,47 @@ pub async fn search_semantic(
     let mut markdown_contents: HashMap<String, String> = HashMap::new();
     if include_markdown > 0 {
         for (node, _) in filtered_results.iter().take(include_markdown) {
-            if let Ok((Some(root_node), node_map, adjacency_list)) =
-                node_service.get_subtree_data(&node.id).await
-            {
-                let mut markdown = String::new();
-                markdown.push_str(&root_node.content);
-                markdown.push_str("\n\n");
+            match node_service.get_subtree_data(&node.id).await {
+                Ok((Some(root_node), node_map, adjacency_list)) => {
+                    let mut markdown = String::new();
+                    markdown.push_str(&root_node.content);
+                    markdown.push_str("\n\n");
 
-                if let Some(child_ids) = adjacency_list.get(&root_node.id) {
-                    for child_id in child_ids {
-                        if let Some(child) = node_map.get(child_id) {
-                            build_markdown_recursive(
-                                child,
-                                &node_map,
-                                &adjacency_list,
-                                &mut markdown,
-                                0,
-                                MARKDOWN_MAX_DEPTH,
-                            );
+                    if let Some(child_ids) = adjacency_list.get(&root_node.id) {
+                        for child_id in child_ids {
+                            if let Some(child) = node_map.get(child_id) {
+                                build_markdown_recursive(
+                                    child,
+                                    &node_map,
+                                    &adjacency_list,
+                                    &mut markdown,
+                                    0,
+                                    MARKDOWN_MAX_DEPTH,
+                                );
+                            }
                         }
                     }
-                }
 
-                markdown_contents.insert(node.id.clone(), markdown.trim().to_string());
+                    markdown_contents.insert(node.id.clone(), markdown.trim().to_string());
+                }
+                // Both arms leave this result out of `markdown_contents`, so the
+                // caller gets no `markdown` field for it — indistinguishable from
+                // "nothing to attach" without this log. Worth knowing about: the
+                // caller asked for this result's content and silently didn't get
+                // it, rather than the id/depth genuinely having no extra content.
+                Ok((None, _, _)) => {
+                    tracing::warn!(
+                        node_id = %node.id,
+                        "include_markdown: subtree fetch returned no root node"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        node_id = %node.id,
+                        error = %e,
+                        "include_markdown: failed to fetch subtree for markdown attachment"
+                    );
+                }
             }
         }
     }

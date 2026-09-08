@@ -496,11 +496,18 @@ impl GrpcNodeService for NodeServiceImpl {
         let this = self.route(&request).await?;
         let req = request.into_inner();
 
-        let guard = this.embedding_state.read().await;
-        let embedding_service = guard
-            .as_ref()
-            .map(|r| &r.embedding_service)
-            .ok_or_else(|| Status::unavailable("embedding model loading, please retry"))?;
+        // Clone the Arc and drop the guard immediately rather than holding the
+        // read lock for the rest of this function — `include_markdown` can now
+        // do real work (up to 5 subtree traversals) inside `search_semantic`,
+        // and there's no reason a concurrent embedding-model swap (which needs
+        // the write lock) should wait on that.
+        let embedding_service = {
+            let guard = this.embedding_state.read().await;
+            guard
+                .as_ref()
+                .map(|r| Arc::clone(&r.embedding_service))
+                .ok_or_else(|| Status::unavailable("embedding model loading, please retry"))?
+        };
 
         if !req.semantic {
             tracing::debug!(
@@ -536,9 +543,13 @@ impl GrpcNodeService for NodeServiceImpl {
         };
 
         // Clamp negative/oversized values rather than trusting the wire —
-        // search_ops::search_semantic already clamps to 5 internally, but
-        // negative i32 -> usize would otherwise wrap to a huge number.
-        let include_markdown = Some(req.include_markdown.clamp(0, 5) as usize);
+        // search_ops::search_semantic re-applies MAX_INCLUDE_MARKDOWN_RESULTS
+        // internally regardless, but a negative i32 -> usize cast would
+        // otherwise wrap to a huge number before it ever gets there.
+        let include_markdown = Some(
+            req.include_markdown
+                .clamp(0, search_ops::MAX_INCLUDE_MARKDOWN_RESULTS as i32) as usize,
+        );
 
         let input = SearchSemanticInput {
             query: req.query,
@@ -556,7 +567,7 @@ impl GrpcNodeService for NodeServiceImpl {
             graph_boost: None,
         };
 
-        let output = search_ops::search_semantic(&this.node_service, embedding_service, input)
+        let output = search_ops::search_semantic(&this.node_service, &embedding_service, input)
             .await
             .map_err(ops_error_to_status)?;
 

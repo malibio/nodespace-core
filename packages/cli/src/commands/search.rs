@@ -18,6 +18,17 @@ use nodespace_daemon::nodespace::SearchRequest;
 use crate::output;
 use crate::NodeClient;
 
+/// Requesting more than `search_ops::MAX_INCLUDE_MARKDOWN_RESULTS` (currently
+/// 5) is pointless — the server clamps to it regardless — so this asks for
+/// exactly that many rather than an arbitrarily large number. Duplicated as a
+/// literal rather than importing the constant: `nodespace-core` is a
+/// dev-only dependency of this crate (pulling in SQLite/embeddings for one
+/// `usize` is disproportionate), so the two must be kept in sync by hand.
+/// `search_nodes_oversized_include_markdown_still_caps_at_five` in
+/// `packages/daemon/tests/grpc_round_trip.rs` guards the server side of that
+/// sync.
+const REQUESTED_MARKDOWN_RESULTS: i32 = 5;
+
 #[derive(Args, Debug)]
 pub struct SearchArgs {
     /// Free-text query. Pass an empty string or "*" when using --type for
@@ -64,7 +75,11 @@ pub async fn run(client: &mut NodeClient, args: SearchArgs, json: bool) -> Resul
             threshold: args.threshold,
             semantic: true,
             filters: args.filters.unwrap_or_default(),
-            include_markdown: if args.include_content { 5 } else { 0 },
+            include_markdown: if args.include_content {
+                REQUESTED_MARKDOWN_RESULTS
+            } else {
+                0
+            },
         })
         .await
         .context("SearchNodes RPC failed")?

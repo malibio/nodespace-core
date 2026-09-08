@@ -299,9 +299,9 @@ message NodeListResponse {
 // ---------------------------------------------------------------------------
 
 // SearchRequest exposes a subset of SearchSemanticInput from
-// packages/core/src/ops/search_ops.rs. Fields not yet exposed (will be
-// added when consumers need them): exclude_collections, include_markdown,
-// include_archived, scope, include_edges, graph_boost, property_filters.
+// packages/core/src/ops/search_ops.rs (`filters` carries property_filters).
+// Fields not yet exposed (will be added when consumers need them):
+// exclude_collections, include_archived, scope, include_edges, graph_boost.
 message SearchRequest {
   string query = 1;
   // node_types filters results to any of the specified node types.
