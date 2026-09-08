@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
-use nodespace_agent::acp::context_assembly::GraphContextAssembler;
+use nodespace_agent::agent_catalog::context_assembly::GraphContextAssembler;
 use nodespace_agent::prompt_assembler::PromptAssembler;
 use nodespace_agent::pty::PtySessionManager;
 use nodespace_agent::skill_pipeline::{seed_skill_nodes, seed_tool_nodes};

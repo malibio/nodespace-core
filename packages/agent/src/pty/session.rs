@@ -35,8 +35,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch, Mutex};
 use uuid::Uuid;
 
-use crate::acp::context_assembly::GraphContextAssembler;
-use crate::acp::registry::SystemAgentRegistry;
+use crate::agent_catalog::context_assembly::GraphContextAssembler;
+use crate::agent_catalog::registry::SystemAgentRegistry;
 use crate::agent_types::{AgentType, ContextError};
 use crate::pty::capture::SessionCapture;
 

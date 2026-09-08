@@ -1,4 +1,4 @@
-//! Agent subsystem: local inference, ACP transport, tool execution.
+//! Agent subsystem: local inference, PTY agent catalog, tool execution.
 //!
 //! This crate contains the business logic for the agent layer, decoupled
 //! from Tauri. The desktop-app crate provides thin Tauri command bindings
@@ -14,7 +14,7 @@ pub mod local_agent;
 // Shared agent guidance rules: single source of truth for tool strategy,
 // schema creation, and node reference guidance. Consumed by
 // `prompt_assembler` (local agent) and by ADR-032 context-file
-// writers in `acp`.
+// writers in `agent_catalog`.
 pub mod agent_guidance;
 
 // Prompt assembly: hardcoded base + graph-stored overrides
@@ -39,8 +39,9 @@ pub mod props;
 // bin, which stays outside `cargo test` because it loads a ~5GB GGUF.
 pub mod golden;
 
-// ACP (Agent Communication Protocol) subsystem
-pub mod acp;
+// PTY agent catalog: hardcoded catalog of external agent CLIs and their
+// context-file assembly (ADR-032)
+pub mod agent_catalog;
 
 // PTY-based agent session engine (ADR-032)
 pub mod pty;

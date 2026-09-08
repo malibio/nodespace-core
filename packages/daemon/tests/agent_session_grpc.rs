@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nodespace_agent::acp::context_assembly::GraphContextAssembler;
+use nodespace_agent::agent_catalog::context_assembly::GraphContextAssembler;
 use nodespace_agent::pty::{PtySession, PtySessionManager};
 use nodespace_core::{NodeService as CoreNodeService, SqliteStore};
 use nodespace_daemon::nodespace::{

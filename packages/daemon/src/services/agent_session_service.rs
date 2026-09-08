@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::Utc;
-use nodespace_agent::acp::context_assembly::GraphContextAssembler;
+use nodespace_agent::agent_catalog::context_assembly::GraphContextAssembler;
 use nodespace_agent::agent_types::AgentType;
 use nodespace_agent::pty::{detect_all_agents, PtySession, PtySessionManager};
 use nodespace_core::services::NodeService as CoreNodeService;
