@@ -486,6 +486,51 @@ mod collection_service_tests {
         Ok(())
     }
 
+    /// Regression test: if the caller's `edge_data` already carries an `order`
+    /// key, `SqliteStore::add_to_collection` must overwrite it with the
+    /// atomically-computed order rather than keeping the caller's value. The
+    /// merge builds `props_obj` from a clone of the caller's map and inserts
+    /// `order` afterward, so the computed value wins — this pins that
+    /// ordering so it can't silently regress if the merge were ever flipped.
+    #[tokio::test]
+    async fn test_add_to_collection_computed_order_overwrites_caller_order() -> Result<()> {
+        let (store, node_service, _temp_dir) = create_test_services().await?;
+        let collection_service = CollectionService::new(&store, &node_service);
+
+        let resolved = collection_service.resolve_path("order-precedence").await?;
+        let collection_id = resolved.leaf_id().to_string();
+
+        let node_id = "member-with-bogus-order";
+        create_text_node(&store, node_id, "A member with a stale order").await?;
+
+        let bogus_order = -999.0;
+        let (_, merged_props) = store
+            .add_to_collection(
+                node_id,
+                &collection_id,
+                &serde_json::json!({ "order": bogus_order, "permission": "viewer" }),
+            )
+            .await?
+            .expect("first membership insert must return the merged properties");
+
+        let actual_order = merged_props
+            .get("order")
+            .and_then(|v| v.as_f64())
+            .expect("merged properties must contain a numeric order");
+
+        assert_ne!(
+            actual_order, bogus_order,
+            "the atomically-computed order must overwrite a caller-supplied order, not defer to it"
+        );
+        assert_eq!(
+            merged_props.get("permission"),
+            Some(&serde_json::json!("viewer")),
+            "non-order attributes from edge_data must still survive the merge"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_remove_from_collection() -> Result<()> {
         let (store, node_service, _temp_dir) = create_test_services().await?;

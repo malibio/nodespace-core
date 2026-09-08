@@ -405,7 +405,18 @@ impl SqliteStore {
 
         let mut props_obj = match edge_data {
             serde_json::Value::Object(map) => map.clone(),
-            _ => serde_json::Map::new(),
+            serde_json::Value::Null => serde_json::Map::new(),
+            other => {
+                // Every current caller passes an object or `json!({})`; a
+                // non-object, non-null edge_data is a caller bug. Coerce to an
+                // empty map rather than failing the membership write, but log
+                // it — silent data loss here would otherwise be invisible.
+                tracing::debug!(
+                    "add_to_collection: edge_data for member_of({member_id} -> {collection_id}) \
+                     was neither an object nor null ({other}); ignoring it"
+                );
+                serde_json::Map::new()
+            }
         };
         props_obj.insert("order".to_string(), serde_json::json!(new_order));
         let merged_props = serde_json::Value::Object(props_obj);
