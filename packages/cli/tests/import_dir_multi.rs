@@ -1,5 +1,5 @@
 //! Integration tests for `nodespace import dir` accepting several directories
-//! in one call (issue #2398).
+//! in one call.
 //!
 //! Spins an in-process daemon with both `NodeService` and `ImportService`
 //! registered over a temp-dir UDS, then drives `commands::import::run`
@@ -273,10 +273,13 @@ async fn import_dir_multi_routes_auto_collection_relative_to_each_directorys_own
     let _ = shutdown.send(());
 }
 
-/// A directory that fails to scan (doesn't exist) does not abort the rest of
-/// the call — the other, valid directory's files still import.
+/// A directory that fails to scan (doesn't exist) does not stop the other,
+/// valid directory's files from importing — but the overall call still
+/// reports failure (a non-zero exit via the returned `Err`), so a script
+/// checking the exit code notices that something in the invocation failed
+/// rather than seeing a bare success.
 #[tokio::test]
-async fn import_dir_multi_directory_failure_does_not_abort_the_rest() {
+async fn import_dir_multi_directory_failure_does_not_abort_the_rest_but_the_call_still_errors() {
     let (sock, node_service, shutdown, _tempdir) = spawn_import_test_daemon().await;
     let mut client = connect_import(&sock, DatabaseIdInterceptor::none())
         .await
@@ -291,7 +294,7 @@ async fn import_dir_multi_directory_failure_does_not_abort_the_rest() {
         .unwrap()
         .to_string();
 
-    commands::import::run(
+    let err = commands::import::run(
         &mut client,
         commands::import::ImportAction::Dir(dir_args(
             vec![missing_dir, good_dir.path().to_str().unwrap().to_string()],
@@ -300,7 +303,11 @@ async fn import_dir_multi_directory_failure_does_not_abort_the_rest() {
         true,
     )
     .await
-    .expect("import dir must not hard-error when one of several directories fails to scan");
+    .expect_err("a partial failure must be reported as an error, not swallowed as success");
+    assert!(
+        err.to_string().contains('1'),
+        "expected the error to mention the one failed directory, got: {err}"
+    );
 
     let survivors = node_service
         .query_nodes(
@@ -318,8 +325,8 @@ async fn import_dir_multi_directory_failure_does_not_abort_the_rest() {
     let _ = shutdown.send(());
 }
 
-/// A single directory (the pre-#2398 form) keeps behaving exactly as
-/// before: still imports normally through the same `run_dir` entry point.
+/// A single directory (the original one-directory form) keeps behaving
+/// exactly as before: still imports normally through the same `run_dir` entry point.
 #[tokio::test]
 async fn import_dir_single_directory_still_works() {
     let (sock, node_service, shutdown, _tempdir) = spawn_import_test_daemon().await;
@@ -347,6 +354,111 @@ async fn import_dir_single_directory_still_works() {
         .expect("query solo");
 
     assert_eq!(solo.len(), 1);
+
+    let _ = shutdown.send(());
+}
+
+/// Two directories that each contain a same-named file at the same relative
+/// position (both have a top-level `README.md`) compute the identical
+/// deterministic root id server-side (derived from the path relative to
+/// each call's own `base_directory`). Silently proceeding would either skip
+/// the second file as "already imported" or, with `--replace`, overwrite
+/// the first's content with the second's. The whole call must instead
+/// refuse up front, before either RPC is even issued, so neither file is
+/// written.
+#[tokio::test]
+async fn import_dir_multi_refuses_a_cross_directory_identity_collision() {
+    let (sock, node_service, shutdown, _tempdir) = spawn_import_test_daemon().await;
+    let mut client = connect_import(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+    write_md(dir_a.path(), "README.md", "# Overview from team A");
+    write_md(dir_b.path(), "README.md", "# Overview from team B");
+
+    let err = commands::import::run(
+        &mut client,
+        commands::import::ImportAction::Dir(dir_args(
+            vec![
+                dir_a.path().to_str().unwrap().to_string(),
+                dir_b.path().to_str().unwrap().to_string(),
+            ],
+            false,
+        )),
+        true,
+    )
+    .await
+    .expect_err("a cross-directory identity collision must be refused, not silently imported");
+    assert!(
+        err.to_string().contains("README.md"),
+        "expected the error to name the colliding file, got: {err}"
+    );
+
+    // Neither file was written -- the refusal happens before any RPC.
+    let team_a = node_service
+        .query_nodes(NodeFilter::new().with_content_contains("Overview from team A".to_string()))
+        .await
+        .expect("query team a");
+    let team_b = node_service
+        .query_nodes(NodeFilter::new().with_content_contains("Overview from team B".to_string()))
+        .await
+        .expect("query team b");
+    assert_eq!(
+        team_a.len(),
+        0,
+        "colliding import must not have written team A's file"
+    );
+    assert_eq!(
+        team_b.len(),
+        0,
+        "colliding import must not have written team B's file"
+    );
+
+    let _ = shutdown.send(());
+}
+
+/// The identity-collision check only fires on an actual key collision — two
+/// directories with differently-named files (even ones that happen to share
+/// a subfolder name, like `notes/`) must import normally, matching the
+/// existing auto-collection-routing test's fixture shape.
+#[tokio::test]
+async fn import_dir_multi_no_collision_when_relative_paths_differ() {
+    let (sock, node_service, shutdown, _tempdir) = spawn_import_test_daemon().await;
+    let mut client = connect_import(&sock, DatabaseIdInterceptor::none())
+        .await
+        .expect("connect");
+
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+    write_md(dir_a.path(), "notes/standup.md", "# No collision standup");
+    write_md(dir_b.path(), "notes/retro.md", "# No collision retro");
+
+    commands::import::run(
+        &mut client,
+        commands::import::ImportAction::Dir(dir_args(
+            vec![
+                dir_a.path().to_str().unwrap().to_string(),
+                dir_b.path().to_str().unwrap().to_string(),
+            ],
+            false,
+        )),
+        true,
+    )
+    .await
+    .expect("differently-named files under a shared subfolder name must not collide");
+
+    let standup = node_service
+        .query_nodes(NodeFilter::new().with_content_contains("No collision standup".to_string()))
+        .await
+        .expect("query standup");
+    let retro = node_service
+        .query_nodes(NodeFilter::new().with_content_contains("No collision retro".to_string()))
+        .await
+        .expect("query retro");
+    assert_eq!(standup.len(), 1);
+    assert_eq!(retro.len(), 1);
 
     let _ = shutdown.send(());
 }
