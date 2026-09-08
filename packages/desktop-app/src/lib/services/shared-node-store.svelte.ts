@@ -2972,15 +2972,13 @@ export class SharedNodeStore {
 
       // Ensure the parent node itself is in the store before loading children.
       // This prevents BaseNodeViewer from treating a not-yet-loaded parent as a
-      // stale/deleted node and closing the tab prematurely.
-      let parentNode: Node | null = null;
-      if (!this.nodes.has(parentId)) {
-        parentNode = await backendAdapter.getNode(parentId);
-      }
-
-      // Backlinks are a separate resource, fetched in parallel with children
-      // rather than embedded in the node payload — see mentions-and-references.md.
-      const [nodes, mentionedIn] = await Promise.all([
+      // stale/deleted node and closing the tab prematurely. Backlinks are a
+      // separate resource — see mentions-and-references.md — fetched here
+      // alongside the parent prefetch and children, all in parallel rather
+      // than as sequential round-trips.
+      const needsParentFetch = !this.nodes.has(parentId);
+      const [parentNode, nodes, mentionedIn] = await Promise.all([
+        needsParentFetch ? backendAdapter.getNode(parentId) : Promise.resolve(null),
         backendAdapter.getChildren(parentId),
         backendAdapter.getMentioningContainers(parentId)
       ]);

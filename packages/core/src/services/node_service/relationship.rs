@@ -156,8 +156,9 @@ impl NodeService {
     /// Populate outgoing mentions from the relationship table (relationship_type = 'mentions')
     ///
     /// Queries the relationship table to populate outgoing mentions for a node.
-    /// Note: mentioned_in (backlinks) is populated separately by get_children_tree
-    /// with full NodeReference data {id, title, nodeType} for efficient UI display.
+    /// Note: mentioned_in (backlinks) is not populated here or anywhere on the
+    /// node payload — it's fetched as its own resource via
+    /// `get_mentioning_containers`, independently of any node read.
     pub(crate) async fn populate_mentions(&self, node: &mut Node) -> Result<(), NodeServiceError> {
         // Query outgoing mentions (nodes that THIS node references)
         let mentions = self
@@ -168,9 +169,6 @@ impl NodeService {
                 NodeServiceError::query_failed(format!("Failed to get outgoing mentions: {}", e))
             })?;
         node.mentions = mentions;
-
-        // Note: mentioned_in is populated by get_children_tree with full NodeReference data
-        // This allows the UI to display backlinks without N+1 queries
 
         Ok(())
     }
