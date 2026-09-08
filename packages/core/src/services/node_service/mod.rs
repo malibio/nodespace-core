@@ -2262,6 +2262,7 @@ mod tests {
             .add_to_collection(
                 "11111111-1111-1111-1111-1111111111c2",
                 "11111111-1111-1111-1111-1111111111c1",
+                &serde_json::json!({}),
             )
             .await
             .expect("a ROOT node may be filed into a restricted collection");
@@ -2325,6 +2326,7 @@ mod tests {
             .add_to_collection(
                 "11111111-1111-1111-1111-1111111111c5",
                 "11111111-1111-1111-1111-1111111111c1",
+                &serde_json::json!({}),
             )
             .await;
         assert!(

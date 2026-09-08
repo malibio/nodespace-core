@@ -354,7 +354,8 @@ impl SqliteStore {
         &self,
         member_id: &str,
         collection_id: &str,
-    ) -> Result<Option<String>> {
+        edge_data: &serde_json::Value,
+    ) -> Result<Option<(String, serde_json::Value)>> {
         self.assert_root_only_membership(&[member_id]).await?;
 
         // A collection filed into another collection can close a hierarchy cycle
@@ -402,9 +403,27 @@ impl SqliteStore {
         };
         let new_order = FractionalOrderCalculator::calculate_order(last_order, None);
 
+        let mut props_obj = match edge_data {
+            serde_json::Value::Object(map) => map.clone(),
+            serde_json::Value::Null => serde_json::Map::new(),
+            other => {
+                // Every current caller passes an object or `json!({})`; a
+                // non-object, non-null edge_data is a caller bug. Coerce to an
+                // empty map rather than failing the membership write, but log
+                // it — silent data loss here would otherwise be invisible.
+                tracing::debug!(
+                    "add_to_collection: edge_data for member_of({member_id} -> {collection_id}) \
+                     was neither an object nor null ({other}); ignoring it"
+                );
+                serde_json::Map::new()
+            }
+        };
+        props_obj.insert("order".to_string(), serde_json::json!(new_order));
+        let merged_props = serde_json::Value::Object(props_obj);
+
         let rel_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        let props = serde_json::json!({"order": new_order}).to_string();
+        let props = merged_props.to_string();
 
         tx.execute(
             "INSERT INTO relationship (id, in_node, out_node, relationship_type, properties, version, created_at, modified_at) VALUES (?1, ?2, ?3, 'member_of', ?4, 1, ?5, ?6)",
@@ -417,7 +436,7 @@ impl SqliteStore {
             .await
             .context("Failed to commit add_to_collection")?;
 
-        Ok(Some(rel_id))
+        Ok(Some((rel_id, merged_props)))
     }
 
     pub async fn remove_from_collection(

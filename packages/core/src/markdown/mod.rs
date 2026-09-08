@@ -1136,7 +1136,11 @@ pub async fn handle_create_nodes_from_markdown(
                                 if let Some(ref coll_id) = collection_id_for_spawn {
                                     if let Err(e) = ns
                                         .store
-                                        .add_to_collection(&root_id_for_collection, coll_id)
+                                        .add_to_collection(
+                                            &root_id_for_collection,
+                                            coll_id,
+                                            &serde_json::json!({}),
+                                        )
                                         .await
                                     {
                                         tracing::warn!(
@@ -1181,7 +1185,7 @@ pub async fn handle_create_nodes_from_markdown(
                     if let Some(ref coll_id) = collection_id_for_spawn {
                         let _ = node_service
                             .store
-                            .add_to_collection(&root_id, coll_id)
+                            .add_to_collection(&root_id, coll_id, &serde_json::json!({}))
                             .await
                             .map_err(|e| {
                                 tracing::error!(error = %e, "Sync fallback collection add failed");
