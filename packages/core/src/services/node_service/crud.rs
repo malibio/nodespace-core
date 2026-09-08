@@ -1784,6 +1784,67 @@ impl NodeService {
                 }
             }
 
+            // Validate object-shaped fields structurally: a field declared
+            // `object` must hold a JSON object, and a field declared `array`
+            // with `item_type: "object"` must hold an array whose every
+            // element is a JSON object. This is deliberately scoped to the
+            // `object` shape only — not every declared `field_type` (string,
+            // number, boolean, date) — because that is the specific,
+            // concretely-declared gap (core_schemas.rs declares `object`
+            // fields and object-item arrays with no enforcement at all), and
+            // a survey of every writer against every declared type is a much
+            // larger, separately-scoped effort. Widening further risks
+            // repeating the `ai-chat.status` incident, where enabling
+            // enum validation broke 16 daemon tests because the schema and
+            // the writers had already drifted apart.
+            //
+            // Deliberately NOT recursive: a nested `object` field declared via
+            // `fields`/`item_fields` (e.g. `ai-chat.messages[].args`, which
+            // core_schemas.rs leaves without declared sub-fields on purpose,
+            // since tool-call arguments are freeform) is not walked into.
+            // `validate_node_with_fields` itself only ever sees the type's
+            // top-level `fields` list, never nested ones, so recursing would
+            // be a larger structural change than this fix's scope.
+            if field.field_type == "object" {
+                if let Some(value) = field_value {
+                    if !value.is_object() && !value.is_null() {
+                        return Err(NodeServiceError::invalid_update(format!(
+                            "Field '{}' is declared as type 'object' but received {}",
+                            field.name,
+                            crate::schema::json_type_name(value)
+                        )));
+                    }
+                }
+            } else if field.field_type == "array" && field.item_type.as_deref() == Some("object") {
+                if let Some(value) = field_value {
+                    if !value.is_null() {
+                        match value.as_array() {
+                            None => {
+                                return Err(NodeServiceError::invalid_update(format!(
+                                    "Field '{}' is declared as type 'array' (item type 'object') \
+                                     but received {}",
+                                    field.name,
+                                    crate::schema::json_type_name(value)
+                                )));
+                            }
+                            Some(items) => {
+                                for (index, item) in items.iter().enumerate() {
+                                    if !item.is_object() {
+                                        return Err(NodeServiceError::invalid_update(format!(
+                                            "Field '{}' is declared as type 'array' with item type \
+                                             'object', but item {} is {}",
+                                            field.name,
+                                            index,
+                                            crate::schema::json_type_name(item)
+                                        )));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Future: Add more type validation (number ranges, string formats, etc.)
         }
 
