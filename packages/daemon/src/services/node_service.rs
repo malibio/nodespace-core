@@ -1210,7 +1210,7 @@ impl GrpcNodeService for NodeServiceImpl {
 
         let node = this
             .node_service
-            .set_local_person_identity(&req.name, &req.email)
+            .set_local_person_identity(&req.first_name, &req.last_name, &req.email)
             .await
             .map_err(service_error_to_status)?;
 
@@ -2295,7 +2295,7 @@ mod tests {
                 collections: Vec::new(),
                 collection_ids: Vec::new(),
                 lifecycle_status: None,
-                properties: r#"{"person":{"name":"Alice","email":"alice@example.com"}}"#
+                properties: r#"{"person":{"first_name":"Alice","email":"alice@example.com"}}"#
                     .to_string(),
                 position: None,
             }))
@@ -2367,7 +2367,8 @@ mod tests {
                 collections: Vec::new(),
                 collection_ids: Vec::new(),
                 lifecycle_status: None,
-                properties: r#"{"person":{"name":"Bob","email":"alice@example.com"}}"#.to_string(),
+                properties: r#"{"person":{"first_name":"Bob","email":"alice@example.com"}}"#
+                    .to_string(),
                 position: None,
             }))
             .await
@@ -2434,7 +2435,8 @@ mod tests {
 
         let resp = svc
             .set_local_person_identity(Request::new(SetLocalPersonIdentityRequest {
-                name: "Alice Example".to_string(),
+                first_name: "Alice".to_string(),
+                last_name: "Example".to_string(),
                 email: "alice@example.com".to_string(),
             }))
             .await
@@ -2446,8 +2448,9 @@ mod tests {
             "the write must land on the seeded node"
         );
         let data = resp.node_data.expect("update returns the updated node");
-        assert_eq!(data.content, "Alice Example");
         let props: serde_json::Value = serde_json::from_str(&data.properties).unwrap();
+        assert_eq!(props["person"]["first_name"], "Alice");
+        assert_eq!(props["person"]["last_name"], "Example");
         assert_eq!(props["person"]["email"], "alice@example.com");
 
         // Still exactly one person afterward — no duplicate node was created.

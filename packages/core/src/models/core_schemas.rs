@@ -1277,8 +1277,12 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             title_template: None,
             properties_header_summary_template: None,
         },
-        // Person schema — identity primitive (name, email), plus the
-        // system-managed convergence marker (_possible_duplicate)
+        // Person schema — identity primitive (first_name, last_name, email), plus
+        // the system-managed convergence marker (_possible_duplicate). Display
+        // identity is composed by title_template below, the single place the
+        // first/last composition rule lives — PersonNodeBehavior::compute_display_name
+        // mirrors it for the embedding-content fallback, which title_template
+        // doesn't reach.
         SchemaNode {
             id: "person".to_string(),
             content: "Person".to_string(),
@@ -1289,8 +1293,8 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
             schema_version: 1,
             fields: vec![
                 SchemaField {
-                    name: "name".to_string(),
-                    friendly_name: "Name".to_string(),
+                    name: "first_name".to_string(),
+                    friendly_name: "First name".to_string(),
                     field_type: "string".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
@@ -1300,7 +1304,26 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(false),
                     extensible: None,
                     default: None,
-                    description: Some("Display name; optional — a person may exist before a name is set".to_string()),
+                    description: Some("First name; optional — a person may exist before a name is set".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
+                SchemaField {
+                    name: "last_name".to_string(),
+                    friendly_name: "Last name".to_string(),
+                    field_type: "string".to_string(),
+                    local_only: false,
+                    protection: SchemaProtectionLevel::Core,
+                    core_values: None,
+                    user_values: None,
+                    indexed: true,
+                    required: Some(false),
+                    extensible: None,
+                    default: None,
+                    description: Some("Last name; optional — a person may exist before a name is set".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -1368,7 +1391,10 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                 edge_fields: None,
                 description: Some("Tasks assigned to this person".to_string()),
             }],
-            title_template: None,
+            // Whitespace-collapse + trim in interpolate_title_template_with_schema
+            // degrades this correctly when one or both fields are empty: one absent
+            // field yields just the other; both absent yields "".
+            title_template: Some("{first_name} {last_name}".to_string()),
             properties_header_summary_template: None,
         },
         // Agent Guidance schema — unconditional, always-on base system-prompt

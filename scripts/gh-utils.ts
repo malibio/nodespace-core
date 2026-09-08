@@ -13,6 +13,7 @@
  *   bun run gh:list --status open
  */
 
+import { $ } from "bun";
 import { GitHubClient } from "./github-client.ts";
 
 class NodeSpaceGitHubManager {
@@ -89,7 +90,7 @@ class NodeSpaceGitHubManager {
   }
 
   async listIssues(options: { status?: string, label?: string, assignee?: string } = {}) {
-    const apiOptions: any = {};
+    const apiOptions: { state?: "open" | "closed" | "all"; labels?: string[]; assignee?: string } = {};
     
     if (options.status) {
       apiOptions.state = options.status === "open" ? "open" : options.status === "closed" ? "closed" : "all";
@@ -135,8 +136,8 @@ class NodeSpaceGitHubManager {
       console.log(`Labels: ${issue.labels.map(l => l.name).join(", ") || "None"}`);
       console.log(`\nBody:\n${issue.body}`);
       
-    } catch (error) {
-      console.error(`❌ Failed to view issue #${issueNumber}: ${error.message}`);
+    } catch (error: unknown) {
+      console.error(`❌ Failed to view issue #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -156,8 +157,8 @@ class NodeSpaceGitHubManager {
       }
 
       return issue;
-    } catch (error) {
-      console.error(`❌ Failed to create issue: ${error.message}`);
+    } catch (error: unknown) {
+      console.error(`❌ Failed to create issue: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   }
@@ -178,8 +179,8 @@ class NodeSpaceGitHubManager {
       if (options.state) console.log(`  State: ${options.state}`);
       
       return true;
-    } catch (error) {
-      console.error(`❌ Failed to edit issue #${issueNumber}: ${error.message}`);
+    } catch (error: unknown) {
+      console.error(`❌ Failed to edit issue #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   }
@@ -194,8 +195,8 @@ class NodeSpaceGitHubManager {
       console.log(`URL: ${pr.url}`);
       
       return pr;
-    } catch (error) {
-      console.error(`❌ Failed to create PR: ${error.message}`);
+    } catch (error: unknown) {
+      console.error(`❌ Failed to create PR: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   }
@@ -245,8 +246,8 @@ class NodeSpaceGitHubManager {
 
       return true;
 
-    } catch (error) {
-      console.error(`❌ Startup sequence failed: ${error.message}`);
+    } catch (error: unknown) {
+      console.error(`❌ Startup sequence failed: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
@@ -263,9 +264,9 @@ class NodeSpaceGitHubManager {
       
       console.log("✅ Quality checks passed!");
       return true;
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("❌ Quality checks failed:");
-      console.error(error.message);
+      console.error(error instanceof Error ? error.message : String(error));
       console.log("\\n🚨 Fix these issues before creating a PR");
       return false;
     }
@@ -296,8 +297,8 @@ class NodeSpaceGitHubManager {
       console.log("\n🎉 PR workflow completed successfully!");
       return pr;
 
-    } catch (error) {
-      console.error(`❌ PR workflow failed: ${error.message}`);
+    } catch (error: unknown) {
+      console.error(`❌ PR workflow failed: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
@@ -312,8 +313,8 @@ class NodeSpaceGitHubManager {
       console.log(`URL: ${result.url}`);
 
       return result;
-    } catch (error) {
-      console.error(`❌ Failed to add comment to #${issueNumber}: ${error.message}`);
+    } catch (error: unknown) {
+      console.error(`❌ Failed to add comment to #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   }
@@ -395,8 +396,8 @@ async function main() {
             const bodyFilePath = args[bodyFileIndex + 1];
             try {
               body = await Bun.file(bodyFilePath).text();
-            } catch (error) {
-              console.error(`❌ Failed to read body file: ${error.message}`);
+            } catch (error: unknown) {
+              console.error(`❌ Failed to read body file: ${error instanceof Error ? error.message : String(error)}`);
               process.exit(1);
             }
           }
@@ -438,8 +439,13 @@ async function main() {
           process.exit(1);
         }
 
-        const options: any = {};
-        
+        const options: {
+          title?: string;
+          body?: string;
+          labels?: string[];
+          state?: "open" | "closed";
+        } = {};
+
         const titleIndex = args.indexOf("--title");
         const bodyIndex = args.indexOf("--body");
         const labelsIndex = args.indexOf("--labels");
@@ -477,8 +483,8 @@ async function main() {
       }
       
       case "issues:list": {
-        const options: any = {};
-        
+        const options: { status?: string; label?: string; assignee?: string } = {};
+
         const statusIndex = args.indexOf("--status");
         const labelIndex = args.indexOf("--label");
         const assigneeIndex = args.indexOf("--assignee");
@@ -545,8 +551,8 @@ async function main() {
           // Read from file
           try {
             body = await Bun.file(args[bodyFileIndex + 1]).text();
-          } catch (error) {
-            console.error(`❌ Failed to read body file: ${error.message}`);
+          } catch (error: unknown) {
+            console.error(`❌ Failed to read body file: ${error instanceof Error ? error.message : String(error)}`);
             process.exit(1);
           }
         } else if (args[2]) {
@@ -606,8 +612,8 @@ async function main() {
         `);
         break;
     }
-  } catch (error) {
-    console.error(`❌ Error: ${error.message}`);
+  } catch (error: unknown) {
+    console.error(`❌ Error: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 }

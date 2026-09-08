@@ -188,6 +188,12 @@ struct OpenAiRequestToolCall {
     #[serde(rename = "type")]
     call_type: String,
     function: OpenAiRequestToolCallFunction,
+    /// Provider-opaque fields captured from the original response (e.g.
+    /// Gemini 3's `extra_content.google.thought_signature`), echoed back
+    /// verbatim as siblings of `id`/`type`/`function`. `None` when the
+    /// provider attached nothing.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    provider_extra: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -241,7 +247,24 @@ struct OpenAiResponseMessage {
 struct OpenAiToolCall {
     #[serde(default)]
     id: Option<String>,
+    /// Named explicitly (never read) so `flatten` below excludes it from
+    /// `provider_extra` — the wire's `"type": "function"` is a KNOWN OpenAI
+    /// field, not provider-opaque state. Omitting this field would let
+    /// `flatten` sweep it into `provider_extra`, which then re-emits it
+    /// alongside `OpenAiRequestToolCall`'s own hardcoded `call_type` field on
+    /// replay, producing a JSON object with two `"type"` keys.
+    #[serde(rename = "type", default)]
+    _call_type: Option<String>,
     function: OpenAiToolCallFunction,
+    /// Provider-opaque sibling fields beyond the OpenAI schema (`id`/`type`/
+    /// `function`) — e.g. Gemini 3's `extra_content.google.thought_signature`,
+    /// which its OpenAI-compat endpoint requires echoed back verbatim at the
+    /// same path on the next turn or it 400s the whole conversation.
+    /// Captured generically via `flatten`. Every field the wire format is
+    /// known to send MUST be named above, or `flatten` silently treats it as
+    /// "provider-opaque" too — see `_call_type`.
+    #[serde(flatten)]
+    provider_extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -258,6 +281,16 @@ struct OpenAiUsage {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+}
+
+/// Convert a captured `provider_extra` map into the `Option<Value>` carried on
+/// `StreamingChunk`/`ToolCallRaw`, collapsing an empty map to `None` so a
+/// provider that attached nothing round-trips as a clean no-op rather than an
+/// empty JSON object.
+fn provider_extra_value(
+    extra: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    (!extra.is_empty()).then(|| serde_json::Value::Object(extra.clone()))
 }
 
 /// Map an internal history message to its OpenAI wire-format equivalent,
@@ -280,6 +313,7 @@ fn to_openai_message(msg: &ChatMessage) -> OpenAiMessage {
                         name: tc.function_name.clone(),
                         arguments: tc.arguments_json.clone(),
                     },
+                    provider_extra: tc.provider_extra.clone(),
                 })
                 .collect()
         }),
@@ -415,6 +449,13 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
         };
 
         if use_stream {
+            // `use_stream` is false whenever `tools` is present (see above),
+            // so a tool-calling response -- the only case where
+            // `provider_extra` ever carries content -- never actually
+            // reaches this branch today. The `provider_extra` wiring on the
+            // streamed `ToolCallStart` chunks below is speculative/defensive
+            // completeness for a future provider that streams tool calls; it
+            // is not exercised by any test or by production traffic.
             let mut stream = response.bytes_stream();
             let mut buffer = NdjsonLineBuffer::new();
             // Accumulates streamed tool-call fragments by index, since the
@@ -482,6 +523,9 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
                                                     .name
                                                     .clone()
                                                     .unwrap_or_default(),
+                                                provider_extra: provider_extra_value(
+                                                    &tool_call.provider_extra,
+                                                ),
                                             });
                                         }
                                         if !tool_call.function.arguments.is_empty() {
@@ -546,6 +590,7 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
                                 on_chunk(StreamingChunk::ToolCallStart {
                                     id: call_id.clone(),
                                     name: tool_call.function.name.clone().unwrap_or_default(),
+                                    provider_extra: provider_extra_value(&tool_call.provider_extra),
                                 });
                                 on_chunk(StreamingChunk::ToolCallArgs {
                                     id: call_id,
@@ -745,6 +790,7 @@ mod tests {
                 id: "call_abc".to_string(),
                 function_name: "search_nodes".to_string(),
                 arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+                provider_extra: None,
             }],
         );
 
@@ -795,5 +841,224 @@ mod tests {
         assert!(json.get("tool_calls").is_none());
         assert!(json.get("name").is_none());
         assert!(json.get("tool_call_id").is_none());
+    }
+
+    #[test]
+    fn response_tool_call_captures_thought_signature_as_provider_extra() {
+        // Regression test for issue #2255: Gemini 3's OpenAI-compat endpoint
+        // nests thought_signature under a vendor extension --
+        // tool_calls[i].extra_content.google.thought_signature -- not as a
+        // bare sibling field. Its OpenAI-compat endpoint requires this
+        // echoed back verbatim on replay; dropping it is what made every
+        // second tool-using turn 400. `flatten` captures `extra_content`
+        // whole without needing to know its internal shape.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {
+                                "name": "search",
+                                "arguments": "{\"query\":\"test\"}"
+                            },
+                            "extra_content": {
+                                "google": {
+                                    "thought_signature": "opaque-token-xyz"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }]
+        }"#;
+
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let msg = resp.choices[0].message.as_ref().expect("message present");
+        let extra = provider_extra_value(&msg.tool_calls[0].provider_extra)
+            .expect("extra_content must be captured as provider_extra");
+        assert_eq!(
+            extra["extra_content"]["google"]["thought_signature"],
+            "opaque-token-xyz"
+        );
+        // The known OpenAI fields must not leak into provider_extra --
+        // only genuinely unknown sibling fields belong there.
+        assert!(extra.get("id").is_none());
+        assert!(extra.get("function").is_none());
+    }
+
+    #[test]
+    fn response_tool_call_without_extra_fields_yields_none() {
+        // The common case (local servers, non-Gemini providers): no unknown
+        // sibling fields on the tool call, so provider_extra must collapse to
+        // None rather than an empty object -- an empty object would still
+        // round-trip as a spurious field on replay.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "tool_calls": [
+                        {"id": "call_abc", "function": {"name": "search", "arguments": "{}"}}
+                    ]
+                }
+            }]
+        }"#;
+
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let msg = resp.choices[0].message.as_ref().expect("message present");
+        assert!(provider_extra_value(&msg.tool_calls[0].provider_extra).is_none());
+    }
+
+    #[test]
+    fn replayed_tool_call_echoes_thought_signature_back_verbatim() {
+        // Regression test for issue #2255: a replayed assistant tool-call
+        // turn must carry `extra_content.google.thought_signature` back at
+        // the exact same path, or Gemini 3's OpenAI-compat endpoint 400s the
+        // turn with "Function call is missing a thought_signature". Google's
+        // own guidance: return it "exactly as it was received".
+        let assistant_turn = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "call_abc".to_string(),
+                function_name: "search_nodes".to_string(),
+                arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+                provider_extra: Some(serde_json::json!({
+                    "extra_content": {
+                        "google": {
+                            "thought_signature": "opaque-token-xyz"
+                        }
+                    }
+                })),
+            }],
+        );
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        let tool_call = &json["tool_calls"][0];
+        assert_eq!(tool_call["id"], "call_abc");
+        assert_eq!(tool_call["type"], "function");
+        assert_eq!(tool_call["function"]["name"], "search_nodes");
+        assert_eq!(
+            tool_call["extra_content"]["google"]["thought_signature"], "opaque-token-xyz",
+            "thought_signature must be echoed back at the same nested path on replay"
+        );
+    }
+
+    #[test]
+    fn replayed_tool_call_without_provider_extra_stays_clean() {
+        // A tool call with no provider_extra must not grow a spurious empty
+        // field on replay -- only calls that actually carry provider state
+        // should emit anything beyond the standard OpenAI shape.
+        let assistant_turn = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "call_abc".to_string(),
+                function_name: "search_nodes".to_string(),
+                arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+                provider_extra: None,
+            }],
+        );
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+        let tool_call = json["tool_calls"][0]
+            .as_object()
+            .expect("tool call is an object");
+
+        assert_eq!(
+            tool_call.len(),
+            3,
+            "expected exactly id/type/function with no extra fields, got {tool_call:?}"
+        );
+    }
+
+    #[test]
+    fn response_type_field_does_not_leak_into_provider_extra() {
+        // Regression test: the wire's "type":"function" is a KNOWN OpenAI
+        // field, not provider-opaque state. If OpenAiToolCall didn't name it
+        // explicitly, `flatten` would sweep it into provider_extra, and
+        // replay would then emit it a second time alongside
+        // OpenAiRequestToolCall's own hardcoded `type` field -- a JSON
+        // object with two "type" keys.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {"name": "search", "arguments": "{}"},
+                            "extra_content": {"google": {"thought_signature": "tok"}}
+                        }
+                    ]
+                }
+            }]
+        }"#;
+
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let msg = resp.choices[0].message.as_ref().expect("message present");
+        let extra = provider_extra_value(&msg.tool_calls[0].provider_extra)
+            .expect("extra_content must still be captured");
+        assert!(
+            extra.get("type").is_none(),
+            "the known `type` field must not leak into provider_extra, got {extra:?}"
+        );
+    }
+
+    #[test]
+    fn a_parsed_response_replays_without_duplicating_the_type_key() {
+        // Regression test: chains a real parsed OpenAiToolCall into the
+        // replay path (rather than hand-authoring provider_extra on each
+        // side independently) to catch exactly the class of seam bug the
+        // issue's postmortem warned a one-shot, isolated test would miss --
+        // here, a duplicate "type" key that only appears when parse and
+        // replay are exercised together.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {"name": "search", "arguments": "{\"q\":1}"},
+                            "extra_content": {"google": {"thought_signature": "tok"}}
+                        }
+                    ]
+                }
+            }]
+        }"#;
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let parsed = &resp.choices[0]
+            .message
+            .as_ref()
+            .expect("message present")
+            .tool_calls[0];
+
+        let tool_call = ToolCallRaw {
+            id: parsed.id.clone().expect("id present"),
+            function_name: parsed.function.name.clone().unwrap_or_default(),
+            arguments_json: parsed.function.arguments.clone(),
+            provider_extra: provider_extra_value(&parsed.provider_extra),
+        };
+        let assistant_turn = ChatMessage::assistant_with_tool_calls("", vec![tool_call]);
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+        let replayed = json["tool_calls"][0]
+            .as_object()
+            .expect("tool call is an object");
+
+        let type_count = replayed.keys().filter(|k| *k == "type").count();
+        assert_eq!(
+            type_count, 1,
+            "replayed tool call must have exactly one `type` key, got {replayed:?}"
+        );
+        assert_eq!(replayed["type"], "function");
+        assert_eq!(
+            replayed["extra_content"]["google"]["thought_signature"], "tok",
+            "thought_signature must survive the full parse-then-replay round trip"
+        );
     }
 }

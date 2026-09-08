@@ -40,13 +40,19 @@ afterEach(() => {
 });
 
 describe('TableView column headers', () => {
-  it('reads friendlyName, not description, for the person schema (Name / Email)', () => {
+  it('reads friendlyName, not description, for the person schema (First name / Last name / Email)', () => {
     const schema = schemaWith([
       field({
-        name: 'name',
-        friendlyName: 'Name',
+        name: 'first_name',
+        friendlyName: 'First name',
         type: 'string',
-        description: 'Display name; optional — a person may exist before a name is set'
+        description: 'First name; optional — a person may exist before a name is set'
+      }),
+      field({
+        name: 'last_name',
+        friendlyName: 'Last name',
+        type: 'string',
+        description: 'Last name; optional — a person may exist before a name is set'
       }),
       field({
         name: 'email',
@@ -61,7 +67,8 @@ describe('TableView column headers', () => {
       props: { nodeIds: [], schema, fieldSchemaMap: new Map(), onRowClick: vi.fn() }
     });
 
-    expect(getByText('Name')).toBeTruthy();
+    expect(getByText('First name')).toBeTruthy();
+    expect(getByText('Last name')).toBeTruthy();
     expect(getByText('Email')).toBeTruthy();
     // The verbose description prose must never leak into a header.
     expect(queryByText(/a person may exist before a name is set/)).toBeNull();

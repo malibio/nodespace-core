@@ -192,6 +192,7 @@ fn assistant_turn(output: &TurnOutput) -> ChatMessage {
             id: call_id(i),
             function_name: c.name.clone(),
             arguments_json: c.arguments_json.clone(),
+            provider_extra: None,
         })
         .collect();
     ChatMessage::assistant_with_tool_calls(output.text.clone(), calls)
@@ -266,7 +267,7 @@ fn parse_output(chunks: &[StreamingChunk]) -> TurnOutput {
     for chunk in chunks {
         match chunk {
             StreamingChunk::Token { text: t } => text.push_str(t),
-            StreamingChunk::ToolCallStart { id, name } => {
+            StreamingChunk::ToolCallStart { id, name, .. } => {
                 pending.push((id.clone(), name.clone(), String::new()));
             }
             StreamingChunk::ToolCallArgs { id, args_json } => {
@@ -309,6 +310,7 @@ mod tests {
         StreamingChunk::ToolCallStart {
             id: id.into(),
             name: name.into(),
+            provider_extra: None,
         }
     }
 

@@ -6,9 +6,10 @@
  * types that ship no frontend form (`project`) of any properties UI at all.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { SchemaFormLoader } from '$lib/design/components/schema-form-loader.svelte';
 import { backendAdapter } from '$lib/services/backend-adapter';
+import { taskNodePlugin, personNodePlugin } from '$lib/plugins/core-plugins';
 import type { SchemaNode } from '$lib/types/schema-node';
 
 vi.mock('$lib/services/backend-adapter', () => ({
@@ -35,6 +36,23 @@ function schemaFor(id: string): SchemaNode {
 }
 
 describe('SchemaFormLoader', () => {
+  // task-schema-form.svelte and person-schema-form.svelte are both large
+  // components with sizable import subtrees of their own; the FIRST dynamic
+  // import() of either pays a one-time transform cost (~2-5s, more under CPU
+  // load) that has no headroom against vitest's 5s default testTimeout —
+  // every import() after that resolves from Vite's module cache in well
+  // under a millisecond. Warm both here (same pattern as
+  // core-plugins.test.ts's viewer warm-up) so loadForm('task')/('person')
+  // below measure only the already-warm resolution, not a one-time compile
+  // race. The 30s hook timeout is generous on purpose: this is explicitly
+  // the place that absorbs the compile cost.
+  beforeAll(async () => {
+    await Promise.all([
+      taskNodePlugin.schemaForm?.lazyLoad?.(),
+      personNodePlugin.schemaForm?.lazyLoad?.()
+    ]);
+  }, 30000);
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -56,6 +74,71 @@ describe('SchemaFormLoader', () => {
     expect(await loader.loadForm('task')).toBe(true);
     expect(getSchema).not.toHaveBeenCalled();
     expect(loader.genericSchema).toBeNull();
+  });
+
+  describe('hasTitleTemplate — hardcoded-form types (core#2111)', () => {
+    /**
+     * `person` (like `task`) registers a hardcoded form, so it never populates
+     * `genericSchema` — the only thing `hasTitleTemplate` used to consult. It's the
+     * first core type to ship a title_template, so these pin the plugin-registry
+     * fallback that makes its header (and any other title_template-driven hardcoded
+     * form) correctly read-only.
+     */
+
+    it('is true for a hardcoded-form type whose plugin declares hasTitleTemplate', async () => {
+      const loader = new SchemaFormLoader();
+
+      await loader.loadForm('person');
+
+      expect(loader.hasTitleTemplate).toBe(true);
+      // Confirms this comes from the plugin registry, not a generic-schema fetch.
+      expect(getSchema).not.toHaveBeenCalled();
+    });
+
+    it('is false for a hardcoded-form type with no title_template (task)', async () => {
+      const loader = new SchemaFormLoader();
+
+      await loader.loadForm('task');
+
+      expect(loader.hasTitleTemplate).toBe(false);
+    });
+
+    it('is false before any type has been loaded', () => {
+      const loader = new SchemaFormLoader();
+
+      expect(loader.hasTitleTemplate).toBe(false);
+    });
+
+    it('flips correctly across navigation between a title_template type and a plain one', async () => {
+      const loader = new SchemaFormLoader();
+
+      await loader.loadForm('person');
+      expect(loader.hasTitleTemplate).toBe(true);
+
+      // Navigating away resets currentNodeType before the next loadForm sets it —
+      // exactly the sequence base-node-viewer.svelte calls on every node change.
+      loader.resetGenericSchema();
+      await loader.loadForm('task');
+      expect(loader.hasTitleTemplate).toBe(false);
+
+      loader.resetGenericSchema();
+      await loader.loadForm('person');
+      expect(loader.hasTitleTemplate).toBe(true);
+    });
+
+    it('is false immediately after resetGenericSchema, before the next loadForm', async () => {
+      const loader = new SchemaFormLoader();
+
+      await loader.loadForm('person');
+      expect(loader.hasTitleTemplate).toBe(true);
+
+      loader.resetGenericSchema();
+
+      // Between reset and the next loadForm — the state a render could observe if a
+      // navigation boundary is reached mid-transition — the previous type's answer
+      // must not leak through.
+      expect(loader.hasTitleTemplate).toBe(false);
+    });
   });
 
   it('repopulates the generic schema when revisiting a type after a reset', async () => {
