@@ -1,5 +1,5 @@
 /**
- * Relationship viewer + editor service (issue #1918).
+ * Relationship viewer + editor service.
  *
  * Thin dual-mode transport for the typed-relationship commands, routed through
  * the `backendAdapter` (Tauri IPC in the desktop app, HTTP dev-proxy in browser

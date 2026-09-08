@@ -438,7 +438,12 @@
    */
   function openTarget(row: RelationshipRowView) {
     open = false;
-    getNavigationService().focusOrOpenNode(row.id, { nodeType: row.nodeType });
+    getNavigationService().focusOrOpenNode(row.id, {
+      nodeType: row.nodeType,
+      // The row already resolved this label, so the tab can carry it straight
+      // away instead of showing "Loading..." until the viewer mounts.
+      title: row.label
+    });
   }
 
   // --- Target picker --------------------------------------------------------
@@ -580,6 +585,15 @@
    * carry only undeclared ("ad-hoc") properties has no `edgeFields` at all, and
    * keying off those alone would make such a row unexpandable — its values
    * invisible with no way to reach them.
+   *
+   * That union is GROUP-WIDE, not per row: every row of a group offers the same
+   * property names, and a row whose own edge lacks one shows it as empty. This is
+   * deliberate. Per-row columns would make the expander appear and disappear down
+   * a list of otherwise identical rows, and would hide the difference between
+   * "this edge has no note" and "no edge here has a note" — in a group where
+   * three of four edges carry `note`, the fourth's missing one is information.
+   * Declared fields already behave this way; this keeps ad-hoc keys consistent
+   * with them.
    *
    * The declaration is still what governs EDITING: `field` is undefined for an
    * ad-hoc key, and `groupSupportsEdgeEditing` is false for a group with no
@@ -751,19 +765,19 @@
               {#each group.rows as row (row.id)}
                 {@const fields = expandableFields(group)}
                 {@const expandable = fields.length > 0}
-                {@const open = expandable && isExpanded(group, row)}
+                {@const rowOpen = expandable && isExpanded(group, row)}
                 <li class="border-border rounded-md border">
                   <div class="flex items-center gap-1 px-2 py-1.5">
                     {#if expandable}
                       <button
                         type="button"
                         class="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex size-5 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-1"
-                        aria-expanded={open}
+                        aria-expanded={rowOpen}
                         aria-controls={`edge-props-${rowKey(group, row)}`}
-                        aria-label={open ? `Collapse ${row.label}` : `Expand ${row.label}`}
+                        aria-label={rowOpen ? `Collapse ${row.label}` : `Expand ${row.label}`}
                         onclick={() => toggleExpanded(group, row)}
                       >
-                        {#if open}
+                        {#if rowOpen}
                           <ChevronDownIcon class="size-4" />
                         {:else}
                           <ChevronRightIcon class="size-4" />
@@ -802,7 +816,7 @@
                     {/if}
                   </div>
 
-                  {#if open}
+                  {#if rowOpen}
                     <div
                       id={`edge-props-${rowKey(group, row)}`}
                       class="border-border grid gap-2 border-t px-2 py-2 pl-9"
