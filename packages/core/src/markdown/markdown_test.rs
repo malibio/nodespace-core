@@ -1847,7 +1847,9 @@ More nested content"#;
             error: "simulated bulk insert failure".to_string(),
         });
 
-        let envelope = rx.try_recv().expect("event must be emitted immediately, not buffered");
+        let envelope = rx
+            .try_recv()
+            .expect("event must be emitted immediately, not buffered");
         match envelope.event {
             crate::db::events::DomainEvent::BackgroundImportFailed { root_id, error } => {
                 assert_eq!(root_id, "some-root-id");

@@ -1177,10 +1177,12 @@ pub async fn handle_create_nodes_from_markdown(
                                 // anything but log inspection. Emit a domain
                                 // event naming the (now-empty) root so a
                                 // subscriber has a chance to flag it.
-                                ns.emit_event(crate::db::events::DomainEvent::BackgroundImportFailed {
-                                    root_id: root_id_for_log.clone(),
-                                    error: e.to_string(),
-                                });
+                                ns.emit_event(
+                                    crate::db::events::DomainEvent::BackgroundImportFailed {
+                                        root_id: root_id_for_log.clone(),
+                                        error: e.to_string(),
+                                    },
+                                );
                             }
                         }
                     });

@@ -85,7 +85,10 @@ impl SqliteStore {
 
         match result {
             Ok(value) => {
-                raw_tx.commit().await.context("Failed to commit transaction")?;
+                raw_tx
+                    .commit()
+                    .await
+                    .context("Failed to commit transaction")?;
                 Ok(value)
             }
             Err(e) => {

@@ -590,7 +590,10 @@ impl NodeService {
     /// does: the write guard is already held.
     pub(crate) async fn with_transaction<T, F>(&self, f: F) -> Result<T, NodeServiceError>
     where
-        F: for<'t> FnOnce(&'t NodeServiceTx<'t>) -> Pin<Box<dyn Future<Output = Result<T, NodeServiceError>> + Send + 't>>
+        F: for<'t> FnOnce(
+                &'t NodeServiceTx<'t>,
+            )
+                -> Pin<Box<dyn Future<Output = Result<T, NodeServiceError>> + Send + 't>>
             + Send
             + 'static,
         T: Send,
@@ -3830,7 +3833,10 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(saw_relationship_updated, "expected a RelationshipUpdated event for the move");
+        assert!(
+            saw_relationship_updated,
+            "expected a RelationshipUpdated event for the move"
+        );
     }
 
     #[tokio::test]
@@ -3984,8 +3990,15 @@ mod tests {
         let container_id = service.create_node(container).await.unwrap();
 
         let node_id = uuid::Uuid::new_v4().to_string();
-        let node = Node::new("text".to_string(), "orphan-candidate".to_string(), json!({}));
-        let node = Node { id: node_id.clone(), ..node };
+        let node = Node::new(
+            "text".to_string(),
+            "orphan-candidate".to_string(),
+            json!({}),
+        );
+        let node = Node {
+            id: node_id.clone(),
+            ..node
+        };
 
         let service_for_tx = service.clone();
         let result: Result<String, NodeServiceError> = service
@@ -4214,7 +4227,10 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_err(), "the induced mid-loop failure must propagate");
+        assert!(
+            result.is_err(),
+            "the induced mid-loop failure must propagate"
+        );
 
         let child1_after = service.get_node(&child1_id).await.unwrap().unwrap();
         assert_eq!(

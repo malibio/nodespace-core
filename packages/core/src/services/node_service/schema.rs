@@ -617,12 +617,14 @@ impl NodeService {
                     )
                     .await
                     .map_err(|e| {
-                        NodeServiceError::DatabaseError(crate::db::DatabaseError::SqlExecutionError {
-                            context: format!(
-                                "Failed to migrate field data '{}' -> '{}' for type '{}': {}",
-                                from, to, type_id, e
-                            ),
-                        })
+                        NodeServiceError::DatabaseError(
+                            crate::db::DatabaseError::SqlExecutionError {
+                                context: format!(
+                                    "Failed to migrate field data '{}' -> '{}' for type '{}': {}",
+                                    from, to, type_id, e
+                                ),
+                            },
+                        )
                     })?;
 
                     // Step 2: Update schema definition — rename field in the fields list

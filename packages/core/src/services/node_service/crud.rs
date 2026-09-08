@@ -292,7 +292,12 @@ impl NodeService {
                     Box::pin(async move {
                         let created_id = service_for_tx.create_node_in_tx(tx, node).await?;
                         service_for_tx
-                            .create_parent_edge_in_tx(tx, &created_id, &parent_id, position.as_ref())
+                            .create_parent_edge_in_tx(
+                                tx,
+                                &created_id,
+                                &parent_id,
+                                position.as_ref(),
+                            )
                             .await?;
                         Ok(created_id)
                     })
@@ -532,7 +537,11 @@ impl NodeService {
 
         tracing::debug!(
             "create_node_with_parent: prepared node{} at {}ms",
-            if parent.is_some() { " + parent edge" } else { "" },
+            if parent.is_some() {
+                " + parent edge"
+            } else {
+                ""
+            },
             start.elapsed().as_millis()
         );
 

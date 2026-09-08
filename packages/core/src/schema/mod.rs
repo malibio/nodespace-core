@@ -923,10 +923,7 @@ pub async fn handle_create_schema(
         })
         .await
         .map_err(|e| {
-            MarkdownError::internal_error(format!(
-                "Failed to create schema '{}': {}",
-                schema_id, e
-            ))
+            MarkdownError::internal_error(format!("Failed to create schema '{}': {}", schema_id, e))
         })?;
 
     let output = CreateSchemaOutput {
@@ -1505,13 +1502,18 @@ pub async fn handle_update_schema(
                             "Failed to delete description subtree for schema '{schema_id}': {e}"
                         ))
                     })?;
-                    create_description_subtree_in_tx(&node_service, tx, &schema_id, new_description)
-                        .await
-                        .map_err(|e| {
-                            NodeServiceError::transaction_failed(format!(
-                                "Failed to create description subtree for schema '{schema_id}': {e}"
-                            ))
-                        })?;
+                    create_description_subtree_in_tx(
+                        &node_service,
+                        tx,
+                        &schema_id,
+                        new_description,
+                    )
+                    .await
+                    .map_err(|e| {
+                        NodeServiceError::transaction_failed(format!(
+                            "Failed to create description subtree for schema '{schema_id}': {e}"
+                        ))
+                    })?;
                 }
 
                 Ok(())

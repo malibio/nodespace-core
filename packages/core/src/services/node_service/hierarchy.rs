@@ -725,11 +725,8 @@ impl NodeService {
         // buffered in per-child order and flushed only after the whole
         // batch commits (ADR-069 §2).
         let new_parent_id_owned = new_parent_id.to_string();
-        let nodes_and_orders: Vec<(Node, f64)> = nodes
-            .iter()
-            .cloned()
-            .zip(orders.iter().copied())
-            .collect();
+        let nodes_and_orders: Vec<(Node, f64)> =
+            nodes.iter().cloned().zip(orders.iter().copied()).collect();
         let service = self.clone();
         let service_for_tx = service.clone();
         let updated: Vec<Node> = service
