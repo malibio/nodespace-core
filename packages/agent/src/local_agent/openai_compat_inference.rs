@@ -188,6 +188,11 @@ struct OpenAiRequestToolCall {
     #[serde(rename = "type")]
     call_type: String,
     function: OpenAiRequestToolCallFunction,
+    /// Provider-opaque fields captured from the original response (e.g.
+    /// Gemini 3's `thought_signature`), echoed back verbatim as siblings of
+    /// `id`/`type`/`function`. `None` when the provider attached nothing.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    provider_extra: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -242,6 +247,13 @@ struct OpenAiToolCall {
     #[serde(default)]
     id: Option<String>,
     function: OpenAiToolCallFunction,
+    /// Provider-opaque sibling fields beyond the OpenAI schema (`id`/`type`/
+    /// `function`) — e.g. Gemini 3's `thought_signature`, which its
+    /// OpenAI-compat endpoint requires echoed back verbatim on the next turn
+    /// or it 400s the whole conversation. Captured generically via `flatten`
+    /// so any such field survives the round trip without naming it here.
+    #[serde(flatten)]
+    provider_extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -258,6 +270,16 @@ struct OpenAiUsage {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+}
+
+/// Convert a captured `provider_extra` map into the `Option<Value>` carried on
+/// `StreamingChunk`/`ToolCallRaw`, collapsing an empty map to `None` so a
+/// provider that attached nothing round-trips as a clean no-op rather than an
+/// empty JSON object.
+fn provider_extra_value(
+    extra: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    (!extra.is_empty()).then(|| serde_json::Value::Object(extra.clone()))
 }
 
 /// Map an internal history message to its OpenAI wire-format equivalent,
@@ -280,6 +302,7 @@ fn to_openai_message(msg: &ChatMessage) -> OpenAiMessage {
                         name: tc.function_name.clone(),
                         arguments: tc.arguments_json.clone(),
                     },
+                    provider_extra: tc.provider_extra.clone(),
                 })
                 .collect()
         }),
@@ -482,6 +505,9 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
                                                     .name
                                                     .clone()
                                                     .unwrap_or_default(),
+                                                provider_extra: provider_extra_value(
+                                                    &tool_call.provider_extra,
+                                                ),
                                             });
                                         }
                                         if !tool_call.function.arguments.is_empty() {
@@ -546,6 +572,7 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
                                 on_chunk(StreamingChunk::ToolCallStart {
                                     id: call_id.clone(),
                                     name: tool_call.function.name.clone().unwrap_or_default(),
+                                    provider_extra: provider_extra_value(&tool_call.provider_extra),
                                 });
                                 on_chunk(StreamingChunk::ToolCallArgs {
                                     id: call_id,
@@ -745,6 +772,7 @@ mod tests {
                 id: "call_abc".to_string(),
                 function_name: "search_nodes".to_string(),
                 arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+                provider_extra: None,
             }],
         );
 
@@ -795,5 +823,121 @@ mod tests {
         assert!(json.get("tool_calls").is_none());
         assert!(json.get("name").is_none());
         assert!(json.get("tool_call_id").is_none());
+    }
+
+    #[test]
+    fn response_tool_call_captures_thought_signature_as_provider_extra() {
+        // Regression test for issue #2255: Gemini 3 attaches a
+        // `thought_signature` sibling field on each `tool_calls[i]` entry
+        // that its OpenAI-compat endpoint requires echoed back on replay.
+        // Dropping it here is what made every second tool-using turn 400.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {
+                                "name": "search",
+                                "arguments": "{\"query\":\"test\"}"
+                            },
+                            "thought_signature": "opaque-token-xyz"
+                        }
+                    ]
+                }
+            }]
+        }"#;
+
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let msg = resp.choices[0].message.as_ref().expect("message present");
+        let extra = provider_extra_value(&msg.tool_calls[0].provider_extra)
+            .expect("thought_signature must be captured as provider_extra");
+        assert_eq!(extra["thought_signature"], "opaque-token-xyz");
+        // The known OpenAI fields must not leak into provider_extra --
+        // only genuinely unknown sibling fields belong there.
+        assert!(extra.get("id").is_none());
+        assert!(extra.get("function").is_none());
+    }
+
+    #[test]
+    fn response_tool_call_without_extra_fields_yields_none() {
+        // The common case (local servers, non-Gemini providers): no unknown
+        // sibling fields on the tool call, so provider_extra must collapse to
+        // None rather than an empty object -- an empty object would still
+        // round-trip as a spurious field on replay.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "tool_calls": [
+                        {"id": "call_abc", "function": {"name": "search", "arguments": "{}"}}
+                    ]
+                }
+            }]
+        }"#;
+
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let msg = resp.choices[0].message.as_ref().expect("message present");
+        assert!(provider_extra_value(&msg.tool_calls[0].provider_extra).is_none());
+    }
+
+    #[test]
+    fn replayed_tool_call_echoes_thought_signature_back_verbatim() {
+        // Regression test for issue #2255: a replayed assistant tool-call
+        // turn must carry `thought_signature` back as a sibling field of
+        // `id`/`type`/`function`, or Gemini 3's OpenAI-compat endpoint 400s
+        // the turn with "Function call is missing a thought_signature".
+        let assistant_turn = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "call_abc".to_string(),
+                function_name: "search_nodes".to_string(),
+                arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+                provider_extra: Some(serde_json::json!({
+                    "thought_signature": "opaque-token-xyz"
+                })),
+            }],
+        );
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+
+        let tool_call = &json["tool_calls"][0];
+        assert_eq!(tool_call["id"], "call_abc");
+        assert_eq!(tool_call["type"], "function");
+        assert_eq!(tool_call["function"]["name"], "search_nodes");
+        assert_eq!(
+            tool_call["thought_signature"], "opaque-token-xyz",
+            "thought_signature must be echoed back as a sibling field on replay"
+        );
+    }
+
+    #[test]
+    fn replayed_tool_call_without_provider_extra_stays_clean() {
+        // A tool call with no provider_extra must not grow a spurious empty
+        // field on replay -- only calls that actually carry provider state
+        // should emit anything beyond the standard OpenAI shape.
+        let assistant_turn = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "call_abc".to_string(),
+                function_name: "search_nodes".to_string(),
+                arguments_json: r#"{"query":"Q3 budget"}"#.to_string(),
+                provider_extra: None,
+            }],
+        );
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+        let tool_call = json["tool_calls"][0]
+            .as_object()
+            .expect("tool call is an object");
+
+        assert_eq!(
+            tool_call.len(),
+            3,
+            "expected exactly id/type/function with no extra fields, got {tool_call:?}"
+        );
     }
 }

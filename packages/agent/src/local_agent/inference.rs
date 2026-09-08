@@ -165,7 +165,11 @@ fn bridge_chat_chunk(chunk: ChatChunk, on_chunk: &dyn Fn(StreamingChunk)) {
             on_chunk(StreamingChunk::Reasoning { text });
         }
         ChatChunk::ToolCallStart { id, name } => {
-            on_chunk(StreamingChunk::ToolCallStart { id, name });
+            on_chunk(StreamingChunk::ToolCallStart {
+                id,
+                name,
+                provider_extra: None,
+            });
         }
         ChatChunk::ToolCallArgs { id, json } => {
             on_chunk(StreamingChunk::ToolCallArgs {
@@ -259,9 +263,14 @@ mod tests {
             name: "create_node".to_string(),
         });
         match &start[0] {
-            StreamingChunk::ToolCallStart { id, name } => {
+            StreamingChunk::ToolCallStart {
+                id,
+                name,
+                provider_extra,
+            } => {
                 assert_eq!(id, "call-1");
                 assert_eq!(name, "create_node");
+                assert!(provider_extra.is_none());
             }
             other => panic!("expected StreamingChunk::ToolCallStart, got {other:?}"),
         }

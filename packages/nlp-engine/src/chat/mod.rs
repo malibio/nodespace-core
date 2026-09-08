@@ -976,6 +976,26 @@ fn strip_gemma_special_tokens(s: &str) -> String {
     out
 }
 
+/// Merge a tool call's `provider_extra` object into the outgoing tool-call
+/// JSON as sibling fields, alongside `id`/`type`/`function`.
+///
+/// Some providers (e.g. Gemini 3 via its OpenAI-compat endpoint) attach
+/// opaque state to a tool call — `thought_signature` — that isn't part of the
+/// OpenAI schema but must be echoed back unchanged on replay or the provider
+/// rejects the turn. `extra` is `None` for the common case (local models,
+/// providers with no such requirement), in which case this is a no-op.
+fn merge_provider_extra(tool_call: &mut serde_json::Value, extra: Option<&serde_json::Value>) {
+    let Some(serde_json::Value::Object(fields)) = extra else {
+        return;
+    };
+    let Some(obj) = tool_call.as_object_mut() else {
+        return;
+    };
+    for (k, v) in fields {
+        obj.insert(k.clone(), v.clone());
+    }
+}
+
 /// Convert one `ChatMessage` into an OpenAI-format message value for the
 /// Jinja chat template.
 ///
@@ -1010,11 +1030,13 @@ fn chat_message_to_oai_value(msg: &ChatMessage) -> serde_json::Value {
                     Ok(v) if v.is_object() => tc.arguments_json.clone(),
                     _ => "{}".to_string(),
                 };
-                serde_json::json!({
+                let mut v = serde_json::json!({
                     "id": tc.id,
                     "type": "function",
                     "function": { "name": tc.function_name, "arguments": arguments }
-                })
+                });
+                merge_provider_extra(&mut v, tc.provider_extra.as_ref());
+                v
             })
             .collect();
         let content: serde_json::Value = if msg.content.is_empty() {
@@ -1994,6 +2016,7 @@ mod tests {
                 id: "tc_1".into(),
                 function_name: "search_nodes".into(),
                 arguments_json: r#"{"query":"x"}"#.into(),
+                provider_extra: None,
             }],
         );
         let v = chat_message_to_oai_value(&m);
@@ -2016,6 +2039,7 @@ mod tests {
                 id: "tc_1".into(),
                 function_name: "get_node".into(),
                 arguments_json: r#"{"id":"abc"}"#.into(),
+                provider_extra: None,
             }],
         );
         let v = chat_message_to_oai_value(&m);
@@ -2033,6 +2057,7 @@ mod tests {
                     id: "tc_1".into(),
                     function_name: "create_schema".into(),
                     arguments_json: bad.into(),
+                    provider_extra: None,
                 }],
             );
             let v = chat_message_to_oai_value(&m);

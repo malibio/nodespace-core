@@ -276,6 +276,7 @@ async fn retry_copies_the_shape_of_the_prior_call() {
                     id: "call_1".to_string(),
                     function_name: "create_schema".to_string(),
                     arguments_json: prior_args.to_string(),
+                    provider_extra: None,
                 }],
                 tool_call_id: None,
                 name: None,

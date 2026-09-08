@@ -176,6 +176,7 @@ mod tests {
                         on_chunk(StreamingChunk::ToolCallStart {
                             id: "call-1".to_string(),
                             name: name.to_string(),
+                            provider_extra: None,
                         });
                     }
                     Ok(InferenceUsage::default())

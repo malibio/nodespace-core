@@ -3186,7 +3186,8 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         let mut tool_calls: Vec<ToolCallRaw> = Vec::new();
         // Accumulate tool call args by id
         // Use Vec to preserve tool call ordering (important for causal dependencies)
-        let mut pending_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args_json)
+        let mut pending_calls: Vec<(String, String, String, Option<serde_json::Value>)> =
+            Vec::new(); // (id, name, args_json, provider_extra)
         let mut error: Option<String> = None;
 
         for chunk in chunks {
@@ -3197,11 +3198,23 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 StreamingChunk::Reasoning { text: r } => {
                     reasoning.push_str(r);
                 }
-                StreamingChunk::ToolCallStart { id, name } => {
-                    pending_calls.push((id.clone(), name.clone(), String::new()));
+                StreamingChunk::ToolCallStart {
+                    id,
+                    name,
+                    provider_extra,
+                } => {
+                    pending_calls.push((
+                        id.clone(),
+                        name.clone(),
+                        String::new(),
+                        provider_extra.clone(),
+                    ));
                 }
                 StreamingChunk::ToolCallArgs { id, args_json } => {
-                    if let Some(call) = pending_calls.iter_mut().rev().find(|(cid, _, _)| cid == id)
+                    if let Some(call) = pending_calls
+                        .iter_mut()
+                        .rev()
+                        .find(|(cid, _, _, _)| cid == id)
                     {
                         call.2.push_str(args_json);
                     }
@@ -3219,11 +3232,12 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         }
 
         // Convert accumulated tool calls into ToolCallRaw (order preserved)
-        for (id, name, args_json) in pending_calls {
+        for (id, name, args_json, provider_extra) in pending_calls {
             tool_calls.push(ToolCallRaw {
                 id,
                 function_name: name,
                 arguments_json: args_json,
+                provider_extra,
             });
         }
 
@@ -3744,6 +3758,7 @@ mod tests {
                     StreamingChunk::ToolCallStart {
                         id: "tc_1".to_string(),
                         name: tool_name.to_string(),
+                        provider_extra: None,
                     },
                     StreamingChunk::ToolCallArgs {
                         id: "tc_1".to_string(),
@@ -4048,6 +4063,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -4065,6 +4081,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
                     name: "get_node".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
@@ -4126,6 +4143,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: format!("tc_{i}"),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: format!("tc_{i}"),
@@ -4190,6 +4208,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_dup".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_dup".to_string(),
@@ -4371,6 +4390,7 @@ mod tests {
             StreamingChunk::ToolCallStart {
                 id: "tc_1".to_string(),
                 name: "search_nodes".to_string(),
+                provider_extra: None,
             },
             StreamingChunk::ToolCallArgs {
                 id: "tc_1".to_string(),
@@ -4895,6 +4915,7 @@ mod tests {
                     id: "tc_1".into(),
                     function_name: "search_nodes".into(),
                     arguments_json: r#"{"query":"q"}"#.into(),
+                    provider_extra: None,
                 }],
             ));
         session.messages.push(ChatMessage::tool_result(
@@ -4985,6 +5006,7 @@ mod tests {
                         id: format!("tc_{i}"),
                         function_name: "create_nodes_from_markdown".into(),
                         arguments_json: format!(r#"{{"markdown":"{}"}}"#, "x".repeat(2000)),
+                        provider_extra: None,
                     }],
                 ));
             session.messages.push(ChatMessage::tool_result(
@@ -5152,6 +5174,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: format!("tc_{i}"),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: format!("tc_{i}"),
@@ -5237,6 +5260,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -5246,6 +5270,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
                     name: "get_node".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
@@ -5402,6 +5427,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 // No ToolCallArgs chunks at all — args_json will be ""
                 StreamingChunk::Done {
@@ -5545,6 +5571,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -5561,6 +5588,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
                     name: "create_node".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
@@ -5645,6 +5673,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -5661,6 +5690,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
@@ -5677,6 +5707,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_3".to_string(),
                     name: "update_node".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_3".to_string(),
@@ -5780,6 +5811,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -5797,6 +5829,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
                     name: "search_semantic".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
@@ -5814,6 +5847,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_3".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_3".to_string(),
@@ -5831,6 +5865,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_4".to_string(),
                     name: "create_node".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_4".to_string(),
@@ -5931,6 +5966,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -7082,6 +7118,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_0".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_0".to_string(),
@@ -7099,6 +7136,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -7274,6 +7312,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_update".to_string(),
                     name: "update_node".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_update".to_string(),
@@ -7291,6 +7330,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_search_0".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_search_0".to_string(),
@@ -7308,6 +7348,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_search_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_search_1".to_string(),
@@ -7652,6 +7693,7 @@ mod tests {
                     StreamingChunk::ToolCallStart {
                         id: format!("tc_{i}"),
                         name: "create_node".to_string(),
+                        provider_extra: None,
                     },
                     StreamingChunk::ToolCallArgs {
                         id: format!("tc_{i}"),
@@ -7861,6 +7903,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: format!("tc_{i}"),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: format!("tc_{i}"),
@@ -7934,6 +7977,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_dup".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_dup".to_string(),
@@ -8088,6 +8132,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "search_nodes".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -8346,6 +8391,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "create_schema".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -8364,6 +8410,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
                     name: "create_schema".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
@@ -8471,6 +8518,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_1".to_string(),
                     name: "create_schema".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_1".to_string(),
@@ -8487,6 +8535,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "tc_2".to_string(),
                     name: "create_schema".to_string(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "tc_2".to_string(),
@@ -9483,6 +9532,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "r1".into(),
                     name: routing::ROUTE_QUERY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "r1".into(),
@@ -9500,6 +9550,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "t1".into(),
                     name: tool_name.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "t1".into(),
@@ -9574,6 +9625,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "r1".into(),
                     name: routing::ROUTE_MULTI_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "r1".into(),
@@ -9590,6 +9642,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "t1".into(),
                     name: tool_name.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "t1".into(),
@@ -10071,6 +10124,7 @@ mod tests {
             StreamingChunk::ToolCallStart {
                 id: "r1".into(),
                 name: routing::ROUTE_CLARIFY_TOOL.into(),
+                provider_extra: None,
             },
             StreamingChunk::ToolCallArgs {
                 id: "r1".into(),
@@ -10147,6 +10201,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "r1".into(),
                     name: routing::ROUTE_QUERY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "r1".into(),
@@ -10165,6 +10220,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "t1".into(),
                     name: "update_node".into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "t1".into(),
@@ -10177,6 +10233,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "t2".into(),
                     name: routing::ROUTE_CLARIFY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "t2".into(),
@@ -10279,6 +10336,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "r1".into(),
                     name: routing::ROUTE_QUERY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "r1".into(),
@@ -10298,6 +10356,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "t1".into(),
                     name: routing::ROUTE_CLARIFY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "t1".into(),
@@ -10416,6 +10475,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "r1".into(),
                     name: routing::ROUTE_QUERY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "r1".into(),
@@ -10432,6 +10492,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "t1".into(),
                     name: routing::ROUTE_CLARIFY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "t1".into(),
@@ -10508,6 +10569,7 @@ mod tests {
             StreamingChunk::ToolCallStart {
                 id: "r1".into(),
                 name: routing::ROUTE_CLARIFY_TOOL.into(),
+                provider_extra: None,
             },
             StreamingChunk::ToolCallArgs {
                 id: "r1".into(),
@@ -10559,6 +10621,7 @@ mod tests {
                 StreamingChunk::ToolCallStart {
                     id: "r1".into(),
                     name: routing::ROUTE_CLARIFY_TOOL.into(),
+                    provider_extra: None,
                 },
                 StreamingChunk::ToolCallArgs {
                     id: "r1".into(),
