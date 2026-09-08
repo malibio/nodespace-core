@@ -25,14 +25,15 @@
  *   bun run scripts/publish-install-script.ts <version>            # dry run --
  *                                                                   # prints the diff, pushes nothing
  *   bun run scripts/publish-install-script.ts <version> --push      # pushes to nodespace-website's
- *                                                                    # main branch (requires
- *                                                                    # WEBSITE_DEPLOY_TOKEN)
+ *                                                                    # main branch
  *
- * `--push` requires WEBSITE_DEPLOY_TOKEN: a PAT (or fine-grained token)
+ * WEBSITE_DEPLOY_TOKEN is required either way: a PAT (or fine-grained token)
  * with `contents: write` on NodeSpaceAI/nodespace-website, set as a repo
  * secret once this is wired into the release flow -- `secrets.GITHUB_TOKEN`
  * is scoped to nodespace-core only and cannot push cross-repo (same
- * constraint the Homebrew cask sync's token documents).
+ * constraint the Homebrew cask sync's token documents). Even a dry run needs
+ * it: nodespace-website is a private repo, so the read-only preview fetch
+ * below 404s without authentication too.
  */
 
 import { $ } from "bun";
@@ -125,9 +126,14 @@ export async function checkReleaseAssets(version: string): Promise<AssetCheckRes
  * what actually gets written. The raw.githubusercontent.com endpoint this
  * hits is CDN-cached, so it can lag a fraction behind the real HEAD; that
  * lag only matters for a write, and the write path (pushInstallScriptUpdate)
- * reads its own fresh `git clone` instead of this. */
-export async function fetchWebsiteInstallScript(): Promise<string> {
-  const res = await fetch(`https://raw.githubusercontent.com/${WEBSITE_REPO}/main/install.sh`);
+ * reads its own fresh `git clone` instead of this.
+ *
+ * nodespace-website is a private repo, so the anonymous raw.githubusercontent.com
+ * request 404s with no token -- main() passes WEBSITE_DEPLOY_TOKEN through so a
+ * local dry run needs that env var set too, same as --push. */
+export async function fetchWebsiteInstallScript(token?: string): Promise<string> {
+  const headers: HeadersInit = token ? { Authorization: `token ${token}` } : {};
+  const res = await fetch(`https://raw.githubusercontent.com/${WEBSITE_REPO}/main/install.sh`, { headers });
   if (!res.ok) {
     throw new Error(`failed to fetch ${WEBSITE_REPO}'s install.sh: HTTP ${res.status}`);
   }
@@ -201,10 +207,12 @@ async function main(): Promise<void> {
 
   const push = args.includes("--push");
   const token = process.env.WEBSITE_DEPLOY_TOKEN;
-  if (push && !token) {
+  // nodespace-website is private, so even the read-only preview fetch below
+  // needs this token -- not just --push's actual write.
+  if (!token) {
     console.error(
-      "WEBSITE_DEPLOY_TOKEN is not set -- required for --push (a PAT with contents:write on " +
-        `${WEBSITE_REPO}). Running without --push shows what would change.`,
+      "WEBSITE_DEPLOY_TOKEN is not set (a PAT with contents:write on " +
+        `${WEBSITE_REPO}) -- required even for a dry run, since nodespace-website is private.`,
     );
     process.exit(1);
   }
@@ -214,7 +222,7 @@ async function main(): Promise<void> {
   // run concurrently rather than paying the sum of both round trips.
   const [{ missing }, currentPreview] = await Promise.all([
     checkReleaseAssets(command),
-    fetchWebsiteInstallScript(),
+    fetchWebsiteInstallScript(token),
   ]);
   if (missing.length > 0) {
     console.error(
