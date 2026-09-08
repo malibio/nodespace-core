@@ -218,12 +218,12 @@ nodespace node get "2026-05-30"
 ### Define a new entity type, then create an instance
 
 ```bash
-# 1. Create the schema (one schema per request; `references/cli.md` has the full field/enum shape)
-nodespace schema create --params '{"name":"Ticket","fields":[{"name":"status","type":"text"},{"name":"assignee","type":"text"}]}'
+# 1. Create the schema (one schema per request; `references/cli.md` covers field/enum/relationship shape)
+nodespace schema create --params '{"name":"Ticket","fields":[{"name":"status","type":"text"}]}'
 
 # 2. Create an instance
 nodespace node create --type ticket --content "Fix flaky retry test" --parent <parent-id>
-nodespace node update <the-new-id> --property assignee=dana --property status=in_dev
+nodespace node update <the-new-id> --property status=in_dev
 ```
 
 ### Link two nodes with a typed relationship
@@ -268,7 +268,7 @@ nodespace import file ./notes.md
 nodespace import dir ./docs --auto-collection-routing
 ```
 
-Top-level headings become root nodes, sub-headings become children. Report the number of nodes created; don't follow up with search calls to verify.
+Top-level headings become root nodes, sub-headings become children — for any multi-section document, not only bulk import. Report the number of nodes created; don't follow up with search calls to verify.
 
 ### Export a document for AI context
 
