@@ -247,13 +247,22 @@ struct OpenAiResponseMessage {
 struct OpenAiToolCall {
     #[serde(default)]
     id: Option<String>,
+    /// Named explicitly (never read) so `flatten` below excludes it from
+    /// `provider_extra` — the wire's `"type": "function"` is a KNOWN OpenAI
+    /// field, not provider-opaque state. Omitting this field would let
+    /// `flatten` sweep it into `provider_extra`, which then re-emits it
+    /// alongside `OpenAiRequestToolCall`'s own hardcoded `call_type` field on
+    /// replay, producing a JSON object with two `"type"` keys.
+    #[serde(rename = "type", default)]
+    _call_type: Option<String>,
     function: OpenAiToolCallFunction,
     /// Provider-opaque sibling fields beyond the OpenAI schema (`id`/`type`/
     /// `function`) — e.g. Gemini 3's `extra_content.google.thought_signature`,
     /// which its OpenAI-compat endpoint requires echoed back verbatim at the
     /// same path on the next turn or it 400s the whole conversation.
-    /// Captured generically via `flatten`
-    /// so any such field survives the round trip without naming it here.
+    /// Captured generically via `flatten`. Every field the wire format is
+    /// known to send MUST be named above, or `flatten` silently treats it as
+    /// "provider-opaque" too — see `_call_type`.
     #[serde(flatten)]
     provider_extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -440,6 +449,13 @@ impl ChatInferenceEngine for OpenAiCompatInferenceEngine {
         };
 
         if use_stream {
+            // `use_stream` is false whenever `tools` is present (see above),
+            // so a tool-calling response -- the only case where
+            // `provider_extra` ever carries content -- never actually
+            // reaches this branch today. The `provider_extra` wiring on the
+            // streamed `ToolCallStart` chunks below is speculative/defensive
+            // completeness for a future provider that streams tool calls; it
+            // is not exercised by any test or by production traffic.
             let mut stream = response.bytes_stream();
             let mut buffer = NdjsonLineBuffer::new();
             // Accumulates streamed tool-call fragments by index, since the
@@ -955,6 +971,94 @@ mod tests {
             tool_call.len(),
             3,
             "expected exactly id/type/function with no extra fields, got {tool_call:?}"
+        );
+    }
+
+    #[test]
+    fn response_type_field_does_not_leak_into_provider_extra() {
+        // Regression test: the wire's "type":"function" is a KNOWN OpenAI
+        // field, not provider-opaque state. If OpenAiToolCall didn't name it
+        // explicitly, `flatten` would sweep it into provider_extra, and
+        // replay would then emit it a second time alongside
+        // OpenAiRequestToolCall's own hardcoded `type` field -- a JSON
+        // object with two "type" keys.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {"name": "search", "arguments": "{}"},
+                            "extra_content": {"google": {"thought_signature": "tok"}}
+                        }
+                    ]
+                }
+            }]
+        }"#;
+
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let msg = resp.choices[0].message.as_ref().expect("message present");
+        let extra = provider_extra_value(&msg.tool_calls[0].provider_extra)
+            .expect("extra_content must still be captured");
+        assert!(
+            extra.get("type").is_none(),
+            "the known `type` field must not leak into provider_extra, got {extra:?}"
+        );
+    }
+
+    #[test]
+    fn a_parsed_response_replays_without_duplicating_the_type_key() {
+        // Regression test: chains a real parsed OpenAiToolCall into the
+        // replay path (rather than hand-authoring provider_extra on each
+        // side independently) to catch exactly the class of seam bug the
+        // issue's postmortem warned a one-shot, isolated test would miss --
+        // here, a duplicate "type" key that only appears when parse and
+        // replay are exercised together.
+        let json = r#"{
+            "choices": [{
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {"name": "search", "arguments": "{\"q\":1}"},
+                            "extra_content": {"google": {"thought_signature": "tok"}}
+                        }
+                    ]
+                }
+            }]
+        }"#;
+        let resp: OpenAiChatResponse = serde_json::from_str(json).expect("should deserialize");
+        let parsed = &resp.choices[0]
+            .message
+            .as_ref()
+            .expect("message present")
+            .tool_calls[0];
+
+        let tool_call = ToolCallRaw {
+            id: parsed.id.clone().expect("id present"),
+            function_name: parsed.function.name.clone().unwrap_or_default(),
+            arguments_json: parsed.function.arguments.clone(),
+            provider_extra: provider_extra_value(&parsed.provider_extra),
+        };
+        let assistant_turn = ChatMessage::assistant_with_tool_calls("", vec![tool_call]);
+
+        let wire = to_openai_message(&assistant_turn);
+        let json = serde_json::to_value(&wire).expect("serializes");
+        let replayed = json["tool_calls"][0]
+            .as_object()
+            .expect("tool call is an object");
+
+        let type_count = replayed.keys().filter(|k| *k == "type").count();
+        assert_eq!(
+            type_count, 1,
+            "replayed tool call must have exactly one `type` key, got {replayed:?}"
+        );
+        assert_eq!(replayed["type"], "function");
+        assert_eq!(
+            replayed["extra_content"]["google"]["thought_signature"], "tok",
+            "thought_signature must survive the full parse-then-replay round trip"
         );
     }
 }

@@ -2047,6 +2047,32 @@ mod tests {
     }
 
     #[test]
+    fn oai_value_tool_call_turn_merges_provider_extra_fields() {
+        // Local llama.cpp models never populate provider_extra today, but
+        // this path exists for consistency with the OpenAI-compat replay
+        // path -- exercise the actual merge so a colliding key is proven to
+        // overwrite (via serde_json::Map::insert) rather than duplicate,
+        // unlike the flatten-based approach in openai_compat_inference.rs.
+        let m = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![ToolCallRaw {
+                id: "tc_1".into(),
+                function_name: "search_nodes".into(),
+                arguments_json: r#"{"query":"x"}"#.into(),
+                provider_extra: Some(serde_json::json!({
+                    "extra_content": {"google": {"thought_signature": "tok"}}
+                })),
+            }],
+        );
+        let v = chat_message_to_oai_value(&m);
+        assert_eq!(
+            v["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+            "tok"
+        );
+        assert_eq!(v["tool_calls"][0]["id"], "tc_1");
+    }
+
+    #[test]
     fn oai_value_normalizes_non_object_arguments_to_empty_object() {
         // Empty / malformed / non-object arguments are normalized to "{}" so the
         // template never receives invalid JSON.
