@@ -17,8 +17,13 @@ vi.mock('node:os', async (importOriginal) => {
 // CLAUDE_CONFIG_DIR describe sets it explicitly where it needs to.
 delete process.env.CLAUDE_CONFIG_DIR;
 
-const { install, uninstall, isNodespaceBinaryOnPath, claudeCodePluginManagedSkillExists } =
-  await import('../installer.js');
+const {
+  install,
+  uninstall,
+  checkInstalled,
+  isNodespaceBinaryOnPath,
+  claudeCodePluginManagedSkillExists,
+} = await import('../installer.js');
 const { AGENTS, SHARED_SKILL_FRONTMATTER } = await import('../agents.js');
 
 const SKILL_MD_CONTENT = '# NodeSpace Skill\nTest content';
@@ -404,6 +409,68 @@ describe('uninstall', () => {
     uninstall([config.name]);
 
     expect(existsSync(config.installDir)).toBe(false);
+  });
+});
+
+describe('checkInstalled', () => {
+  it('returns empty array when nothing is installed', () => {
+    expect(checkInstalled()).toEqual([]);
+  });
+
+  it('reports an agent as installed once install() has written SKILL.md', () => {
+    const config = AGENTS.find(a => a.name === 'claude-code')!;
+    mkdirSync(config.detectionDir, { recursive: true });
+    install(['claude-code'], FAKE_PKG_ROOT);
+
+    expect(checkInstalled(['claude-code'])).toEqual(['claude-code']);
+  });
+
+  // The staleness scenario this exists to catch: agents_installed was
+  // persisted by a real install, then the user deleted the harness's skill
+  // directory by hand (or the harness itself) outside NodeSpace entirely.
+  // checkInstalled must reflect the filesystem as it is now, not the stale
+  // persisted claim.
+  it('no longer reports an agent once its skill directory is deleted by hand', () => {
+    const config = AGENTS.find(a => a.name === 'claude-code')!;
+    mkdirSync(config.detectionDir, { recursive: true });
+    install(['claude-code'], FAKE_PKG_ROOT);
+    expect(checkInstalled(['claude-code'])).toEqual(['claude-code']);
+
+    rmSync(config.installDir, { recursive: true, force: true });
+
+    expect(checkInstalled(['claude-code'])).toEqual([]);
+  });
+
+  it('filters a mixed list down to only the agents actually present on disk', () => {
+    const claudeCode = AGENTS.find(a => a.name === 'claude-code')!;
+    const gemini = AGENTS.find(a => a.name === 'gemini')!;
+    mkdirSync(claudeCode.detectionDir, { recursive: true });
+    mkdirSync(gemini.detectionDir, { recursive: true });
+    install(['claude-code', 'gemini'], FAKE_PKG_ROOT);
+
+    rmSync(gemini.installDir, { recursive: true, force: true });
+
+    expect(checkInstalled(['claude-code', 'gemini'])).toEqual(['claude-code']);
+  });
+
+  it('defaults to checking every configured agent when no target list is given', () => {
+    const claudeCode = AGENTS.find(a => a.name === 'claude-code')!;
+    mkdirSync(claudeCode.detectionDir, { recursive: true });
+    install(['claude-code'], FAKE_PKG_ROOT);
+
+    expect(checkInstalled()).toEqual(['claude-code']);
+  });
+
+  // An empty or partially-cleaned install directory (SKILL.md removed but the
+  // directory itself left behind, e.g. an interrupted manual deletion) must
+  // not read as "installed" — the check is specifically for SKILL.md, not
+  // merely existsSync(installDir).
+  it('does not count a directory that exists but has no SKILL.md as installed', () => {
+    const config = AGENTS.find(a => a.name === 'claude-code')!;
+    mkdirSync(config.installDir, { recursive: true });
+    writeFileSync(join(config.installDir, 'other-file.md'), 'stray file', 'utf8');
+
+    expect(checkInstalled(['claude-code'])).toEqual([]);
   });
 });
 

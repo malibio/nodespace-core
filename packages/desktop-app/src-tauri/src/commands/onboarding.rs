@@ -213,19 +213,25 @@ pub async fn install_skill(
 }
 
 /// Return the current skill setup status without re-running the installer.
+///
+/// `agents_installed` is revalidated against the filesystem (via the
+/// installer's `status` subcommand) before being returned -- the persisted
+/// list is only ever written by a successful install and otherwise never
+/// checked, so it would otherwise keep claiming a harness has the skill long
+/// after a user deleted that harness's skill directory by hand.
 #[tauri::command]
-pub async fn get_skill_setup_status() -> Result<SkillSetupResult, String> {
+pub async fn get_skill_setup_status(
+    app_handle: tauri::AppHandle,
+) -> Result<SkillSetupResult, String> {
     let state = skill_setup::read_setup_state()
         .await
         .map_err(|e| e.to_string())?;
     let cli_on_path = skill_setup::check_cli_on_path();
+    let agents_installed =
+        skill_setup::revalidate_agents_installed(state.agents_installed, &app_handle).await;
     Ok(SkillSetupResult {
         success: state.skill_installed,
-        // Persisted by the install that set skill_installed -- reading it
-        // back here is what lets the Settings page show which agents
-        // actually have the skill on a normal page load, not only right
-        // after a fresh install click.
-        agents_installed: state.agents_installed,
+        agents_installed,
         agents_skipped: vec![],
         cli_on_path,
         cli_warning: skill_setup::cli_warning(cli_on_path),
@@ -253,21 +259,14 @@ pub async fn get_integrations_status() -> Result<OnboardingStatus, String> {
     check_onboarding_status().await
 }
 
-/// Remove the NodeSpace skill files from all detected agent skill directories.
-/// Resets both setup.json (authoritative for get_skill_setup_status) and config.json.
+/// Remove the NodeSpace skill files from every installed-into agent's skill
+/// directory (Claude Code, Codex, Gemini CLI, OpenCode -- whichever the
+/// installer's `AGENTS` config currently lists), by delegating to
+/// `install.ts`'s own `uninstall` command. Resets both setup.json
+/// (authoritative for get_skill_setup_status) and config.json.
 #[tauri::command]
-pub async fn remove_skill() -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-    let skill_dir = home.join(".claude").join("skills").join("nodespace");
-    if skill_dir.exists() {
-        tokio::fs::remove_dir_all(&skill_dir)
-            .await
-            .map_err(|e| format!("Failed to remove skill directory: {e}"))?;
-    }
-
-    skill_setup::reset_skill_state()
-        .await
-        .map_err(|e| e.to_string())?;
+pub async fn remove_skill(app_handle: tauri::AppHandle) -> Result<(), String> {
+    skill_setup::uninstall_skill(&app_handle).await?;
 
     let mut cfg = read_config().await?;
     cfg.integrations.skill_configured = false;
