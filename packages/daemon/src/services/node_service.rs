@@ -59,8 +59,8 @@ use crate::nodespace::{
     OptionalStringClear, OptionalTimestampClear, QueryNodesSimpleRequest,
     RelationshipDeletedPayload, RelationshipPayload, RemoveNodeFromCollectionRequest,
     RenameCollectionRequest, ReorderNodeRequest, ReorderNodeResponse, SchemaParamsRequest,
-    SchemaResultResponse, SearchRequest, UpdateNodeRequest, UpdateNodesBatchRequest,
-    UpdateNodesBatchResponse, UpdateRelationshipPropertiesRequest,
+    SchemaResultResponse, SearchRequest, SetLocalPersonIdentityRequest, UpdateNodeRequest,
+    UpdateNodesBatchRequest, UpdateNodesBatchResponse, UpdateRelationshipPropertiesRequest,
     UpdateRelationshipPropertiesResponse, UpdateTaskNodeRequest, UpsertNodeWithParentRequest,
     WatchRequest,
 };
@@ -1130,6 +1130,56 @@ impl GrpcNodeService for NodeServiceImpl {
         let node_type = node.node_type.clone();
         let node_id = node.id.clone();
 
+        Ok(Response::new(NodeResponse {
+            node_id,
+            node_type,
+            node_data: Some(node_to_proto(node)),
+        }))
+    }
+
+    // -- Local identity (ADR-037, core#2388) ---------------------------------
+
+    async fn get_local_person(
+        &self,
+        request: Request<Empty>,
+    ) -> Result<Response<OptionalNodeResponse>, Status> {
+        let this = self.route(&request).await?;
+
+        let person = this
+            .node_service
+            .get_local_person()
+            .await
+            .map_err(service_error_to_status)?;
+
+        let node_response = person.map(|n| {
+            let node_type = n.node_type.clone();
+            let node_id = n.id.clone();
+            NodeResponse {
+                node_id,
+                node_type,
+                node_data: Some(node_to_proto(n)),
+            }
+        });
+        Ok(Response::new(OptionalNodeResponse {
+            node: node_response,
+        }))
+    }
+
+    async fn set_local_person_identity(
+        &self,
+        request: Request<SetLocalPersonIdentityRequest>,
+    ) -> Result<Response<NodeResponse>, Status> {
+        let this = self.route(&request).await?;
+        let req = request.into_inner();
+
+        let node = this
+            .node_service
+            .set_local_person_identity(&req.name, &req.email)
+            .await
+            .map_err(service_error_to_status)?;
+
+        let node_type = node.node_type.clone();
+        let node_id = node.id.clone();
         Ok(Response::new(NodeResponse {
             node_id,
             node_type,
@@ -2279,6 +2329,75 @@ mod tests {
             other_found.node_id, bob_id,
             "excluding Alice must still surface Bob as the real duplicate"
         );
+    }
+
+    /// ADR-037 / core#2388: the RPC wiring for `GetLocalPerson` resolves the
+    /// SAME seeded PersonNode a direct core query sees — proves the proto
+    /// conversion (node_to_proto / OptionalNodeResponse) round-trips, not
+    /// just the already-covered core logic.
+    #[tokio::test]
+    async fn get_local_person_rpc_resolves_the_seeded_owner() {
+        let (svc, _tmp) = make_service().await;
+
+        let seeded = svc
+            .node_service
+            .query_nodes_by_type("person", None)
+            .await
+            .unwrap();
+        assert_eq!(seeded.len(), 1);
+        let seeded_id = seeded[0].id.clone();
+
+        let resp = svc
+            .get_local_person(Request::new(crate::nodespace::Empty {}))
+            .await
+            .unwrap()
+            .into_inner();
+        let node = resp
+            .node
+            .expect("a freshly seeded database must resolve a local person");
+        assert_eq!(node.node_id, seeded_id);
+        assert_eq!(node.node_data.unwrap().content, "");
+    }
+
+    /// `SetLocalPersonIdentity` must write into the seeded node (proto round
+    /// trip of the core write path already unit-tested directly on
+    /// `NodeService::set_local_person_identity`).
+    #[tokio::test]
+    async fn set_local_person_identity_rpc_writes_to_the_seeded_node() {
+        let (svc, _tmp) = make_service().await;
+
+        let seeded = svc
+            .node_service
+            .query_nodes_by_type("person", None)
+            .await
+            .unwrap();
+        let seeded_id = seeded[0].id.clone();
+
+        let resp = svc
+            .set_local_person_identity(Request::new(SetLocalPersonIdentityRequest {
+                name: "Alice Example".to_string(),
+                email: "alice@example.com".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(
+            resp.node_id, seeded_id,
+            "the write must land on the seeded node"
+        );
+        let data = resp.node_data.expect("update returns the updated node");
+        assert_eq!(data.content, "Alice Example");
+        let props: serde_json::Value = serde_json::from_str(&data.properties).unwrap();
+        assert_eq!(props["person"]["email"], "alice@example.com");
+
+        // Still exactly one person afterward — no duplicate node was created.
+        let people_after = svc
+            .node_service
+            .query_nodes_by_type("person", None)
+            .await
+            .unwrap();
+        assert_eq!(people_after.len(), 1);
     }
 
     /// A model-less shared build context for constructing a `DatabaseManager`

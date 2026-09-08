@@ -1,0 +1,222 @@
+/**
+ * OnboardingWizard identity step (core#2388).
+ *
+ * The setup wizard never asked who the local user is, leaving the seeded
+ * local person node permanently blank. These tests cover:
+ *   - the step is shown ONLY while the seeded person is blank, and asked
+ *     first (before the PATH step)
+ *   - a prefill from git/OS is shown for confirmation but never written
+ *     until the user explicitly saves
+ *   - Skip leaves the install untouched (no `set_local_identity` call)
+ *   - the `identityOnly` backfill-nudge mode renders just the one step and
+ *     dismisses itself (closing the dialog) on both Save and Skip
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { tick } from 'svelte';
+import { render, fireEvent } from '@testing-library/svelte';
+
+const mockInvoke = vi.fn();
+import { mockTauriCore } from '../helpers/mock-tauri-core';
+
+vi.mock('@tauri-apps/api/core', () =>
+  mockTauriCore({ invoke: (...args: unknown[]) => mockInvoke(...args) })
+);
+
+import OnboardingWizard from '$lib/components/onboarding/onboarding-wizard.svelte';
+
+function buttonByText(root: HTMLElement, text: string): HTMLElement {
+  const btn = Array.from(root.querySelectorAll<HTMLElement>('button')).find(
+    (b) => b.textContent?.trim() === text
+  );
+  if (!btn) throw new Error(`button "${text}" not found`);
+  return btn;
+}
+
+const BLANK_STATUS = {
+  completed: false,
+  pathConfigured: false,
+  skillConfigured: false,
+  claudeCodeDetected: false,
+  pathAlreadyConfigured: true // so the PATH step, once reached, shows "Next" immediately
+};
+
+const BLANK_IDENTITY = { nodeId: 'person-1', name: '', email: '', isBlank: true };
+const FILLED_IDENTITY = {
+  nodeId: 'person-1',
+  name: 'Alice Example',
+  email: 'alice@example.com',
+  isBlank: false
+};
+
+describe('OnboardingWizard identity step (core#2388)', () => {
+  let onClose: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    onClose = vi.fn();
+    mockInvoke.mockReset();
+  });
+
+  it('asks for identity first when the seeded person is blank', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') return Promise.resolve(BLANK_STATUS);
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') return Promise.resolve({ name: null, email: null });
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+    await tick(); // let both onMount invoke() calls resolve
+
+    expect(container.textContent).toContain('Who are you?');
+    expect(container.querySelector<HTMLInputElement>('#identity-name')).not.toBeNull();
+    // 3 real steps for this scenario (identity, path, summary — no skill
+    // step, claudeCodeDetected is false): the step SEQUENCE — not just the
+    // step currently rendered — must actually include 'identity', or
+    // navigation (Skip/Next) later in the flow has nowhere sane to land.
+    expect(container.querySelectorAll('.step-dot').length).toBe(3);
+  });
+
+  it('does not show the identity step when the seeded person already has a name/email', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') return Promise.resolve(BLANK_STATUS);
+      if (cmd === 'get_local_identity') return Promise.resolve(FILLED_IDENTITY);
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+    await tick();
+
+    // Straight to the PATH step (already configured -> "Next" immediately),
+    // never the identity prompt.
+    expect(container.textContent).not.toContain('Who are you?');
+    expect(buttonByText(container, 'Next')).toBeTruthy();
+  });
+
+  it('shows a git/OS prefill for confirmation but writes nothing until Save is clicked', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') return Promise.resolve(BLANK_STATUS);
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') {
+        return Promise.resolve({ name: 'Alice Example', email: 'alice@example.com' });
+      }
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+    await tick();
+    await tick(); // get_local_identity then get_identity_prefill are two sequential awaits
+
+    const nameInput = container.querySelector<HTMLInputElement>('#identity-name')!;
+    const emailInput = container.querySelector<HTMLInputElement>('#identity-email')!;
+    expect(nameInput.value).toBe('Alice Example');
+    expect(emailInput.value).toBe('alice@example.com');
+
+    // Prefill alone must never call the write command.
+    expect(mockInvoke).not.toHaveBeenCalledWith('set_local_identity', expect.anything());
+  });
+
+  it('Skip advances past the identity step without saving anything', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') return Promise.resolve(BLANK_STATUS);
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') return Promise.resolve({ name: null, email: null });
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Skip'));
+    await tick();
+
+    expect(mockInvoke).not.toHaveBeenCalledWith('set_local_identity', expect.anything());
+    // Advanced to the next real step (PATH, already configured -> "Next").
+    expect(container.textContent).not.toContain('Who are you?');
+    expect(buttonByText(container, 'Next')).toBeTruthy();
+  });
+
+  it('Save writes the trimmed name/email and advances to the next step', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'check_onboarding_status') return Promise.resolve(BLANK_STATUS);
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') return Promise.resolve({ name: null, email: null });
+      if (cmd === 'set_local_identity') return Promise.resolve(FILLED_IDENTITY);
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, { props: { open: true, onClose } });
+    await tick();
+    await tick();
+
+    const nameInput = container.querySelector<HTMLInputElement>('#identity-name')!;
+    const emailInput = container.querySelector<HTMLInputElement>('#identity-email')!;
+    await fireEvent.input(nameInput, { target: { value: '  Alice Example  ' } });
+    await fireEvent.input(emailInput, { target: { value: '  alice@example.com  ' } });
+
+    await fireEvent.click(buttonByText(container, 'Save'));
+    await tick();
+    await tick();
+
+    expect(mockInvoke).toHaveBeenCalledWith('set_local_identity', {
+      name: 'Alice Example',
+      email: 'alice@example.com'
+    });
+    expect(container.textContent).toContain("You're recorded as the owner");
+  });
+
+  it('identityOnly mode renders only the identity step and closes on Save', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') return Promise.resolve({ name: null, email: null });
+      if (cmd === 'set_local_identity') return Promise.resolve(FILLED_IDENTITY);
+      if (cmd === 'dismiss_identity_backfill_prompt') return Promise.resolve();
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, {
+      props: { open: true, onClose, identityOnly: true }
+    });
+    await tick();
+    await tick();
+
+    expect(container.textContent).toContain('Who are you?');
+    // No path/skill/summary machinery reachable — check_onboarding_status
+    // must never be called in this mode.
+    expect(mockInvoke).not.toHaveBeenCalledWith('check_onboarding_status');
+
+    await fireEvent.click(buttonByText(container, 'Save'));
+    await tick();
+    await tick();
+
+    expect(mockInvoke).toHaveBeenCalledWith('set_local_identity', { name: '', email: '' });
+    expect(mockInvoke).toHaveBeenCalledWith('dismiss_identity_backfill_prompt');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('identityOnly mode dismisses and closes on Skip too', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_local_identity') return Promise.resolve(BLANK_IDENTITY);
+      if (cmd === 'get_identity_prefill') return Promise.resolve({ name: null, email: null });
+      if (cmd === 'dismiss_identity_backfill_prompt') return Promise.resolve();
+      return Promise.resolve();
+    });
+
+    const { container } = render(OnboardingWizard, {
+      props: { open: true, onClose, identityOnly: true }
+    });
+    await tick();
+    await tick();
+
+    await fireEvent.click(buttonByText(container, 'Skip'));
+    await tick();
+
+    expect(mockInvoke).not.toHaveBeenCalledWith('set_local_identity', expect.anything());
+    expect(mockInvoke).toHaveBeenCalledWith('dismiss_identity_backfill_prompt');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

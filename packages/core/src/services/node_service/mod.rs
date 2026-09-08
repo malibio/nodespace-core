@@ -1112,6 +1112,87 @@ impl NodeService {
         Ok(())
     }
 
+    /// ADR-037 / core#2388: resolve the seeded local-user PersonNode — the
+    /// person with an outgoing `has_role` edge to the DatabaseSettingsNode
+    /// singleton (the owner edge `seed_database_settings_if_needed` seeds).
+    /// Falls back to the first `person` node when that edge is missing — a
+    /// database whose data predates ADR-037 seeding still resolves to *a*
+    /// local person rather than surfacing "no identity" on an otherwise
+    /// healthy install. Returns `None` only when there is no person node at
+    /// all (should not happen post-seed, but this must not panic on data
+    /// that predates it).
+    pub async fn get_local_person(&self) -> Result<Option<Node>, NodeServiceError> {
+        let owners = self
+            .get_related_nodes(DATABASE_SETTINGS_NODE_ID, "has_role", "in")
+            .await?;
+        if let Some(owner) = owners.into_iter().next() {
+            return Ok(Some(owner));
+        }
+        Ok(self
+            .query_nodes_by_type("person", None)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// ADR-037 / core#2388: write the local user's name/email into the
+    /// SEEDED PersonNode resolved by [`Self::get_local_person`] — never a
+    /// newly created one. `content` is kept in sync with `name` (matching
+    /// how every other person edit path in the app stores the display name;
+    /// see `PersonSchemaForm.updateField` on the frontend), alongside
+    /// `properties.person.email`. Trims whitespace; an empty value clears
+    /// the corresponding field rather than erroring, so "name only" or
+    /// "email only" are both legal — this mirrors the wizard's skippable,
+    /// non-blocking design (a user may fill in just one field and move on).
+    pub async fn set_local_person_identity(
+        &self,
+        name: &str,
+        email: &str,
+    ) -> Result<Node, NodeServiceError> {
+        let person = self.get_local_person().await?.ok_or_else(|| {
+            NodeServiceError::InitializationError(
+                "cannot set local identity: no local PersonNode exists".to_string(),
+            )
+        })?;
+
+        let name = name.trim();
+        let email = email.trim();
+
+        let mut person_props = person
+            .properties
+            .get("person")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        person_props.insert(
+            "name".to_string(),
+            serde_json::Value::String(name.to_string()),
+        );
+        person_props.insert(
+            "email".to_string(),
+            serde_json::Value::String(email.to_string()),
+        );
+
+        let mut properties = person.properties.clone();
+        match properties.as_object_mut() {
+            Some(obj) => {
+                obj.insert(
+                    "person".to_string(),
+                    serde_json::Value::Object(person_props),
+                );
+            }
+            None => {
+                properties = serde_json::json!({ "person": person_props });
+            }
+        }
+
+        let update = NodeUpdate::new()
+            .with_content(name.to_string())
+            .with_properties(properties);
+
+        self.update_node(&person.id, person.version, update).await
+    }
+
     /// Read the cloud tenant (schema + collection) this database is bound to, from
     /// the DatabaseSettingsNode singleton (ADR-053 per-database cloud sync). Returns
     /// `Some((schema, collection))` only when both are present and non-empty; `None`
@@ -4811,6 +4892,158 @@ mod tests {
             .expect("owner has_role edge exists");
         assert_eq!(edge.properties["role"], "owner");
         assert_eq!(edge.properties["status"], "active");
+    }
+
+    // --- get_local_person / set_local_person_identity (ADR-037, core#2388) ---
+
+    #[tokio::test]
+    async fn test_get_local_person_resolves_the_seeded_owner() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        assert_eq!(people.len(), 1);
+        let originally_seeded_id = people[0].id.clone();
+
+        // Move the owner has_role edge onto a SECOND, later-created person.
+        // `query_nodes_by_type` happens to return the originally-seeded person
+        // first (creation order), so a naive "first person" implementation
+        // would pass a test that only ever has one person, or adds a second
+        // one that is never actually wired as the owner — it would return the
+        // right answer for the wrong reason. Rewiring which person actually
+        // holds the has_role edge forces resolution to depend on the edge:
+        // only a real edge-based lookup returns the new owner here.
+        let new_owner_id = service
+            .create_node(Node::new(
+                "person".to_string(),
+                "New Owner".to_string(),
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        service
+            .delete_relationship(&originally_seeded_id, "has_role", DATABASE_SETTINGS_NODE_ID)
+            .await
+            .unwrap();
+        service
+            .create_relationship(
+                &new_owner_id,
+                "has_role",
+                DATABASE_SETTINGS_NODE_ID,
+                serde_json::json!({"role": "owner", "status": "active"}),
+            )
+            .await
+            .unwrap();
+
+        let local = service
+            .get_local_person()
+            .await
+            .unwrap()
+            .expect("a local person must resolve when an owner edge exists");
+        assert_eq!(
+            local.id, new_owner_id,
+            "must resolve whoever currently holds the has_role owner edge, \
+             not just the first person node"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_local_person_falls_back_to_first_person_when_owner_edge_missing() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let seeded_id = people[0].id.clone();
+
+        // Simulate a database that predates the ADR-037 owner edge (or one
+        // where it was somehow dropped): remove the has_role edge entirely.
+        service
+            .delete_relationship(&seeded_id, "has_role", DATABASE_SETTINGS_NODE_ID)
+            .await
+            .unwrap();
+        let via_edge = service
+            .get_related_nodes(DATABASE_SETTINGS_NODE_ID, "has_role", "in")
+            .await
+            .unwrap();
+        assert!(via_edge.is_empty(), "edge must actually be gone");
+
+        // The fallback still resolves to the (only) person node.
+        let local = service
+            .get_local_person()
+            .await
+            .unwrap()
+            .expect("fallback must still resolve a local person");
+        assert_eq!(local.id, seeded_id);
+    }
+
+    #[tokio::test]
+    async fn test_get_local_person_returns_none_with_no_person_node_at_all() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let seeded = people[0].clone();
+        service
+            .delete_node(&seeded.id, seeded.version)
+            .await
+            .unwrap();
+
+        let local = service.get_local_person().await.unwrap();
+        assert!(
+            local.is_none(),
+            "no person node exists anywhere, so there is nothing to resolve"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_local_person_identity_writes_to_the_seeded_node_not_a_new_one() {
+        let (service, _temp) = create_test_service().await;
+
+        let people = service.query_nodes_by_type("person", None).await.unwrap();
+        let seeded_id = people[0].id.clone();
+
+        let updated = service
+            .set_local_person_identity("Alice Example", "alice@example.com")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated.id, seeded_id,
+            "the write must land on the seeded node, never create a new person"
+        );
+        assert_eq!(updated.content, "Alice Example");
+        assert_eq!(updated.properties["person"]["name"], "Alice Example");
+        assert_eq!(updated.properties["person"]["email"], "alice@example.com");
+
+        // Still exactly one person — no duplicate was created.
+        let people_after = service.query_nodes_by_type("person", None).await.unwrap();
+        assert_eq!(people_after.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_set_local_person_identity_trims_whitespace_and_clears_on_empty() {
+        let (service, _temp) = create_test_service().await;
+
+        let first = service
+            .set_local_person_identity("  Bob  ", "  bob@example.com  ")
+            .await
+            .unwrap();
+        assert_eq!(
+            first.content, "Bob",
+            "leading/trailing whitespace on name must be trimmed"
+        );
+        assert_eq!(first.properties["person"]["name"], "Bob");
+        assert_eq!(
+            first.properties["person"]["email"], "bob@example.com",
+            "leading/trailing whitespace on email must be trimmed"
+        );
+
+        // A second save with an empty email clears it rather than leaving
+        // the previous value in place — this is a full-value write, not a
+        // sparse patch, matching the "email-only clears name" symmetric case
+        // the wizard's skippable design relies on.
+        let updated = service.set_local_person_identity("Bob", "").await.unwrap();
+
+        assert_eq!(updated.content, "Bob");
+        assert_eq!(updated.properties["person"]["name"], "Bob");
+        assert_eq!(updated.properties["person"]["email"], "");
     }
 
     /// Relationship viewer aggregation: an outbound relationship

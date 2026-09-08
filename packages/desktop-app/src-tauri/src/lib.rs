@@ -832,6 +832,12 @@ pub fn run() {
             commands::onboarding::remove_skill,
             commands::onboarding::get_skill_setup_status,
             commands::onboarding::get_integrations_status,
+            // Local identity (ADR-037, core#2388)
+            commands::onboarding::get_local_identity,
+            commands::onboarding::set_local_identity,
+            commands::onboarding::get_identity_prefill,
+            commands::onboarding::should_prompt_identity_backfill,
+            commands::onboarding::dismiss_identity_backfill_prompt,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

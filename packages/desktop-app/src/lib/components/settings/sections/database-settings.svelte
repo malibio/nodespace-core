@@ -4,6 +4,7 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import { Button } from '$lib/components/ui/button';
   import DatabaseNameDialog from '$lib/components/layout/database-name-dialog.svelte';
+  import IdentityCard from './identity-card.svelte';
   import { databaseStore, type DatabaseInfo } from '$lib/stores/database.svelte';
   import { createLogger } from '$lib/utils/logger';
 
@@ -95,6 +96,8 @@
 </script>
 
 <div class="max-w-[720px]">
+  <IdentityCard />
+
   <div class="mb-2 flex items-center justify-between">
     <h2 class="text-foreground text-xl font-semibold">Databases</h2>
     <div class="flex gap-2">
