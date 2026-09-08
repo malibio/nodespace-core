@@ -167,7 +167,9 @@ async fn object_property_round_trips_through_relationship_get() -> Result<()> {
                 "name": "held_at",
                 "targetType": "venue",
                 "direction": "out",
-                "cardinality": "one"
+                "cardinality": "one",
+                "reverseName": "concerts",
+                "reverseCardinality": "many"
             }]
         }),
     )
