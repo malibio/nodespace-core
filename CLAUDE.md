@@ -318,7 +318,7 @@ After pushing, update the issue comment with a handoff summary and commit link. 
 
 Documentation lives in `../nodespace-docs/` and is searchable via the NodeSpace CLI/daemon (skills-based interface, not HTTP MCP). Read the docs directly from the filesystem when you need architecture or component references — the `../nodespace-docs/` directory is always available.
 
-To import or refresh docs into NodeSpace: `nodespace import dir ../nodespace-docs --auto-collection-routing`
+To import or refresh docs into NodeSpace: `nodespace import dir ../nodespace-docs --auto-collection-routing --exclude archived`
 
 
 ## Repository Structure
