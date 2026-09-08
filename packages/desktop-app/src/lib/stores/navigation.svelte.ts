@@ -41,6 +41,18 @@ function getTodayDateId(): string {
 export const DAILY_JOURNAL_TAB_ID = 'daily-journal';
 export const DEFAULT_PANE_ID = 'pane-1';
 
+/**
+ * Title a newly created node-tab starts as when the caller has no better one
+ * to offer yet — `NavigationService.focusOrOpenNode`'s default. The one place
+ * this exact string matters is `computeTabTitle` (tab-title.ts): once the
+ * node hydrates, a tab still showing exactly this placeholder gets replaced
+ * with a generic "Untitled" fallback, but a tab opened with some OTHER
+ * caller-supplied title (e.g. a related node's id, used as a stable label
+ * when it has neither a title nor content) keeps that title instead — only
+ * this literal placeholder is treated as "nothing real to show yet".
+ */
+export const LOADING_TAB_TITLE = 'Loading...';
+
 const PERSISTENCE_DEBOUNCE_MS = 500;
 
 // Tab state store — initial state

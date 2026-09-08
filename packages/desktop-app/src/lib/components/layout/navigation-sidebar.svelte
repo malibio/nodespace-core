@@ -22,6 +22,7 @@
     clearSchemaRefreshTimer,
     clearAiChatRefreshTimer
   } from '$lib/utils/collection-refresh';
+  import { aiChatDisplayTitle } from '$lib/utils/ai-chat-title';
 
   // Read reactive store state directly (ADR-049)
   let isCollapsed = $derived(layoutStore.state.sidebarCollapsed);
@@ -204,12 +205,6 @@
     // saved query) rather than trusting this decorative flag (issue #1919).
     // TODO(#1919 follow-up): nest materialized saved queries under their type here.
     getNavigationService().focusOrOpenNode(schemaId, { nodeType: 'query' });
-  }
-
-  /** Fallback label for a chat that has no content yet — chats start empty and
-   * get a real title later from idle-gated background titling. */
-  function aiChatLabel(content: string): string {
-    return content.trim() ? content : 'Untitled chat';
   }
 
   /**
@@ -630,7 +625,7 @@
             {:else}
               {#each aiChats as chat (chat.id)}
                 <button class="ai-chat-item" onclick={() => handleAiChatClick(chat.id)}>
-                  <span class="ai-chat-name">{aiChatLabel(chat.content)}</span>
+                  <span class="ai-chat-name">{aiChatDisplayTitle(chat.content)}</span>
                 </button>
               {/each}
             {/if}

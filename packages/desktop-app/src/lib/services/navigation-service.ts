@@ -27,7 +27,8 @@ import {
   createPane,
   setActivePane,
   setActiveTab,
-  DEFAULT_PANE_ID
+  DEFAULT_PANE_ID,
+  LOADING_TAB_TITLE
 } from '$lib/stores/navigation.svelte';
 import { sharedNodeStore } from './shared-node-store.svelte';
 import { structureTree } from '$lib/stores/reactive-structure-tree.svelte';
@@ -52,8 +53,8 @@ export interface NavigationTarget {
  * The three fields exist because the call sites genuinely differ, not to be
  * general: a schema opens under `nodeType: 'query'` so the tab routes to
  * QueryNodeViewer, the Daily Journal must not focus a non-date tab that happens
- * to share today's id, and most callers let their viewer set the real title on
- * mount while the collection viewer already knows it.
+ * to share today's id, and most callers leave the title at its default while
+ * the collection viewer already knows it.
  */
 export interface FocusOrOpenOptions {
   /**
@@ -63,8 +64,13 @@ export interface FocusOrOpenOptions {
    */
   nodeType: string;
   /**
-   * Title for a newly created tab. Defaults to `'Loading...'`, which viewers
-   * replace on mount; pass a value only when the caller already knows it.
+   * Title for a newly created tab. Defaults to `LOADING_TAB_TITLE`
+   * (`navigation.svelte.ts`), a placeholder `computeTabTitle` (tab-title.ts)
+   * replaces with a generic fallback once the node hydrates with no title of
+   * its own. Pass a value only when the caller already knows the real title,
+   * or has something better than the generic fallback to show meanwhile
+   * (e.g. a related node's id) — computeTabTitle preserves any title other
+   * than the exact default, even past hydration.
    */
   title?: string;
   /**
@@ -444,7 +450,7 @@ export class NavigationService {
    * @param options - Tab `nodeType`, optional `title`, optional `matchNodeType`
    */
   focusOrOpenNode(nodeId: string, options: FocusOrOpenOptions): void {
-    const { nodeType, title = 'Loading...', matchNodeType = false } = options;
+    const { nodeType, title = LOADING_TAB_TITLE, matchNodeType = false } = options;
 
     if (this.focusNodeTab(nodeId, matchNodeType ? nodeType : undefined)) return;
 
