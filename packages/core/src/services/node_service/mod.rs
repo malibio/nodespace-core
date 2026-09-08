@@ -6841,6 +6841,11 @@ mod tests {
             .expect("task must show the inbound (assignee) side of the relationship");
         assert_eq!(in_group.count, 1);
         assert_eq!(in_group.related[0].id, person_id);
+        assert_eq!(
+            in_group.reverse_name, "assignee",
+            "the inbound group's reverse_name is what actually encodes \"assignee\" \
+             as a concept at runtime — must match the schema declaration"
+        );
 
         // Clear: deleting the edge removes assignment on both sides.
         service

@@ -177,7 +177,7 @@ AN ID ALONE CHANGES NOTHING: a call carrying only an id is a no-op that reports 
 
 {task_status_dedicated_verb}
 
-CONTENT vs FIELD VALUES: Use the content field only when the user is renaming the node. Use field_values for typed fields (status, assignee, due_date, etc.).
+CONTENT vs FIELD VALUES: Use the content field only when the user is renaming the node. Use field_values for typed fields (status, due_date, etc.).
 
 SUCCESS: {success_no_reverify}"#,
         find_then_act = FIND_THEN_ACT.imperative,
