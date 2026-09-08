@@ -1106,19 +1106,22 @@ const FIELD_COUNT_REPORTING_WRITES: &[&str] = &["create_schema", "create_node", 
 /// the user's particulars were dropped, and only that may suppress the model's
 /// confirmation.
 /// Matches a `nodespace://<id>` reference, stopping at whitespace, markdown
-/// delimiters, or trailing sentence punctuation that would otherwise be swept
-/// into the id.
+/// delimiters, JSON-string delimiters, or trailing sentence punctuation that
+/// would otherwise be swept into the id.
 ///
 /// Extends the terminator set `response_processing::replace_status_outside_special`
 /// already treats as ending a bare URI (whitespace, `)`, `]`) with sentence
-/// punctuation (`.`, `,`, `!`, `?`, `;`, `:`, backtick) — a guard comparing
-/// extracted ids against tool results by exact string match must not let
-/// "...nodespace://abc." (end of sentence) fail to match the grounded
-/// "nodespace://abc" a tool actually returned. Real ids are alphanumeric plus
-/// `-`/`_`, so none of these characters are ever legitimately part of one.
+/// punctuation (`.`, `,`, `!`, `?`, `;`, `:`, backtick) and a double quote — a
+/// guard comparing extracted ids against tool results by exact string match
+/// must not let "...nodespace://abc." (end of sentence) or
+/// `"id":"nodespace://abc"` (this regex also scans raw serialized tool-result
+/// JSON from session history, see `grounded_node_uris_from_history`) fail to
+/// match the grounded "nodespace://abc" a tool actually returned. Real ids
+/// are alphanumeric plus `-`/`_`, so none of these characters are ever
+/// legitimately part of one.
 fn node_uri_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"nodespace://[^\s)\]`.,!?;:]+").unwrap())
+    RE.get_or_init(|| Regex::new(r#"nodespace://[^\s)\]`".,!?;:]+"#).unwrap())
 }
 
 /// Every `nodespace://<id>` reference in `text`, in first-seen order, deduped.
@@ -1132,7 +1135,7 @@ fn extract_node_uris(text: &str) -> Vec<&str> {
 }
 
 /// Recursively collect every `nodespace://<id>` reference appearing anywhere
-/// inside a tool call's JSON (arguments or result).
+/// inside a tool call's result JSON.
 ///
 /// Ids surface in different shapes across tools — a bare top-level `id`
 /// (`create_node`, `update_node`), an array of results (`search_nodes`), a
@@ -1166,27 +1169,62 @@ fn collect_node_uris(value: &serde_json::Value, out: &mut HashSet<String>) {
 }
 
 /// Every `nodespace://` id grounded by this turn's tool activity — the union
-/// of everything appearing in any tool call's arguments or result.
+/// of everything appearing in any tool call's RESULT.
 ///
-/// Arguments are included alongside results because an id the user (or a
-/// prior turn) supplied and the model merely passed through — e.g.
-/// `update_node(id: "nodespace://abc")` — is just as real a reference as one a
-/// tool result minted; only an id present in NEITHER is unaccounted for.
+/// Deliberately `result`-only, not `args`: the issue's own invariant is "ids
+/// come from a tool result... or they do not exist", and grounding on
+/// arguments too would let a model launder a fabricated id by simply passing
+/// it as an argument to some unrelated executing call (e.g.
+/// `search_nodes({"query": "nodespace://invented-id"})`) — the call succeeds,
+/// the argument is never validated by the tool, and the invented id would
+/// enter the grounded set without any tool ever having confirmed it real.
 fn grounded_node_uris(executions: &[ToolExecutionRecord]) -> HashSet<String> {
     let mut out = HashSet::new();
     for exec in executions {
-        collect_node_uris(&exec.args, &mut out);
         collect_node_uris(&exec.result, &mut out);
     }
     out
 }
 
-/// Ids the response text references that no tool call this turn grounds.
+/// Every `nodespace://` id grounded by a PRIOR turn's tool activity, read back
+/// from `session.messages`.
+///
+/// `all_tool_executions` covers only the current turn — it is rebuilt fresh
+/// per `run_turn` — but a real id created several turns ago is legitimately
+/// still referenceable: `format_tool_result` serializes each tool's result
+/// JSON verbatim into a `Role::Tool` history entry (see
+/// `local_agent::prompt_templates::format_tool_result`), and that history is
+/// what feeds the model on every subsequent turn. Without this, a response
+/// that correctly recalls an id from three turns ago — with no tool call in
+/// the CURRENT turn to re-ground it — would read as fabricated. Scanning the
+/// raw JSON text directly (rather than deserializing) is sufficient and
+/// cheaper: `extract_node_uris` only needs substring matches, and a tool
+/// result's serialized form always carries `nodespace://` ids as plain string
+/// values, unescaped, since `node_uri()` never emits characters JSON escapes.
+fn grounded_node_uris_from_history(session: &AgentSession) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for msg in &session.messages {
+        if matches!(msg.role, Role::Tool) {
+            for uri in extract_node_uris(&msg.content) {
+                out.insert(uri.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Ids the response text references that neither this turn's tool activity
+/// nor prior-turn history grounds.
 ///
 /// Returns them in the order they first appear in `text`, for a stable and
 /// readable log line.
-fn ungrounded_node_uris(text: &str, executions: &[ToolExecutionRecord]) -> Vec<String> {
-    let grounded = grounded_node_uris(executions);
+fn ungrounded_node_uris(
+    text: &str,
+    executions: &[ToolExecutionRecord],
+    session: &AgentSession,
+) -> Vec<String> {
+    let mut grounded = grounded_node_uris(executions);
+    grounded.extend(grounded_node_uris_from_history(session));
     extract_node_uris(text)
         .into_iter()
         .filter(|uri| !grounded.contains(*uri))
@@ -1958,7 +1996,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
                 // is worse than a vague hallucination — it reads as a durable,
                 // pastable reference and resolves to nothing.
                 let normalized = if !normalized.is_empty() {
-                    let bad_ids = ungrounded_node_uris(&normalized, &all_tool_executions);
+                    let bad_ids = ungrounded_node_uris(&normalized, &all_tool_executions, session);
                     if bad_ids.is_empty() {
                         normalized
                     } else {
@@ -6642,6 +6680,14 @@ mod tests {
     }
 
     #[test]
+    fn extract_node_uris_stops_at_a_json_string_delimiter() {
+        // `grounded_node_uris_from_history` scans raw serialized tool-result
+        // JSON, where an id is always immediately followed by a closing `"`.
+        let json = r#"{"id":"nodespace://abc-123","property_count":0}"#;
+        assert_eq!(extract_node_uris(json), vec!["nodespace://abc-123"]);
+    }
+
+    #[test]
     fn extract_node_uris_empty_when_none_present() {
         assert!(extract_node_uris("No ids mentioned here.").is_empty());
     }
@@ -6688,7 +6734,8 @@ mod tests {
             json!({"id": "nodespace://real-1", "property_count": 0}),
         )];
         let text = "The task was created as nodespace://cbaedefg-abcd-1234-wxyz-deadbeefcafe.";
-        let bad = ungrounded_node_uris(text, &executions);
+        let session = new_session();
+        let bad = ungrounded_node_uris(text, &executions, &session);
         assert_eq!(
             bad,
             vec!["nodespace://cbaedefg-abcd-1234-wxyz-deadbeefcafe".to_string()]
@@ -6703,7 +6750,39 @@ mod tests {
             json!({"id": "nodespace://real-1", "property_count": 0}),
         )];
         let text = "Created as nodespace://real-1.";
-        assert!(ungrounded_node_uris(text, &executions).is_empty());
+        let session = new_session();
+        assert!(ungrounded_node_uris(text, &executions, &session).is_empty());
+    }
+
+    #[test]
+    fn ungrounded_node_uris_does_not_flag_an_id_grounded_only_by_args() {
+        // The args-laundering path a reviewer flagged: a fabricated id passed
+        // as an argument to some unrelated executing call must NOT enter the
+        // grounded set merely by having been echoed back in that call's args.
+        let executions = vec![exec_record_with(
+            "search_nodes",
+            json!({"query": "nodespace://invented-id"}),
+            json!({"count": 0, "results": []}),
+        )];
+        let text = "Found it: nodespace://invented-id.";
+        let session = new_session();
+        let bad = ungrounded_node_uris(text, &executions, &session);
+        assert_eq!(bad, vec!["nodespace://invented-id".to_string()]);
+    }
+
+    #[test]
+    fn ungrounded_node_uris_is_grounded_by_a_prior_turns_tool_result_in_history() {
+        // A real id created several turns ago is legitimately still
+        // referenceable even with zero tool calls in the CURRENT turn.
+        let mut session = new_session();
+        session.messages.push(ChatMessage::tool_result(
+            serde_json::to_string(&json!({"id": "nodespace://old-real-id", "property_count": 0}))
+                .unwrap(),
+            "tc_prior",
+            "create_node",
+        ));
+        let text = "That was the task created earlier as nodespace://old-real-id.";
+        assert!(ungrounded_node_uris(text, &[], &session).is_empty());
     }
 
     // -- Fabricated-id guard: loop-level tests -------------------------------
