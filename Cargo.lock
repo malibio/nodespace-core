@@ -3531,7 +3531,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serial_test",
  "sha2",
  "sqlite-vec",
  "tempfile",
