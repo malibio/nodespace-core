@@ -1,4 +1,5 @@
-# Skip the install while a rebase is replaying.
+# Skip the install while a rebase is replaying (merge backend; see the scope
+# note below).
 #
 # Git checks out the base commit to start a rebase, which fires this hook. The
 # install that follows rewrites bun.lock — the committed lockfile carries a
@@ -18,9 +19,24 @@
 # `--git-path` rather than a literal .git/ path: it resolves correctly inside a
 # worktree, where this state lives under .git/worktrees/<name>/.
 #
-# Only rebase is checked. merge, cherry-pick and revert never fire this hook,
-# so guarding their state files would be dead code implying a breadth of
-# coverage this hook does not have.
+# Only the merge backend — git's default since 2.26 — is guarded, and only a
+# rebase at that. Two exemptions worth naming rather than leaving to be
+# rediscovered:
+#
+#   `git rebase --apply` tears its state directory down BEFORE firing this
+#   hook, so no state-file check can see it. That backend still dirties the
+#   tree mid-replay and installs twice. It is opt-in (`rebase.backend` is
+#   unset here and nothing in the repo invokes it), so it is left uncovered
+#   rather than papered over with a check that cannot work.
+#
+#   merge, cherry-pick and revert never fire this hook at all, so guarding
+#   their state files would be dead code implying a breadth of coverage this
+#   hook does not have.
+#
+# `rebase --abort` is the one gap with no install: this hook is skipped on the
+# way in and post-rewrite never fires, since nothing was rewritten. Harmless in
+# practice — an abort restores the original HEAD, which is the tree
+# node_modules already matched.
 if [ -e "$(git rev-parse --git-path rebase-merge)" ] ||
    [ -e "$(git rev-parse --git-path rebase-apply)" ]; then
   exit 0
