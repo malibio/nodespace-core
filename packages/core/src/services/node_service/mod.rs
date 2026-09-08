@@ -407,6 +407,7 @@ pub type SubtreeData = (
 ///     parent_id: Some("parent-123".to_string()),
 ///     position: InsertPositionOwned::Beginning,
 ///     properties: json!({}),
+///     lifecycle_status: None,
 /// };
 ///
 /// // Frontend-provided UUID (Tauri path)
@@ -418,6 +419,7 @@ pub type SubtreeData = (
 ///     parent_id: None,
 ///     position: InsertPositionOwned::Beginning,
 ///     properties: json!({}),
+///     lifecycle_status: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -435,6 +437,14 @@ pub struct CreateNodeParams {
     pub position: crate::services::InsertPositionOwned,
     /// Additional node properties as JSON
     pub properties: Value,
+    /// Lifecycle status to create the node with. `None` defaults to
+    /// `"active"`. Set this instead of creating the node and then calling a
+    /// separate update — the latter (ADR-069 §5/F6) can fail after the
+    /// create has already committed, leaving a node the caller wanted
+    /// archived/draft live and visible as active. Setting it here makes the
+    /// status part of the single create write, so there is no window where
+    /// the wrong status is observable.
+    pub lifecycle_status: Option<String>,
 }
 
 /// Broadcast channel capacity for domain events — the LIVE channel `emit_event`
@@ -1857,6 +1867,7 @@ impl NodeService {
                 properties: root.properties.clone(),
                 parent_id: None,
                 position: crate::services::InsertPositionOwned::End,
+                lifecycle_status: None,
             })
             .await?;
             created_roots += 1;
@@ -2466,6 +2477,7 @@ mod tests {
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: serde_json::json!({ "collection": { "restrictedToMembers": true } }),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2476,6 +2488,7 @@ mod tests {
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2496,6 +2509,7 @@ mod tests {
             parent_id: None,
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2506,6 +2520,7 @@ mod tests {
             parent_id: Some("11111111-1111-1111-1111-1111111111c3".into()),
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -2539,6 +2554,7 @@ mod tests {
             parent_id: Some("11111111-1111-1111-1111-1111111111c3".into()),
             position: InsertPositionOwned::End,
             properties: serde_json::json!({}),
+            lifecycle_status: None,
         })
         .await
         .unwrap();
@@ -3311,6 +3327,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3338,6 +3355,7 @@ mod tests {
                 parent_id: Some("2025-06-15".to_string()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3510,6 +3528,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3872,6 +3891,7 @@ mod tests {
                 parent_id: Some(leaf_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await;
 
@@ -3897,6 +3917,7 @@ mod tests {
                 parent_id: Some(container_id),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await;
 
@@ -3980,6 +4001,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -3992,6 +4014,7 @@ mod tests {
                 parent_id: Some(parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -4046,6 +4069,7 @@ mod tests {
                 parent_id: Some(old_parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -4058,6 +4082,7 @@ mod tests {
                 parent_id: Some(old_parent_id.clone()),
                 position: crate::services::InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -4202,6 +4227,7 @@ mod tests {
                     parent_id: Some(old_parent_id.clone()),
                     position: crate::services::InsertPositionOwned::End,
                     properties: json!({}),
+                    lifecycle_status: None,
                 })
                 .await
                 .unwrap();
@@ -4265,6 +4291,7 @@ mod tests {
                     parent_id: Some(parent_id.clone()),
                     position: crate::services::InsertPositionOwned::End,
                     properties: json!({}),
+                    lifecycle_status: None,
                 })
                 .await
                 .unwrap();
@@ -4277,6 +4304,7 @@ mod tests {
                     parent_id: Some(parent_id.clone()),
                     position: crate::services::InsertPositionOwned::End,
                     properties: json!({}),
+                    lifecycle_status: None,
                 })
                 .await
                 .unwrap();
@@ -6530,6 +6558,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6575,6 +6604,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6636,6 +6666,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();
@@ -6676,6 +6707,7 @@ mod tests {
                 parent_id: None,
                 position: InsertPositionOwned::End,
                 properties: json!({}),
+                lifecycle_status: None,
             })
             .await
             .unwrap();

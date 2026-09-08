@@ -272,6 +272,7 @@ impl NodeService {
     ///     parent_id: Some("2025-01-15".to_string()),
     ///     position: InsertPositionOwned::Beginning,
     ///     properties: json!({}),
+    ///     lifecycle_status: None,
     /// }).await?;
     /// # Ok(())
     /// # }
@@ -501,6 +502,20 @@ impl NodeService {
             .clone()
             .map(|parent_id| (parent_id, params.position.clone()));
 
+        let lifecycle_status = match params.lifecycle_status {
+            Some(status) => {
+                if !crate::models::is_valid_lifecycle_status(&status) {
+                    return Err(NodeServiceError::invalid_update(format!(
+                        "Invalid lifecycle_status '{}'. Valid values: {:?}",
+                        status,
+                        crate::models::LIFECYCLE_STATUSES
+                    )));
+                }
+                status
+            }
+            None => "active".to_string(),
+        };
+
         let node = Node {
             id: node_id,
             node_type: params.node_type,
@@ -512,7 +527,7 @@ impl NodeService {
             created_at: chrono::Utc::now(),
             modified_at: chrono::Utc::now(),
             title,
-            lifecycle_status: "active".to_string(),
+            lifecycle_status,
         };
 
         tracing::debug!(

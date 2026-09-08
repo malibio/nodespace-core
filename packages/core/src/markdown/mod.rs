@@ -982,6 +982,7 @@ pub async fn handle_create_nodes_from_markdown(
                     parent_id: None, // Root node
                     position: crate::services::InsertPositionOwned::End,
                     properties: container.properties.clone(),
+                    lifecycle_status: None,
                 })
                 .await
                 .map_err(|e| {
@@ -1707,6 +1708,7 @@ async fn create_node(
             parent_id,
             position,
             properties,
+            lifecycle_status: None,
         })
         .await
         .map_err(|e| {

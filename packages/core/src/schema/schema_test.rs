@@ -547,6 +547,7 @@ async fn test_rename_field_migrates_node_data() {
         properties: serde_json::json!({
             &schema_id: { "old_field": "my_value" }
         }),
+        lifecycle_status: None,
     };
     let node_id = svc
         .create_node_with_parent(node_params)
@@ -749,6 +750,7 @@ async fn test_update_schema_rename_fields_rejects_core_protected_field_and_prese
         properties: serde_json::json!({
             "task": { "status": "open" }
         }),
+        lifecycle_status: None,
     };
     let node_id = svc
         .create_node_with_parent(node_params)
@@ -880,6 +882,7 @@ async fn test_update_schema_rename_fields_validates_destination_grammar_before_p
         parent_id: None,
         position: crate::services::InsertPositionOwned::End,
         properties: serde_json::json!({ "venue": { "capacity": 100 } }),
+        lifecycle_status: None,
     };
     let node_id = svc
         .create_node_with_parent(node_params)
@@ -987,6 +990,7 @@ async fn test_rename_field_friendly_name_only_updates_label_without_migrating_da
         properties: serde_json::json!({
             &schema_id: { "priority": "high" }
         }),
+        lifecycle_status: None,
     };
     let node_id = svc
         .create_node_with_parent(node_params)
@@ -1293,6 +1297,7 @@ async fn test_rename_field_combined_identity_and_friendly_name_rename() {
         properties: serde_json::json!({
             &schema_id: { "old_name": "my_value" }
         }),
+        lifecycle_status: None,
     };
     let node_id = svc
         .create_node_with_parent(node_params)

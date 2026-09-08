@@ -868,6 +868,7 @@ pub async fn handle_create_schema(
         parent_id: None,
         position: crate::services::InsertPositionOwned::End,
         properties,
+        lifecycle_status: None,
     };
 
     // ADR-069 §1b/S3: the schema node, its relationship declarations, and its
