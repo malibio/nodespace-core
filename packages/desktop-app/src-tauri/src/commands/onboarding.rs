@@ -289,10 +289,8 @@ pub async fn complete_onboarding(
 ) -> Result<(), String> {
     let mut cfg = read_config().await?;
     cfg.onboarding_completed = true;
-    cfg.integrations = IntegrationsConfig {
-        path_configured,
-        skill_configured,
-    };
+    cfg.integrations.path_configured = path_configured;
+    cfg.integrations.skill_configured = skill_configured;
     if identity_skipped {
         cfg.identity_prompt_dismissed = true;
     }

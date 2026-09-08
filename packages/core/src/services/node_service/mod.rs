@@ -1120,6 +1120,10 @@ impl NodeService {
     /// so this filters on `role == "owner"` rather than taking the first
     /// `has_role` edge — once a second, non-owner role edge lands there,
     /// an unfiltered `.next()` would silently resolve the wrong person.
+    /// If more than one edge is found with `role == "owner"` — which
+    /// today's seeding path cannot produce — the first is used and a
+    /// `tracing::warn!` is emitted, so a future regression surfaces instead
+    /// of resolving silently to whichever edge SQL returns first.
     /// Falls back to the first `person` node when no owner edge is found —
     /// a database whose data predates ADR-037 seeding still resolves to *a*
     /// local person rather than surfacing "no identity" on an otherwise
@@ -1130,14 +1134,25 @@ impl NodeService {
         let owners = self
             .get_related_nodes_with_edges(DATABASE_SETTINGS_NODE_ID, "has_role", "in")
             .await?;
-        let owner = owners.into_iter().find_map(|(node, edge_properties)| {
-            let is_owner = edge_properties
+        let mut owner_edges = owners.into_iter().filter(|(_, edge_properties)| {
+            edge_properties
                 .get("role")
                 .and_then(|v| v.as_str())
                 .map(|role| role == "owner")
-                .unwrap_or(false);
-            is_owner.then_some(node)
+                .unwrap_or(false)
         });
+        let owner = owner_edges.next().map(|(node, _)| node);
+        if owner_edges.next().is_some() {
+            // Data-integrity anomaly: today's seeding path creates exactly one
+            // owner-role edge, so this should be unreachable. Once multi-role
+            // RBAC lands, a bug there could produce two — warn rather than
+            // silently resolving to whichever edge SQL happened to return first.
+            tracing::warn!(
+                settings_node_id = DATABASE_SETTINGS_NODE_ID,
+                "multiple has_role edges with role \"owner\" found on DatabaseSettingsNode; \
+                 resolving to the first one returned"
+            );
+        }
         if let Some(owner) = owner {
             return Ok(Some(owner));
         }
