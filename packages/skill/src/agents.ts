@@ -73,15 +73,17 @@ export const AGENTS: AgentConfig[] = [
     skillFrontmatter: SKILL_FRONTMATTER,
   },
   {
-    name: 'gemini',
-    detectionDir: join(home, '.gemini'),
-    installDir: join(home, '.gemini', 'skills', 'nodespace'),
-    shims: [
-      'SKILL.md',
-      'references/cli.md',
-      'shims/gemini/nodespace-handler.ts',
-      'shims/gemini/nodespace-tools.json',
-    ],
+    name: 'antigravity',
+    // Antigravity CLI stores its config, plugins, and skills under the
+    // Gemini config dir (a holdover from its Gemini CLI lineage) —
+    // ~/.gemini/antigravity-cli/, not a separate ~/.antigravity.
+    detectionDir: join(home, '.gemini', 'antigravity-cli'),
+    installDir: join(home, '.gemini', 'antigravity-cli', 'skills', 'nodespace'),
+    // No handler shim: Antigravity CLI is a shell-capable coding agent, same
+    // as Claude Code/Codex/OpenCode, so it just runs `nodespace` directly per
+    // SKILL.md's Preflight "Branch 1" — no tool-registration integration
+    // (MCP or otherwise) needed for it to use the CLI.
+    shims: ['SKILL.md', 'references/cli.md'],
     skillFrontmatter: SKILL_FRONTMATTER,
   },
   {

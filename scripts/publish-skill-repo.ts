@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Publish the NodeSpace Agent Skill to NodeSpaceAI/nodespace-skill -- the
- * public repo external agent harnesses (Claude Code, Codex, Gemini CLI,
+ * public repo external agent harnesses (Claude Code, Codex, Antigravity CLI,
  * OpenCode, ...) import to get NodeSpace's Agent Skill without installing
  * the NodeSpace app first.
  *
@@ -50,13 +50,14 @@
  * `/plugin marketplace add NodeSpaceAI/nodespace-skill` +
  * `/plugin install nodespace@nodespace-skill` works in Claude Code without
  * a clone-and-copy detour. That mechanism is Claude Code-specific: Codex and
- * Gemini CLI have their own native plugin-marketplace mechanisms with
- * different, incompatible manifest formats (`.codex-plugin/plugin.json` and
- * `gemini-extension.json` respectively), and OpenCode has no first-party
- * marketplace concept at all (its plugins are npm packages or local files
- * referenced from `opencode.json`, with only third-party community tooling
- * layered on top). None of those are addressed here -- clone-and-copy stays
- * the documented install path for all three.
+ * Antigravity CLI have their own native plugin mechanisms with different,
+ * incompatible manifest formats (`.codex-plugin/plugin.json` and Antigravity's
+ * own `plugin.json` -- installed under `~/.gemini/antigravity-cli/plugins/`,
+ * not a marketplace-style registry with its own add/install commands), and
+ * OpenCode has no first-party marketplace concept at all (its plugins are npm
+ * packages or local files referenced from `opencode.json`, with only
+ * third-party community tooling layered on top). None of those are addressed
+ * here -- clone-and-copy stays the documented install path for all three.
  *
  * Usage:
  *   bun run scripts/publish-skill-repo.ts <version>            # dry run -- prints

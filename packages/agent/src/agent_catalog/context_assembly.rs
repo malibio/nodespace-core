@@ -523,7 +523,7 @@ mod tests {
     fn non_claude_agents_map_to_agents_md() {
         for agent_type in [
             AgentType::Codex,
-            AgentType::GeminiCli,
+            AgentType::AntigravityCli,
             AgentType::Pi,
             AgentType::OpenCode,
         ] {
@@ -691,7 +691,7 @@ mod tests {
     async fn write_context_to_dir_writes_agents_md_for_other_agents() {
         for agent_type in [
             AgentType::Codex,
-            AgentType::GeminiCli,
+            AgentType::AntigravityCli,
             AgentType::Pi,
             AgentType::OpenCode,
         ] {

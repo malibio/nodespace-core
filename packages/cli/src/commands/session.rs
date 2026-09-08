@@ -29,7 +29,7 @@ pub enum SessionAction {
 
 #[derive(Args, Debug)]
 pub struct LaunchArgs {
-    /// Agent to launch: claude-code, codex, gemini, pi, opencode
+    /// Agent to launch: claude-code, codex, antigravity, pi, opencode
     pub agent: String,
 
     /// Initial prompt passed to the agent at launch time.

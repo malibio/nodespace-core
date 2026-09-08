@@ -53,7 +53,7 @@ describe('AGENTS config', () => {
     const names = AGENTS.map(a => a.name);
     expect(names).toContain('claude-code');
     expect(names).toContain('codex');
-    expect(names).toContain('gemini');
+    expect(names).toContain('antigravity');
     expect(names).toContain('opencode');
   });
 
@@ -70,7 +70,7 @@ describe('AGENTS config', () => {
     const expectedDirs: Record<string, string> = {
       'claude-code': '.claude',
       codex: '.codex',
-      gemini: '.gemini',
+      antigravity: '.gemini',
       opencode: '.opencode',
     };
     for (const agent of AGENTS) {
@@ -248,7 +248,7 @@ describe('install', () => {
   });
 
   it('does NOT create install directory when no source files exist', () => {
-    const agentName = 'gemini';
+    const agentName = 'antigravity';
     const config = AGENTS.find(a => a.name === agentName)!;
     mkdirSync(config.detectionDir, { recursive: true });
 
@@ -260,7 +260,7 @@ describe('install', () => {
   });
 
   it('detects multiple agents when their dirs exist', () => {
-    const agentNames = ['claude-code', 'gemini'] as const;
+    const agentNames = ['claude-code', 'antigravity'] as const;
     for (const name of agentNames) {
       const config = AGENTS.find(a => a.name === name)!;
       mkdirSync(config.detectionDir, { recursive: true });
@@ -268,7 +268,7 @@ describe('install', () => {
 
     const results = install(undefined, FAKE_PKG_ROOT);
     expect(results).toHaveLength(2);
-    expect(results.map(r => r.agent).sort()).toEqual(['claude-code', 'gemini'].sort());
+    expect(results.map(r => r.agent).sort()).toEqual(['claude-code', 'antigravity'].sort());
   });
 });
 
@@ -443,14 +443,14 @@ describe('checkInstalled', () => {
 
   it('filters a mixed list down to only the agents actually present on disk', () => {
     const claudeCode = AGENTS.find(a => a.name === 'claude-code')!;
-    const gemini = AGENTS.find(a => a.name === 'gemini')!;
+    const antigravity = AGENTS.find(a => a.name === 'antigravity')!;
     mkdirSync(claudeCode.detectionDir, { recursive: true });
-    mkdirSync(gemini.detectionDir, { recursive: true });
-    install(['claude-code', 'gemini'], FAKE_PKG_ROOT);
+    mkdirSync(antigravity.detectionDir, { recursive: true });
+    install(['claude-code', 'antigravity'], FAKE_PKG_ROOT);
 
-    rmSync(gemini.installDir, { recursive: true, force: true });
+    rmSync(antigravity.installDir, { recursive: true, force: true });
 
-    expect(checkInstalled(['claude-code', 'gemini'])).toEqual(['claude-code']);
+    expect(checkInstalled(['claude-code', 'antigravity'])).toEqual(['claude-code']);
   });
 
   it('defaults to checking every configured agent when no target list is given', () => {
@@ -557,16 +557,16 @@ describe('install — Claude Code plugin-managed reconciliation', () => {
   });
 
   it('does not block other agents from installing normally', () => {
-    const gemini = AGENTS.find(a => a.name === 'gemini')!;
+    const antigravity = AGENTS.find(a => a.name === 'antigravity')!;
     mkdirSync(config.detectionDir, { recursive: true });
     markPluginManaged();
-    mkdirSync(gemini.detectionDir, { recursive: true });
-    seedPkgRoot(FAKE_PKG_ROOT, gemini);
+    mkdirSync(antigravity.detectionDir, { recursive: true });
+    seedPkgRoot(FAKE_PKG_ROOT, antigravity);
 
-    const results = install(['claude-code', 'gemini'], FAKE_PKG_ROOT);
-    const geminiResult = results.find(r => r.agent === 'gemini')!;
-    expect(geminiResult.installed.length).toBe(gemini.shims.length);
-    expect(geminiResult.skipReason).toBeUndefined();
+    const results = install(['claude-code', 'antigravity'], FAKE_PKG_ROOT);
+    const antigravityResult = results.find(r => r.agent === 'antigravity')!;
+    expect(antigravityResult.installed.length).toBe(antigravity.shims.length);
+    expect(antigravityResult.skipReason).toBeUndefined();
   });
 });
 

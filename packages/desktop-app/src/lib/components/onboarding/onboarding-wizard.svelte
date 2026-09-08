@@ -104,7 +104,7 @@
   // files, and which were detected but had nothing to install. Without
   // this the wizard could only ever say "Claude Code skill" regardless of
   // what actually happened, so a correct multi-agent install (e.g. Claude
-  // Code AND Gemini CLI both installed) read as if only Claude Code was
+  // Code AND Antigravity CLI both installed) read as if only Claude Code was
   // handled at all.
   let skillResult = $state<SkillSetupResult | null>(null);
 
@@ -274,7 +274,7 @@
     const names: Record<string, string> = {
       'claude-code': 'Claude Code',
       codex: 'Codex',
-      gemini: 'Gemini CLI',
+      antigravity: 'Antigravity CLI',
       opencode: 'OpenCode',
     };
     return names[agent] ?? agent;

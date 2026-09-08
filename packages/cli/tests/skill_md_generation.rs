@@ -1,6 +1,6 @@
 //! Drift and completeness guards for `packages/skill/SKILL.md`.
 //!
-//! The skill is what an external agent (Claude Code, Codex, Gemini CLI,
+//! The skill is what an external agent (Claude Code, Codex, Antigravity CLI,
 //! OpenCode) reads to learn what NodeSpace is and how to drive it. Anything it
 //! restates by hand can fall out of step with the code, and nothing catches it
 //! — the agent simply acts on stale instructions. These tests make each source
