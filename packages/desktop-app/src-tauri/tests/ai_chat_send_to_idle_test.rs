@@ -5,10 +5,11 @@
 //! There is no dedicated "send chat message" Tauri command or gRPC RPC.
 //! Per `scripts/aichat.ts`'s doc comment (the existing CLI harness for this
 //! same mechanism): the daemon's event watcher runs an inference turn when
-//! an ai-chat node's `properties['ai-chat']` has `status: "processing"` AND
-//! a trailing `role: "user"` message. So a turn is: create/update the node
-//! with that shape, then poll `get_node` until `status` returns to `"idle"`
-//! with a new assistant message appended.
+//! an ai-chat node's `properties['ai-chat']` has `turn_status: "processing"`
+//! AND a trailing `role: "user"` message. So a turn is: create/update the
+//! node with that shape, then poll `get_node` until `turn_status` returns to
+//! `"idle"` with a new assistant message appended. `session_status` is a
+//! separate, PTY-owned axis this flow never touches.
 //!
 //! No lightweight stub/test-double model backend exists anywhere in this
 //! codebase (confirmed: `ChatInferenceEngine`'s only implementors are the
@@ -50,7 +51,7 @@ const MODEL_FILENAME: &str = "gemma-4-E4B-it-Q4_K_M.gguf";
 fn ai_chat_input(
     id: &str,
     provider_model: &str,
-    status: &str,
+    turn_status: &str,
     messages: serde_json::Value,
 ) -> CreateNodeInput {
     CreateNodeInput {
@@ -63,7 +64,8 @@ fn ai_chat_input(
             "ai-chat": {
                 "provider": "native",
                 "model": provider_model,
-                "status": status,
+                "turn_status": turn_status,
+                "session_status": "active",
                 "messages": messages
             }
         }),
@@ -83,21 +85,21 @@ async fn poll_until_idle_with_new_assistant_reply(
             .expect("get_node failed")
             .expect("node must exist");
 
-        let status = node["status"].as_str().unwrap_or_default();
+        let turn_status = node["turnStatus"].as_str().unwrap_or_default();
         let messages = node["messages"].as_array().cloned().unwrap_or_default();
         let assistant_count = messages
             .iter()
             .filter(|m| m["role"] == json!("assistant"))
             .count();
 
-        if status == "idle" && assistant_count > prior_assistant_count {
+        if turn_status == "idle" && assistant_count > prior_assistant_count {
             return node;
         }
 
         if tokio::time::Instant::now() >= deadline {
             panic!(
                 "ai-chat turn did not reach idle-with-new-reply within {timeout:?}; \
-                 last status={status:?}, assistant_count={assistant_count}; \
+                 last turn_status={turn_status:?}, assistant_count={assistant_count}; \
                  node={node}"
             );
         }
@@ -156,8 +158,10 @@ async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
     .await
     .expect("create ai-chat node failed");
 
-    // "Send a message": append a user message and flip status to processing
-    // — the exact mechanism scripts/aichat.ts's cmdSend documents.
+    // "Send a message": append a user message and flip turn_status to
+    // processing — the exact mechanism scripts/aichat.ts's cmdSend
+    // documents. session_status is deliberately untouched: this write owns
+    // only the turn axis, mirroring the real frontend's handleSend.
     let after_send = update_node(
         state.clone(),
         id.clone(),
@@ -167,7 +171,7 @@ async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
                 "ai-chat": {
                     "provider": "native",
                     "model": MODEL_ID,
-                    "status": "processing",
+                    "turn_status": "processing",
                     "messages": [
                         { "role": "user", "content": "Reply with exactly one word: OK" }
                     ]
@@ -179,9 +183,9 @@ async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
     .await
     .expect("update_node (send message) failed");
     assert_eq!(
-        after_send["status"],
+        after_send["turnStatus"],
         json!("processing"),
-        "update_node's own response must reflect the processing status just written: {after_send:?}"
+        "update_node's own response must reflect the processing turnStatus just written: {after_send:?}"
     );
 
     // 300s, not the 180s this used to be: this is a real inference call
@@ -194,7 +198,7 @@ async fn ai_chat_send_reaches_idle_with_no_stuck_processing_state() {
     let final_node =
         poll_until_idle_with_new_assistant_reply(&state, &id, 0, Duration::from_secs(300)).await;
 
-    assert_eq!(final_node["status"], json!("idle"));
+    assert_eq!(final_node["turnStatus"], json!("idle"));
     let messages = final_node["messages"]
         .as_array()
         .expect("messages must be an array");

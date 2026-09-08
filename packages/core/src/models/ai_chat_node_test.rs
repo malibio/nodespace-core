@@ -136,7 +136,10 @@ mod tests {
         chat3.turn_status = "idle".to_string();
         let rebuilt2 = chat3.into_node();
         let chat4 = AiChatNode::from_node(rebuilt2).unwrap();
-        assert_eq!(chat4.turn_status, "idle", "the turn-completion write must persist");
+        assert_eq!(
+            chat4.turn_status, "idle",
+            "the turn-completion write must persist"
+        );
         assert_eq!(
             chat4.session_status, "archived",
             "completing the turn must not un-archive the session"

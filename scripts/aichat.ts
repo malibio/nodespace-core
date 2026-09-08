@@ -7,9 +7,10 @@
  *
  * Mechanism: there is no "send message" RPC. The daemon's event watcher runs an
  * inference turn when an ai-chat node's properties['ai-chat'] has
- * status:"processing" AND a trailing role:"user" message. On completion it
- * appends the assistant reply and sets status:"idle". So a turn is:
- * batch-update (append user msg + status:processing) → poll get until idle.
+ * turn_status:"processing" AND a trailing role:"user" message. On completion
+ * it appends the assistant reply and sets turn_status:"idle" — a separate,
+ * PTY-owned session_status axis is never touched by this flow. So a turn is:
+ * batch-update (append user msg + turn_status:processing) → poll get until idle.
  *
  * Commands:
  *   bun run scripts/aichat.ts new                  Create an ai-chat node; prints its ID.
@@ -39,7 +40,8 @@ const TIMEOUT_MS = Number(process.env.NS_TIMEOUT_MS ?? 180_000);
 interface AiChat {
   provider: string;
   model: string;
-  status: string;
+  turn_status: string;
+  session_status: string;
   messages: Array<{ role: string; content: string; timestamp?: string }>;
 }
 
@@ -85,7 +87,13 @@ function getNode(id: string): NodeJson {
 }
 
 function defaultAiChat(): AiChat {
-  return { provider: "native", model: NS_MODEL, status: "idle", messages: [] };
+  return {
+    provider: "native",
+    model: NS_MODEL,
+    turn_status: "idle",
+    session_status: "active",
+    messages: [],
+  };
 }
 
 function batchUpdateProps(
@@ -255,7 +263,7 @@ export function formatTurnLogLines(slice: string): string[] {
   }
   // The documented degenerate-empty-generation failure mode: the model opens a
   // turn and emits neither text nor a tool call. local_agent_service.rs then
-  // logs "inference turn failed" and resets status to idle with NO assistant
+  // logs "inference turn failed" and resets turn_status to idle with NO assistant
   // message appended — from cmdSend's point of view this is indistinguishable
   // from a hung turn that timed out, unless this specific log line is
   // scraped. Matched on the literal error text agent_loop.rs raises so a
@@ -310,7 +318,7 @@ async function cmdSend(id: string, message: string): Promise<void> {
     content: message,
     timestamp: new Date().toISOString(),
   });
-  aichat.status = "processing";
+  aichat.turn_status = "processing";
   batchUpdateProps(id, node.version, { "ai-chat": aichat });
 
   const deadline = Date.now() + TIMEOUT_MS;
@@ -322,10 +330,10 @@ async function cmdSend(id: string, message: string): Promise<void> {
     const afterAssistant = latest.messages.filter(
       (m) => m.role === "assistant",
     ).length;
-    if (latest.status === "idle" && afterAssistant > beforeAssistant) break;
+    if (latest.turn_status === "idle" && afterAssistant > beforeAssistant) break;
   }
-  if (latest.status !== "idle") {
-    console.error(`(timeout after ${TIMEOUT_MS}ms; status=${latest.status})`);
+  if (latest.turn_status !== "idle") {
+    console.error(`(timeout after ${TIMEOUT_MS}ms; turn_status=${latest.turn_status})`);
   }
 
   if (logSize > 0) reportTurnLog(logSize);

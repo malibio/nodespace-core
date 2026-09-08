@@ -3448,7 +3448,10 @@ mod tests {
         second.local_agent.maybe_handle_ai_chat_node(&node_id).await;
 
         let ai_chat = await_settled_ai_chat(&node_service, &node_id).await;
-        assert_eq!(ai_chat.turn_status, "idle", "turn must terminate, never stuck");
+        assert_eq!(
+            ai_chat.turn_status, "idle",
+            "turn must terminate, never stuck"
+        );
         let assistant = ai_chat
             .messages
             .iter()
