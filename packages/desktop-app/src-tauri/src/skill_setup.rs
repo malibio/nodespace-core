@@ -178,7 +178,7 @@ async fn write_setup_state(state: &SetupState) -> Result<()> {
 /// shell-configured locations, since those are only added by shell startup
 /// files a GUI-launched process never sources. Without augmentation, this
 /// check reports "not found" even when the CLI is genuinely correctly
-/// installed and would resolve fine from a terminal (core#2350).
+/// installed and would resolve fine from a terminal.
 pub fn check_cli_on_path() -> bool {
     Command::new("nodespace")
         .args(["--version"])
@@ -276,7 +276,7 @@ static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// otherwise checked on read — so it goes stale the moment a user deletes a
 /// harness's skill directory (or the harness itself) by hand outside
 /// NodeSpace, and every later read (the Settings page, a re-shown wizard)
-/// would otherwise keep claiming e.g. "Installed into: Gemini CLI" long
+/// would otherwise keep claiming e.g. "Installed into: Antigravity CLI" long
 /// after that stopped being true.
 ///
 /// Best-effort: on any resolution/execution failure this returns the
@@ -615,7 +615,7 @@ fn resolve_installer_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathB
 /// is a requirement for *building* NodeSpace, never for *running* the shipped
 /// app, so a packaged app's end user has no reason to have it — `node` is far
 /// more likely to already be on the machine of someone who'd actually use
-/// these AI-agent integrations (Claude Code, Codex, Gemini CLI, OpenCode are
+/// these AI-agent integrations (Claude Code, Codex, Antigravity CLI, OpenCode are
 /// themselves typically Node-ecosystem-adjacent). Only when neither is found
 /// does the failure surface to the user.
 const INSTALLER_RUNTIMES: [&str; 2] = ["bun", "node"];
@@ -714,7 +714,7 @@ fn run_installer_with_runtimes(
     let Some(output) = output else {
         return Err(
             "Neither `bun` nor `node` was found on $PATH. One of them is required to install \
-                 NodeSpace's AI-agent integrations (Claude Code, Codex, Gemini CLI, OpenCode). \
+                 NodeSpace's AI-agent integrations (Claude Code, Codex, Antigravity CLI, OpenCode). \
                  Install Node from https://nodejs.org (or Bun from https://bun.sh) and relaunch \
                  NodeSpace — or ignore this if you don't use one of those agents."
                 .to_string(),
@@ -833,7 +833,7 @@ mod tests {
         assert!(cli_warning(true).is_none());
     }
 
-    /// core#2350: `check_cli_on_path()` must search Homebrew's bin dirs and
+    /// `check_cli_on_path()` must search Homebrew's bin dirs and
     /// common per-user install dirs, not just whatever bare PATH the app
     /// process happened to inherit -- a LaunchServices-launched app never
     /// gets those from shell startup files. Uses injected fake values, not
@@ -1172,13 +1172,13 @@ mod tests {
     #[test]
     fn parse_installer_output_captures_every_installed_agent() {
         let output = fake_output(
-            "'✓ claude-code: installed 3 file(s)' '  → /fake/SKILL.md' '✓ gemini: installed 4 file(s)'",
+            "'✓ claude-code: installed 3 file(s)' '  → /fake/SKILL.md' '✓ antigravity: installed 4 file(s)'",
         );
         let outcome = parse_installer_output(output).expect("both agents installed cleanly");
 
         assert_eq!(
             outcome.installed,
-            vec!["claude-code".to_string(), "gemini".to_string()]
+            vec!["claude-code".to_string(), "antigravity".to_string()]
         );
         assert!(outcome.skipped.is_empty());
     }
@@ -1390,7 +1390,7 @@ mod tests {
     /// isolated `$HOME` (so `agents_installed` genuinely reflects an
     /// on-disk install, not a hand-built fixture), then deletes the
     /// harness's skill directory by hand -- exactly what a user does when
-    /// they `rm -rf ~/.gemini` outside NodeSpace entirely -- and asserts the
+    /// they `rm -rf ~/.gemini/antigravity-cli` outside NodeSpace entirely -- and asserts the
     /// real `status` subcommand, run the same way `revalidate_agents_installed`
     /// runs it, no longer reports that agent as present. This is the genuine
     /// "persisted list says installed, filesystem says otherwise" scenario;
@@ -1404,8 +1404,8 @@ mod tests {
         let fake_home = tempfile::tempdir().expect("create isolated fake $HOME");
         std::fs::create_dir_all(fake_home.path().join(".claude"))
             .expect("create fake .claude dir so the installer detects claude-code");
-        std::fs::create_dir_all(fake_home.path().join(".gemini"))
-            .expect("create fake .gemini dir so the installer detects gemini");
+        std::fs::create_dir_all(fake_home.path().join(".gemini/antigravity-cli"))
+            .expect("create fake .gemini/antigravity-cli dir so the installer detects antigravity");
 
         let install_output = installer_command(&installer_path, "bun", "install")
             .env("HOME", fake_home.path())
@@ -1415,14 +1415,18 @@ mod tests {
             parse_installer_output(install_output).expect("install succeeds for both agents");
         assert_eq!(
             install_outcome.installed,
-            vec!["claude-code".to_string(), "gemini".to_string()],
+            vec!["claude-code".to_string(), "antigravity".to_string()],
             "both agents must actually be installed before this test deletes one by hand"
         );
 
-        // The user (or some other tool) deletes ONLY the gemini skill
+        // The user (or some other tool) deletes ONLY the antigravity skill
         // directory -- claude-code's install must be unaffected.
-        std::fs::remove_dir_all(fake_home.path().join(".gemini/skills/nodespace"))
-            .expect("delete gemini's skill directory to simulate manual removal");
+        std::fs::remove_dir_all(
+            fake_home
+                .path()
+                .join(".gemini/antigravity-cli/skills/nodespace"),
+        )
+        .expect("delete antigravity's skill directory to simulate manual removal");
 
         let status_output = installer_command(&installer_path, "bun", "status")
             .env("HOME", fake_home.path())
@@ -1433,7 +1437,7 @@ mod tests {
         assert_eq!(
             status_outcome.installed,
             vec!["claude-code".to_string()],
-            "gemini was deleted by hand and must no longer be reported as installed"
+            "antigravity was deleted by hand and must no longer be reported as installed"
         );
     }
 
@@ -1453,8 +1457,8 @@ mod tests {
         let fake_home = tempfile::tempdir().expect("create isolated fake $HOME");
         std::fs::create_dir_all(fake_home.path().join(".claude"))
             .expect("create fake .claude dir so the installer detects claude-code");
-        std::fs::create_dir_all(fake_home.path().join(".gemini"))
-            .expect("create fake .gemini dir so the installer detects gemini");
+        std::fs::create_dir_all(fake_home.path().join(".gemini/antigravity-cli"))
+            .expect("create fake .gemini/antigravity-cli dir so the installer detects antigravity");
 
         let install_output = installer_command(&installer_path, "bun", "install")
             .env("HOME", fake_home.path())
@@ -1463,9 +1467,14 @@ mod tests {
         parse_installer_output(install_output).expect("install succeeds for both agents");
 
         let claude_skill = fake_home.path().join(".claude/skills/nodespace/SKILL.md");
-        let gemini_skill = fake_home.path().join(".gemini/skills/nodespace/SKILL.md");
+        let antigravity_skill = fake_home
+            .path()
+            .join(".gemini/antigravity-cli/skills/nodespace/SKILL.md");
         assert!(claude_skill.exists(), "precondition: claude-code installed");
-        assert!(gemini_skill.exists(), "precondition: gemini installed");
+        assert!(
+            antigravity_skill.exists(),
+            "precondition: antigravity installed"
+        );
 
         let uninstall_output = installer_command(&installer_path, "bun", "uninstall")
             .env("HOME", fake_home.path())
@@ -1483,8 +1492,8 @@ mod tests {
             "claude-code's skill must be removed by a full uninstall"
         );
         assert!(
-            !gemini_skill.exists(),
-            "gemini's skill must be removed too -- not just claude-code"
+            !antigravity_skill.exists(),
+            "antigravity's skill must be removed too -- not just claude-code"
         );
     }
 }

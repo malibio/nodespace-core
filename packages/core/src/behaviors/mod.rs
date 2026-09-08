@@ -722,8 +722,7 @@ impl NodeBehavior for TaskNodeBehavior {
             "task": {
                 "status": "open",
                 "priority": "medium",
-                "due_date": null,
-                "assignee": null
+                "due_date": null
             }
         })
     }
@@ -2305,20 +2304,30 @@ impl NodeBehavior for CustomNodeBehavior {
 pub struct PersonNodeBehavior;
 
 impl PersonNodeBehavior {
-    /// Returns a display name for the person, falling back gracefully when name is absent.
+    /// Returns a display name for the person, falling back gracefully when both
+    /// name fields are absent. Mirrors the person schema's
+    /// `title_template: "{first_name} {last_name}"` (the two must agree — see
+    /// the schema comment), which this doesn't reach: `get_embeddable_content`
+    /// needs a display string without a schema/template lookup in hand.
     pub fn compute_display_name(&self, node: &Node) -> String {
-        if let Some(name) = node
-            .properties
-            .get("person")
-            .and_then(|p| p.get("name"))
+        let person = node.properties.get("person");
+        let first = person
+            .and_then(|p| p.get("first_name"))
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            return name.to_string();
+            .filter(|s| !s.is_empty());
+        let last = person
+            .and_then(|p| p.get("last_name"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        let composed = [first, last]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !composed.is_empty() {
+            return composed;
         }
-        if let Some(email) = node
-            .properties
-            .get("person")
+        if let Some(email) = person
             .and_then(|p| p.get("email"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
@@ -2509,7 +2518,7 @@ impl NodeBehavior for DatabaseSettingsNodeBehavior {
 /// let person_node = Node::new(
 ///     "person".to_string(),
 ///     "Alice".to_string(),
-///     json!({"person": {"name": "Alice", "email": "alice@example.com"}}),
+///     json!({"person": {"first_name": "Alice", "last_name": "Example", "email": "alice@example.com"}}),
 /// );
 /// assert!(registry.validate_node(&person_node).is_ok());
 /// ```
@@ -2714,49 +2723,49 @@ mod tests {
         node.content = "\u{200B}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Zero-width space should be allowed per Issue #479"
+            "Zero-width space should be allowed"
         );
 
         // Zero-width non-joiner (U+200C) - now allowed
         node.content = "\u{200C}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Zero-width non-joiner should be allowed per Issue #479"
+            "Zero-width non-joiner should be allowed"
         );
 
         // Zero-width joiner (U+200D) - now allowed
         node.content = "\u{200D}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Zero-width joiner should be allowed per Issue #479"
+            "Zero-width joiner should be allowed"
         );
 
         // Non-breaking space (U+00A0) - now allowed
         node.content = "\u{00A0}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Non-breaking space should be allowed per Issue #479"
+            "Non-breaking space should be allowed"
         );
 
         // Line separator (U+2028) - now allowed
         node.content = "\u{2028}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Line separator should be allowed per Issue #479"
+            "Line separator should be allowed"
         );
 
         // Paragraph separator (U+2029) - now allowed
         node.content = "\u{2029}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Paragraph separator should be allowed per Issue #479"
+            "Paragraph separator should be allowed"
         );
 
         // Mixed Unicode whitespace - now allowed
         node.content = "\u{200B}\u{00A0}\u{2028}".to_string();
         assert!(
             behavior.validate(&node).is_ok(),
-            "Mixed Unicode whitespace should be allowed per Issue #479"
+            "Mixed Unicode whitespace should be allowed"
         );
 
         // Valid: Actual content with Unicode whitespace mixed in - should be accepted
@@ -2810,7 +2819,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank header nodes should be allowed per Issue #484"
+            "Blank header nodes should be allowed"
         );
 
         // Whitespace-only headers are allowed
@@ -2818,7 +2827,7 @@ mod tests {
         whitespace_node.content = "   ".to_string();
         assert!(
             behavior.validate(&whitespace_node).is_ok(),
-            "Whitespace-only header nodes should be allowed per Issue #484"
+            "Whitespace-only header nodes should be allowed"
         );
     }
 
@@ -2839,7 +2848,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank code blocks should be allowed per Issue #484"
+            "Blank code blocks should be allowed"
         );
 
         // Whitespace-only code blocks are allowed
@@ -2847,7 +2856,7 @@ mod tests {
         whitespace_node.content = "   ".to_string();
         assert!(
             behavior.validate(&whitespace_node).is_ok(),
-            "Whitespace-only code blocks should be allowed per Issue #484"
+            "Whitespace-only code blocks should be allowed"
         );
     }
 
@@ -2868,7 +2877,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank quote blocks should be allowed per Issue #484"
+            "Blank quote blocks should be allowed"
         );
 
         // Quote with just prefix and whitespace
@@ -2876,7 +2885,7 @@ mod tests {
         prefix_only_node.content = ">".to_string();
         assert!(
             behavior.validate(&prefix_only_node).is_ok(),
-            "Quote blocks with just '>' should be allowed per Issue #484"
+            "Quote blocks with just '>' should be allowed"
         );
 
         // Quote with prefix and space
@@ -2884,7 +2893,7 @@ mod tests {
         prefix_space_node.content = "> ".to_string();
         assert!(
             behavior.validate(&prefix_space_node).is_ok(),
-            "Quote blocks with just '> ' should be allowed per Issue #484"
+            "Quote blocks with just '> ' should be allowed"
         );
     }
 
@@ -2905,7 +2914,7 @@ mod tests {
         blank_node.content = "".to_string();
         assert!(
             behavior.validate(&blank_node).is_ok(),
-            "Blank ordered list nodes should be allowed per Issue #484"
+            "Blank ordered list nodes should be allowed"
         );
 
         // Ordered list with just prefix
@@ -2913,7 +2922,7 @@ mod tests {
         prefix_only_node.content = "1. ".to_string();
         assert!(
             behavior.validate(&prefix_only_node).is_ok(),
-            "Ordered lists with just '1. ' should be allowed per Issue #484"
+            "Ordered lists with just '1. ' should be allowed"
         );
 
         // Whitespace-only ordered lists are allowed
@@ -2921,7 +2930,7 @@ mod tests {
         whitespace_node.content = "   ".to_string();
         assert!(
             behavior.validate(&whitespace_node).is_ok(),
-            "Whitespace-only ordered list nodes should be allowed per Issue #484"
+            "Whitespace-only ordered list nodes should be allowed"
         );
     }
 
@@ -3258,7 +3267,6 @@ mod tests {
         assert_eq!(metadata["task"]["status"], "open");
         assert_eq!(metadata["task"]["priority"], "medium");
         assert!(metadata["task"]["due_date"].is_null());
-        assert!(metadata["task"]["assignee"].is_null());
     }
 
     #[test]
@@ -5556,10 +5564,24 @@ mod tests {
     }
 
     #[test]
-    fn person_compute_display_name_with_name() {
+    fn person_compute_display_name_with_full_name() {
         let behavior = PersonNodeBehavior;
-        let node = person_node(json!({"person": {"name": "Alice"}}));
+        let node = person_node(json!({"person": {"first_name": "Alice", "last_name": "Example"}}));
+        assert_eq!(behavior.compute_display_name(&node), "Alice Example");
+    }
+
+    #[test]
+    fn person_compute_display_name_with_first_name_only() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"first_name": "Alice"}}));
         assert_eq!(behavior.compute_display_name(&node), "Alice");
+    }
+
+    #[test]
+    fn person_compute_display_name_with_last_name_only() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"last_name": "Example"}}));
+        assert_eq!(behavior.compute_display_name(&node), "Example");
     }
 
     #[test]
@@ -5584,7 +5606,7 @@ mod tests {
     #[test]
     fn person_embeddable_content_returns_display_name_when_known() {
         let behavior = PersonNodeBehavior;
-        let node = person_node(json!({"person": {"name": "Bob"}}));
+        let node = person_node(json!({"person": {"first_name": "Bob"}}));
         assert_eq!(
             behavior.get_embeddable_content(&node),
             Some("Bob".to_string())

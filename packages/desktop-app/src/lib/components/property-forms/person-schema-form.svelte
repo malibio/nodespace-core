@@ -1,9 +1,12 @@
 <!--
   PersonSchemaForm - Property form for person nodes
 
-  Provides direct editing of name and email fields stored in
-  properties.person.{name,email}. Name is also synced to node content
-  so it displays inline.
+  Provides direct editing of first_name/last_name/email fields stored in
+  properties.person.{first_name,last_name,email}. Display identity (the
+  inline outline row and node title) is composed by the person schema's
+  title_template ("{first_name} {last_name}") — not synced into content
+  here; person nodes are read-only inline, like other title_template-driven
+  types (see resolveTitleOrContent / node-row.svelte).
 
   Email carries a store-aware `unique` schema rule (ADR-065, case-insensitive,
   ignores empty): on blur, a colliding value surfaces a dismissible "a person
@@ -12,7 +15,7 @@
   suggest-don't-block by design: the field save above is never gated on the
   lookup, and create-anyway always remains possible.
 
-  Convergence duplicate indicator (ADR-065 §4, core#2116): a duplicate that
+  Convergence duplicate indicator (ADR-065 §4): a duplicate that
   slips past the creation-time suggestion above (offline write, sync
   convergence) gets detected out-of-band and stamped onto BOTH colliding
   nodes as `properties.person._possible_duplicate`. When that marker is set,
@@ -39,14 +42,14 @@
 
   const log = createLogger('PersonSchemaForm');
 
-  // Relationships viewer entry point (issue #1918) — inbound relationships (e.g.
+  // Relationships viewer entry point — inbound relationships (e.g.
   // tasks assigned to this person) surface here.
   let showRelationships = $state(false);
 
   let { nodeId }: { nodeId: string } = $props();
 
   // Gate the Relationships trigger the same way TypedFormShell now gates it for
-  // TaskSchemaForm/GenericSchemaForm (core#2132) — shown only when this node's
+  // TaskSchemaForm/GenericSchemaForm — shown only when this node's
   // type actually has a typed relationship (outbound declared on its schema, or
   // inbound declared by another schema targeting it), resolved once per nodeId.
   // Default hidden; fail-open on a query error so a transient failure never
@@ -76,16 +79,17 @@
     (node?.properties?.['person'] as Record<string, unknown> | undefined) ?? {}
   );
 
-  const name = $derived((personProps['name'] as string | undefined) ?? '');
+  const firstName = $derived((personProps['first_name'] as string | undefined) ?? '');
+  const lastName = $derived((personProps['last_name'] as string | undefined) ?? '');
   const email = $derived((personProps['email'] as string | undefined) ?? '');
 
-  // Adopt-existing suggestion state (core#1734 / ADR-065). `duplicateMatch` is
+  // Adopt-existing suggestion state (ADR-065). `duplicateMatch` is
   // the existing person the current email collides with, or null when there is
   // none / the suggestion was dismissed. `checkedForEmail` skips re-issuing a
   // lookup for a value already checked (e.g. tabbing through an unchanged
   // field). Staleness itself — whether an in-flight lookup's result is still
   // allowed to land — is decided by `checkGeneration`, NOT by comparing values:
-  // two different triggers (a blur check and a badge re-check, core#2116) can
+  // two different triggers (a blur check and a badge re-check) can
   // race for the SAME or DIFFERENT email, and a monotonic generation is the
   // only thing that correctly says "only the most recently STARTED lookup may
   // ever write `duplicateMatch`" regardless of which resolves first or what
@@ -94,7 +98,7 @@
   let checkedForEmail: string | null = null;
   let checkGeneration = 0;
 
-  // Convergence duplicate indicator (ADR-065 §4, core#2116): true once
+  // Convergence duplicate indicator (ADR-065 §4): true once
   // out-of-band detection (offline write, sync convergence) has stamped
   // `properties.person._possible_duplicate` on this node — independent of
   // (and typically set well after) the blur-triggered check above.
@@ -119,17 +123,14 @@
     checkGeneration++;
   });
 
-  async function updateField(field: 'name' | 'email', value: string) {
+  async function updateField(field: 'first_name' | 'last_name' | 'email', value: string) {
     if (!node) return;
     try {
       const updatedProperties = {
         ...node.properties,
         person: { ...personProps, [field]: value }
       };
-      // Sync name to node content so it renders inline
-      const updatedContent = field === 'name' ? value : node.content;
       await backendAdapter.updateNode(nodeId, node.version, {
-        content: updatedContent,
         properties: updatedProperties
       });
     } catch (err) {
@@ -137,9 +138,14 @@
     }
   }
 
-  function handleNameBlur(e: FocusEvent) {
+  function handleFirstNameBlur(e: FocusEvent) {
     const value = (e.currentTarget as HTMLInputElement).value;
-    if (value !== name) updateField('name', value);
+    if (value !== firstName) updateField('first_name', value);
+  }
+
+  function handleLastNameBlur(e: FocusEvent) {
+    const value = (e.currentTarget as HTMLInputElement).value;
+    if (value !== lastName) updateField('last_name', value);
   }
 
   async function handleEmailBlur(e: FocusEvent) {
@@ -184,7 +190,7 @@
     try {
       const match = await backendAdapter.findDuplicateFor('person', 'email', value, nodeId);
       // Ignore a superseded response — from either a newer blur check for a
-      // different value, or a badge-triggered recheck (core#2116) that
+      // different value, or a badge-triggered recheck that
       // started after this one. The backend already excludes this node via
       // excludeId above — the `match.id !== nodeId` check is a defensive
       // backstop, not the primary exclusion mechanism (an earlier version
@@ -204,7 +210,7 @@
   }
 
   /**
-   * Entry point for the convergence duplicate indicator badge (core#2116):
+   * Entry point for the convergence duplicate indicator badge:
    * re-runs the exact same lookup `checkForDuplicate` performs on blur,
    * reusing the exact same suggestion UI (`duplicateMatch` +
    * adoptExisting/dismissDuplicateSuggestion below) rather than a parallel
@@ -249,22 +255,31 @@
     duplicateMatch = null;
   }
 
-  const duplicateDisplayName = $derived(
-    (duplicateMatch?.properties?.['person'] as Record<string, unknown> | undefined)?.[
-      'name'
-    ] as string | undefined
-  );
+  // duplicateMatch.title is the person schema's title_template-composed display
+  // name (server-computed, same rule PersonNodeBehavior::compute_display_name
+  // mirrors) — not hand-recomposed from first_name/last_name here.
+  const duplicateDisplayName = $derived(duplicateMatch?.title || undefined);
 </script>
 
 <div class="person-schema-form">
   <div class="field">
-    <label for="person-name">Name</label>
+    <label for="person-first-name">First name</label>
     <Input
-      id="person-name"
+      id="person-first-name"
       type="text"
-      value={name}
-      placeholder="Display name"
-      onblur={handleNameBlur}
+      value={firstName}
+      placeholder="First name"
+      onblur={handleFirstNameBlur}
+    />
+  </div>
+  <div class="field">
+    <label for="person-last-name">Last name</label>
+    <Input
+      id="person-last-name"
+      type="text"
+      value={lastName}
+      placeholder="Last name"
+      onblur={handleLastNameBlur}
     />
   </div>
   <div class="field">
@@ -279,7 +294,7 @@
   </div>
 
   {#if isFlaggedDuplicate && !duplicateMatch}
-    <!-- Convergence duplicate indicator (ADR-065 §4, core#2116): informational,
+    <!-- Convergence duplicate indicator (ADR-065 §4): informational,
          non-modal — never blocks editing this node. Clicking re-runs the same
          lookup as the blur check and reuses the Alert below, rather than
          showing a second, different suggestion UI. -->
@@ -322,7 +337,7 @@
     </Alert>
   {/if}
 
-  <!-- Relationships entry point (issue #1918), gated on the type actually having
+  <!-- Relationships entry point, gated on the type actually having
        typed relationships (outbound declared or inbound) — see hasRelationships above. -->
   {#if hasRelationships}
     <button

@@ -1,6 +1,6 @@
 /**
  * PossibleDuplicateBadge — inline node-view indicator for the convergence
- * "possible duplicate" marker (ADR-065 §4, core#2116).
+ * "possible duplicate" marker (ADR-065 §4).
  *
  * Mirrors the RecoveredItemsBadge inline-pill-with-popover pattern: renders
  * nothing unless the node it's attached to is flagged, and reuses the same
@@ -34,11 +34,14 @@ function personNode(overrides: Partial<Node> = {}): Node {
   return {
     id: 'person-1',
     nodeType: 'person',
-    content: 'Alice',
+    content: '',
+    title: 'Alice',
     createdAt: '2026-01-01T00:00:00Z',
     modifiedAt: '2026-01-01T00:00:00Z',
     version: 1,
-    properties: { person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true } },
+    properties: {
+      person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+    },
     ...overrides
   } as Node;
 }
@@ -47,11 +50,12 @@ function existingMatch(overrides: Partial<Node> = {}): Node {
   return {
     id: 'person-existing',
     nodeType: 'person',
-    content: 'Bob Existing',
+    content: '',
+    title: 'Bob Existing',
     createdAt: '2026-01-01T00:00:00Z',
     modifiedAt: '2026-01-01T00:00:00Z',
     version: 1,
-    properties: { person: { name: 'Bob Existing', email: 'alice@example.com' } },
+    properties: { person: { first_name: 'Bob', last_name: 'Existing', email: 'alice@example.com' } },
     ...overrides
   } as Node;
 }
@@ -73,7 +77,7 @@ afterEach(() => {
 describe('PossibleDuplicateBadge', () => {
   it('renders nothing for a person node without the marker', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
-      personNode({ properties: { person: { name: 'Alice', email: 'alice@example.com' } } })
+      personNode({ properties: { person: { first_name: 'Alice', email: 'alice@example.com' } } })
     );
     render(PossibleDuplicateBadge, { props: { nodeId: 'person-1' } });
 

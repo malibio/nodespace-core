@@ -652,7 +652,7 @@ Manage PTY agent sessions (launch, attach, list, kill)
 
 **`nodespace session launch`** — Launch a new agent session and stream its output to stdout
 
-- `<AGENT>` — Agent to launch: claude-code, codex, gemini, pi, opencode (required)
+- `<AGENT>` — Agent to launch: claude-code, codex, antigravity, pi, opencode (required)
 - `--prompt <PROMPT>` — Initial prompt passed to the agent at launch time
 - `--cols <COLS>` — Terminal width in columns (defaults to current terminal width)
 - `--rows <ROWS>` — Terminal height in rows (defaults to current terminal height)
@@ -698,5 +698,17 @@ Manage the daemon's registry of local databases (list, create, register, remove,
 ### `nodespace uninstall`
 
 Uninstall NodeSpace: stop daemon, remove binaries and service registration
+
+### `nodespace skill`
+
+Install, remove, or check the NodeSpace skill for detected AI-agent harnesses (Claude Code, Codex, Gemini CLI, OpenCode) -- the CLI-only equivalent of the desktop app's first-launch skill installer
+
+**`nodespace skill install`** — Detect AI-agent harnesses and install the NodeSpace skill into them. Safe to re-run: already-installed harnesses are left alone, and a harness installed since the last run is picked up
+
+- `--yes` — Install without prompting for confirmation. Implied automatically when stdin/stdout isn't a terminal (CI, a script, an agent's non-interactive shell) — mirrors install.sh's `--gui`/`--no-gui` no-TTY default: never hang waiting on a prompt that can't be answered
+
+**`nodespace skill uninstall`** — Remove the NodeSpace skill from detected (or specified) harnesses
+
+**`nodespace skill status`** — Report which harnesses currently have the skill installed
 
 <!-- END GENERATED: cli-surface -->

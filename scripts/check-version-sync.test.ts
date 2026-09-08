@@ -1,11 +1,11 @@
-// Enforces the app-version single source of truth (nodespace-core#1686). If any of
+// Enforces the app-version single source of truth. If any of
 // the four app-version fields drifts from the canonical tauri.conf.json, this test
 // fails under `bun test scripts/` (part of `test:all`) so the pre-push gate catches
 // it before a stale-versioned build can ship.
 import { describe, expect, test } from "bun:test";
 import { CANONICAL, checkAppVersionSync } from "./check-version-sync";
 
-describe("app version single source of truth (#1686)", () => {
+describe("app version single source of truth", () => {
   test("all app-version fields equal the canonical tauri.conf.json", () => {
     const r = checkAppVersionSync();
     // A readable failure lists exactly which field drifted.

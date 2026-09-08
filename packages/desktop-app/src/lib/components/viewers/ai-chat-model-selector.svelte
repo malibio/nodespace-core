@@ -76,7 +76,7 @@
   // model, already carrying the full "openai-compat:<config>:<model>" id.
   const remoteModels = $derived(models.filter((m) => m.backend === 'openai-compat'));
 
-  // PTY agents (Claude Code, Gemini CLI, Codex, ...) — excludes agentStore's
+  // PTY agents (Claude Code, Antigravity CLI, Codex, ...) — excludes agentStore's
   // "local:" entries, which are in-process llama.cpp models already surfaced
   // in the "Local" section above. The full list (available + unavailable) is
   // needed to render unavailable agents disabled rather than hiding them.

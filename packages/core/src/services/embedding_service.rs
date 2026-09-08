@@ -88,7 +88,7 @@ impl NodeEmbeddingService {
         node_accessor: Arc<dyn NodeAccessor>,
         behaviors: Arc<NodeBehaviorRegistry>,
     ) -> Self {
-        tracing::info!("NodeEmbeddingService initialized with behavior-driven model (Issue #1018)");
+        tracing::info!("NodeEmbeddingService initialized with behavior-driven model");
         Self {
             nlp_engine,
             store,

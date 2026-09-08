@@ -321,7 +321,7 @@ impl LlamaState {
                 );
                 self.context = None;
             } else {
-                tracing::info!("Creating persistent LlamaContext (Issue #776 optimization)");
+                tracing::info!("Creating persistent LlamaContext");
             }
 
             let ctx_params = LlamaContextParams::default()
@@ -462,9 +462,7 @@ impl EmbeddingService {
             register_atexit_handler();
             register_state_for_cleanup(&self.state);
 
-            tracing::info!(
-                "Embedding service initialized with persistent context (Issue #776 optimization)"
-            );
+            tracing::info!("Embedding service initialized with persistent context");
         }
 
         #[cfg(not(feature = "embedding-service"))]

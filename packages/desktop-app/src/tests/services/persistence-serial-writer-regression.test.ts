@@ -29,7 +29,7 @@ const makeNode = (id: string, content: string, version = 1): Node => ({
 const dbSource = { type: 'database' as const, reason: 'initial-load' };
 const viewerSource = { type: 'viewer' as const, viewerId: 'pane-1' };
 
-describe('Persistence serial writer regression (#1492)', () => {
+describe('Persistence serial writer regression', () => {
   let store: SharedNodeStore;
 
   beforeEach(() => {

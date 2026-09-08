@@ -1,6 +1,6 @@
 <!--
   PossibleDuplicateBadge - Inline node-view indicator for the convergence
-  "possible duplicate" marker (ADR-065 §4, core#2116).
+  "possible duplicate" marker (ADR-065 §4).
 
   Renders nothing unless the node this badge is attached to is a `person`
   node currently carrying `properties.person._possible_duplicate === true`
@@ -38,7 +38,7 @@
 
   const node = $derived(sharedNodeStore.getNode(nodeId));
   // Re-running the lookup needs to know which unique field to query — only
-  // person/email wires that up on the desktop today (core#1734), even though
+  // person/email wires that up on the desktop today, even though
   // the marker itself (mark_possible_duplicates) is generic across node
   // types. Scoped to person here for that reason, not a schema limitation.
   const flagged = $derived(node?.nodeType === 'person' && isPossibleDuplicate(node));
@@ -110,11 +110,9 @@
     match = null;
   }
 
-  const matchDisplayName = $derived(
-    (match?.properties?.['person'] as Record<string, unknown> | undefined)?.['name'] as
-      | string
-      | undefined
-  );
+  // match.title is the person schema's title_template-composed display name
+  // (server-computed) — not hand-recomposed from first_name/last_name here.
+  const matchDisplayName = $derived(match?.title || undefined);
 </script>
 
 {#if flagged}

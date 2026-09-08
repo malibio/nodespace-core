@@ -682,7 +682,6 @@ mod tests {
             "Implement feature".to_string(),
             json!({
                 "status": "in_progress",
-                "assignee": "person-123",
                 "due_date": "2025-01-10",
                 "priority": "high"
             }),

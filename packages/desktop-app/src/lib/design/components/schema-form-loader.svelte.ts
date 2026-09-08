@@ -52,18 +52,33 @@ export class SchemaFormLoader {
   private pendingType: string | null = null;
 
   /**
-   * True when the current generic schema has a title_template — header should be read-only,
-   * and its displayed value comes from the node's computed `title` rather than its content.
+   * The node type most recently passed to {@link loadForm} — tracked so
+   * {@link hasTitleTemplate} can consult the plugin registry for a
+   * hardcoded-form type (task, person), which never populates
+   * `genericSchema` (see `loadForm`'s branch below).
+   */
+  private currentNodeType: string | null = null;
+
+  /**
+   * True when the viewed node's type is title_template-driven — header should be
+   * read-only, and its displayed value comes from the node's computed `title`
+   * rather than its content.
    *
-   * `genericSchema` now loads for any type with no hardcoded form — core types included —
-   * so this is no longer scoped to custom schema types. It stays false for core types only
-   * because none of them ships a title_template today. The backend's `compute_title()` uses
-   * a title_template for any type whose schema has one, core or not; the two agree solely on
-   * that "no core template exists yet" assumption. Shipping a title_template on a core type
-   * would need both sides updated together, or the header will display content where a
-   * computed title is expected.
+   * Two sources, because a hardcoded-form type (task, person) never populates
+   * `genericSchema` (`loadForm` returns early via the plugin registry's schema
+   * form lookup, so `loadGenericSchema` — the only thing that sets
+   * `genericSchema` — never runs for it): `pluginRegistry.hasTitleTemplate`
+   * covers those (declared statically on the plugin, e.g. personNodePlugin's
+   * `config.hasTitleTemplate`); `genericSchema?.titleTemplate` covers every
+   * other type (core types with no hardcoded form, and user-defined schema
+   * types), fetched from the backend's SchemaNode. The two must stay in
+   * agreement per type — a hardcoded-form type declares its template on the
+   * plugin, not by the schema fetch path used here for everything else.
    */
   get hasTitleTemplate(): boolean {
+    if (this.currentNodeType && pluginRegistry.hasTitleTemplate(this.currentNodeType)) {
+      return true;
+    }
     return this.genericSchema?.titleTemplate != null;
   }
 
@@ -81,6 +96,7 @@ export class SchemaFormLoader {
     // `loadGenericSchema`, so without this the token would still name the previous type and
     // a late response would pass the recency check.
     this.pendingType = null;
+    this.currentNodeType = null;
   }
 
   /**
@@ -89,6 +105,11 @@ export class SchemaFormLoader {
    * Cached in `loadedForms` for subsequent renders.
    */
   async loadForm(nodeType: string): Promise<boolean> {
+    // Set synchronously (not after the await below) so `hasTitleTemplate` reflects the
+    // viewed type immediately — the viewer reads it on the same render pass it calls
+    // this, before any async work here has had a chance to resolve.
+    this.currentNodeType = nodeType;
+
     // Skip if already loaded (check for both component and explicit null).
     // `null` means "checked, no type-specific form" — the component lookup is cached, but
     // the generic schema is not: `resetGenericSchema()` clears it on every navigation, so

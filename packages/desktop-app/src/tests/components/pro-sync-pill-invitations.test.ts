@@ -1,5 +1,5 @@
 /**
- * pro-sync-pill — invitations auto-prompt (issue #1721).
+ * pro-sync-pill — invitations auto-prompt.
  *
  * The invitations modal must NOT auto-open on launch from local-storage
  * first-run state. It auto-shows ONLY for the one case that needs it: a
@@ -91,7 +91,7 @@ function modalOpen(container: HTMLElement): boolean {
   );
 }
 
-describe('ProSyncPill — invitations auto-prompt (#1721)', () => {
+describe('ProSyncPill — invitations auto-prompt', () => {
   beforeEach(() => {
     mockInvoke.mockReset();
     // Discovery list resolves empty so the auto-loaded inbox has nothing to error on.

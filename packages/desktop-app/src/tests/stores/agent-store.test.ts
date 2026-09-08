@@ -260,12 +260,12 @@ describe('AgentStore', () => {
 
     it('is unavailable when the binary is missing', () => {
       const info: AgentAvailabilityInfo = {
-        agentType: 'gemini-cli',
-        binary: 'gemini',
+        agentType: 'antigravity-cli',
+        binary: 'agy',
         binaryFound: false,
         authFound: true,
         binaryPath: null,
-        installHint: 'npm install -g @google/gemini-cli',
+        installHint: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
       };
 
       expect(availabilityToAgent(info).available).toBe(false);
@@ -273,11 +273,11 @@ describe('AgentStore', () => {
 
     it('is unavailable when auth is missing even if the binary is found', () => {
       const info: AgentAvailabilityInfo = {
-        agentType: 'gemini-cli',
-        binary: 'gemini',
+        agentType: 'antigravity-cli',
+        binary: 'agy',
         binaryFound: true,
         authFound: false,
-        binaryPath: '/usr/local/bin/gemini',
+        binaryPath: '/usr/local/bin/agy',
         installHint: null,
       };
 

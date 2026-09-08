@@ -2,11 +2,11 @@
  * Schemas store — sidenav built-in filter.
  *
  * `builtInSchemas` surfaces core schemas whose id is in the private
- * SIDENAV_CORE_TYPES set. `project` is a built-in core node type (backend
- * core#134) and must appear alongside `task`, while non-core schemas and core
- * schemas outside the set stay excluded. `person` and `agent-guidance` are
- * genuine entity types with no other sidebar presence and are included
- * alongside `task`/`project`/`skill` (core#1961); every other core type is a
+ * SIDENAV_CORE_TYPES set. `project` is a built-in core node type and must
+ * appear alongside `task`, while non-core schemas and core schemas outside
+ * the set stay excluded. `person` and `agent-guidance` are genuine entity
+ * types with no other sidebar presence and are included alongside
+ * `task`/`project`/`skill`; every other core type is a
  * primitive/structural block type, app config, or already has a dedicated
  * nav affordance, so it stays excluded.
  */
@@ -108,7 +108,7 @@ describe('schemasStore.builtInSchemas — sidenav core types', () => {
   });
 });
 
-// core#2220: unlike every other cross-switch read in the codebase
+// Unlike every other cross-switch read in the codebase
 // (loadChildrenForParent, doLoadChildrenTree, refreshDatabaseSettings,
 // createChat, createCollection), loadSchemas committed its fetched array into
 // state without re-checking the store generation after the await — a
@@ -120,7 +120,7 @@ describe('schemasStore.builtInSchemas — sidenav core types', () => {
 // reactive-structure-tree import chain — it is loaded in lightweight,
 // non-Tauri test contexts (e.g. the daemon-readiness e2e harness) that never
 // construct that machinery.
-describe('schemasStore.loadSchemas stale-response guard across a database switch (core#2220)', () => {
+describe('schemasStore.loadSchemas stale-response guard across a database switch', () => {
   beforeEach(() => {
     schemasStore.schemas = [];
     mockGetAllSchemas.mockReset();

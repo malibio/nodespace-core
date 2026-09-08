@@ -24,8 +24,7 @@
 //!   "content": "Implement feature",
 //!   "status": "open",
 //!   "priority": "medium",
-//!   "dueDate": null,
-//!   "assigneeId": null
+//!   "dueDate": null
 //! }
 //! ```
 //!
@@ -271,7 +270,6 @@ impl<'de> Deserialize<'de> for TaskPriority {
 ///     properties.status AS status,
 ///     properties.priority AS priority,
 ///     properties.due_date AS dueDate,
-///     properties.assignee AS assignee,
 ///     content,
 ///     version,
 ///     created_at AS createdAt,
@@ -349,10 +347,6 @@ pub struct TaskNode {
     #[serde(default)]
     pub due_date: Option<String>,
 
-    /// Assignee node ID
-    #[serde(default)]
-    pub assignee: Option<String>,
-
     /// Started at date (YYYY-MM-DD, when task moved to in_progress)
     #[serde(default)]
     pub started_at: Option<String>,
@@ -419,12 +413,6 @@ impl TaskNode {
             .and_then(|v| v.as_str())
             .and_then(parse_to_date_string);
 
-        // Extract assignee from properties
-        let assignee = props
-            .get("assignee")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
         // Extract started_at from properties — normalize to YYYY-MM-DD
         let started_at = props
             .get("started_at")
@@ -447,9 +435,6 @@ impl TaskNode {
         if let Some(ref d) = due_date {
             props.insert("dueDate".to_string(), json!(d));
         }
-        if let Some(ref a) = assignee {
-            props.insert("assignee".to_string(), json!(a));
-        }
         if let Some(ref s) = started_at {
             props.insert("startedAt".to_string(), json!(s));
         }
@@ -469,7 +454,6 @@ impl TaskNode {
             status,
             priority,
             due_date,
-            assignee,
             started_at,
             completed_at,
         })
@@ -482,7 +466,6 @@ impl TaskNode {
             status: None,
             priority: None,
             due_date: None,
-            assignee: None,
         }
     }
 
@@ -502,10 +485,6 @@ impl TaskNode {
 
         if let Some(due_date) = self.due_date {
             properties.insert("due_date".to_string(), json!(due_date));
-        }
-
-        if let Some(assignee) = self.assignee {
-            properties.insert("assignee".to_string(), json!(assignee));
         }
 
         if let Some(started_at) = self.started_at {
@@ -575,17 +554,6 @@ impl TaskNode {
         self.due_date = due_date.and_then(parse_to_date_string);
         self.modified_at = Utc::now();
     }
-
-    /// Get the task's assignee ID (for API compatibility)
-    pub fn assignee_id(&self) -> Option<String> {
-        self.assignee.clone()
-    }
-
-    /// Set the task's assignee ID
-    pub fn set_assignee_id(&mut self, assignee_id: Option<String>) {
-        self.assignee = assignee_id;
-        self.modified_at = Utc::now();
-    }
 }
 
 /// Builder for creating new TaskNode instances
@@ -594,7 +562,6 @@ pub struct TaskNodeBuilder {
     status: Option<TaskStatus>,
     priority: Option<TaskPriority>,
     due_date: Option<String>,
-    assignee: Option<String>,
 }
 
 impl TaskNodeBuilder {
@@ -622,12 +589,6 @@ impl TaskNodeBuilder {
         self
     }
 
-    /// Set the task assignee
-    pub fn with_assignee(mut self, assignee: String) -> Self {
-        self.assignee = Some(assignee);
-        self
-    }
-
     /// Build the TaskNode
     pub fn build(self) -> TaskNode {
         let now = Utc::now();
@@ -645,9 +606,6 @@ impl TaskNodeBuilder {
         if let Some(d) = &self.due_date {
             props.insert("dueDate".to_string(), json!(d));
         }
-        if let Some(a) = &self.assignee {
-            props.insert("assignee".to_string(), json!(a));
-        }
         props.insert("_schemaVersion".to_string(), json!(1));
 
         TaskNode {
@@ -661,7 +619,6 @@ impl TaskNodeBuilder {
             status,
             priority: self.priority,
             due_date: self.due_date,
-            assignee: self.assignee,
             started_at: None,
             completed_at: None,
         }
@@ -670,7 +627,7 @@ impl TaskNodeBuilder {
 
 /// Partial update structure for task nodes
 ///
-/// Supports updating task-specific fields (status, priority, due_date, assignee)
+/// Supports updating task-specific fields (status, priority, due_date)
 /// as well as content. Uses Option for each field to enable partial updates.
 ///
 /// # Double-Option Pattern
@@ -717,13 +674,6 @@ pub struct TaskNodeUpdate {
         deserialize_with = "flexible_date::deserialize_with_null"
     )]
     pub due_date: Option<Option<String>>,
-
-    /// Update assignee (task property)
-    /// - `None` - Don't change
-    /// - `Some(None)` - Clear assignee
-    /// - `Some(Some(id))` - Set to specific assignee
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assignee: Option<Option<String>>,
 
     /// Update started_at date (task property)
     /// - `None` - Don't change
@@ -777,12 +727,6 @@ impl TaskNodeUpdate {
         self
     }
 
-    /// Set assignee update (Some(value) to set, None to clear)
-    pub fn with_assignee(mut self, assignee: Option<String>) -> Self {
-        self.assignee = Some(assignee);
-        self
-    }
-
     /// Set content update
     pub fn with_content(mut self, content: String) -> Self {
         self.content = Some(content);
@@ -794,7 +738,6 @@ impl TaskNodeUpdate {
         self.status.is_none()
             && self.priority.is_none()
             && self.due_date.is_none()
-            && self.assignee.is_none()
             && self.started_at.is_none()
             && self.completed_at.is_none()
             && self.content.is_none()
@@ -805,7 +748,6 @@ impl TaskNodeUpdate {
         self.status.is_some()
             || self.priority.is_some()
             || self.due_date.is_some()
-            || self.assignee.is_some()
             || self.started_at.is_some()
             || self.completed_at.is_some()
     }
@@ -856,16 +798,6 @@ impl TaskNodeUpdate {
                 }
                 None => {
                     task.remove("due_date");
-                }
-            }
-        }
-        if let Some(ref assignee_opt) = self.assignee {
-            match assignee_opt {
-                Some(a) => {
-                    task.insert("assignee".to_string(), serde_json::json!(a));
-                }
-                None => {
-                    task.remove("assignee");
                 }
             }
         }
@@ -980,10 +912,6 @@ mod roundtrip_proptests {
         ]
     }
 
-    fn opt_assignee() -> impl Strategy<Value = Option<String>> {
-        prop_oneof![Just(None), "[a-zA-Z0-9_-]{1,20}".prop_map(Some)]
-    }
-
     proptest! {
         /// `from_node(task.into_node())` recovers every typed field.
         #[test]
@@ -992,7 +920,6 @@ mod roundtrip_proptests {
             status in task_status(),
             priority in task_priority(),
             due_date in opt_date(),
-            assignee in opt_assignee(),
             started_at in opt_date(),
             completed_at in opt_date(),
         ) {
@@ -1007,7 +934,6 @@ mod roundtrip_proptests {
                 status: status.clone(),
                 priority: priority.clone(),
                 due_date: due_date.clone(),
-                assignee: assignee.clone(),
                 started_at: started_at.clone(),
                 completed_at: completed_at.clone(),
             };
@@ -1019,7 +945,6 @@ mod roundtrip_proptests {
             prop_assert_eq!(&recovered.status, &status);
             prop_assert_eq!(&recovered.priority, &priority);
             prop_assert_eq!(&recovered.due_date, &due_date);
-            prop_assert_eq!(&recovered.assignee, &assignee);
             prop_assert_eq!(&recovered.started_at, &started_at);
             prop_assert_eq!(&recovered.completed_at, &completed_at);
         }

@@ -138,50 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn test_assignee_id_getter() {
-        let node = Node::new(
-            "task".to_string(),
-            "Test".to_string(),
-            json!({"assignee": "user-123"}),
-        );
-        let task = TaskNode::from_node(node).unwrap();
-        assert_eq!(task.assignee_id(), Some("user-123".to_string()));
-    }
-
-    #[test]
-    fn test_assignee_id_getter_none() {
-        let node = Node::new("task".to_string(), "Test".to_string(), json!({}));
-        let task = TaskNode::from_node(node).unwrap();
-        assert_eq!(task.assignee_id(), None);
-    }
-
-    #[test]
-    fn test_assignee_id_setter() {
-        let node = Node::new("task".to_string(), "Test".to_string(), json!({}));
-        let mut task = TaskNode::from_node(node).unwrap();
-
-        task.set_assignee_id(Some("user-456".to_string()));
-
-        assert_eq!(task.assignee_id(), Some("user-456".to_string()));
-        assert_eq!(task.as_node().properties["assignee"], "user-456");
-    }
-
-    #[test]
-    fn test_assignee_id_clear() {
-        let node = Node::new(
-            "task".to_string(),
-            "Test".to_string(),
-            json!({"assignee": "user-123"}),
-        );
-        let mut task = TaskNode::from_node(node).unwrap();
-
-        task.set_assignee_id(None);
-
-        assert_eq!(task.assignee_id(), None);
-        assert!(task.as_node().properties.get("assignee").is_none());
-    }
-
-    #[test]
     fn test_into_node_preserves_data() {
         // Status and priority use string enum format
         let original = Node::new(
@@ -268,13 +224,11 @@ mod tests {
             .with_status(TaskStatus::InProgress)
             .with_priority(TaskPriority::High)
             .with_due_date("2025-12-31T00:00:00Z")
-            .with_assignee("user-789".to_string())
             .build();
 
         assert_eq!(task.status(), TaskStatus::InProgress);
         assert_eq!(task.get_priority(), TaskPriority::High);
         assert_eq!(task.due_date(), Some("2025-12-31".to_string()));
-        assert_eq!(task.assignee_id(), Some("user-789".to_string()));
     }
 
     #[test]
@@ -352,13 +306,11 @@ mod tests {
         task.set_status(TaskStatus::InProgress);
         task.set_priority(TaskPriority::Low);
         task.set_due_date(Some("2025-03-15T00:00:00Z"));
-        task.set_assignee_id(Some("user-999".to_string()));
 
         // Verify all updates
         assert_eq!(task.status(), TaskStatus::InProgress);
         assert_eq!(task.get_priority(), TaskPriority::Low);
         assert_eq!(task.due_date(), Some("2025-03-15".to_string()));
-        assert_eq!(task.assignee_id(), Some("user-999".to_string()));
     }
 
     #[test]

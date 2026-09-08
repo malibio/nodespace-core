@@ -1484,10 +1484,9 @@ async fn fetch_marked_page(
         .collect()
 }
 
-/// Regression test for core#2289: the daemon's `query_nodes_simple` handler
+/// Regression test: the daemon's `query_nodes_simple` handler
 /// used to hardcode `order_by: None` on every `NodeQuery` it built, so even
-/// though `SqliteStore::query_nodes` gained a real `ORDER BY` (core#2211/
-/// #2212), the gRPC surface never actually used it. Offset-based pagination
+/// though `SqliteStore::query_nodes` gained a real `ORDER BY`, the gRPC surface never actually used it. Offset-based pagination
 /// through this RPC could therefore return duplicate or skipped rows across
 /// pages — the exact failure mode `order_by`/`limit`/`offset` are supposed to
 /// prevent. The daemon now always applies a deterministic default order
@@ -1559,10 +1558,10 @@ async fn query_nodes_simple_pages_tile_full_set_exactly_once_with_default_orderi
     let _ = shutdown.send(());
 }
 
-/// Regression test for core#2289: `QueryNodesSimple` used to pass a
+/// Regression test: `QueryNodesSimple` used to pass a
 /// client-requested `limit` straight through to the store with no ceiling,
 /// so a large enough request returned every matching row in one unary
-/// message and relied on the gRPC message-size limit (raised in core#2286)
+/// message and relied on the gRPC message-size limit (since raised)
 /// to badly fail anything larger still. The daemon now clamps `limit` to a
 /// maximum page size regardless of what the client asks for — seed a dataset
 /// larger than that clamp and confirm the response never exceeds it even
@@ -1609,9 +1608,9 @@ async fn query_nodes_simple_clamps_an_oversized_limit_to_the_max_page_size() {
     let _ = shutdown.send(());
 }
 
-/// `CountNodes`/`CountRoots` (core#2289) must report exact totals without
+/// `CountNodes`/`CountRoots` must report exact totals without
 /// requiring the caller to fetch (and page through) the matching records —
-/// the count-only path the issue asked for so a caller like `nodespace
+/// a count-only path so a caller like `nodespace
 /// diagnostics` doesn't pay to transfer records it only calls `.len()` on.
 #[tokio::test]
 async fn count_nodes_and_count_roots_report_totals_without_transferring_records() {

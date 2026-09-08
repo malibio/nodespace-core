@@ -22,7 +22,7 @@ describe('DeleteConfirmationModal', () => {
     getDeleteConfirmationState().cancel();
   });
 
-  it('auto-focuses Cancel and does NOT delete on Enter while Cancel is focused (#1414)', async () => {
+  it('auto-focuses Cancel and does NOT delete on Enter while Cancel is focused', async () => {
     let result: boolean | 'pending' = 'pending';
     confirmNodeDeletion(3).then((v) => (result = v));
     await tick(); // let the $state pending flag reach the rendered modal

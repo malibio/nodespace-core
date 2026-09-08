@@ -113,7 +113,7 @@ describe('nodeRefPreview controller', () => {
     expect(ensure).not.toHaveBeenCalled(); // cache hit skips the fetch
   });
 
-  it('re-confirms a cached-but-possibly-stale node instead of trusting the cache (#1979)', async () => {
+  it('re-confirms a cached-but-possibly-stale node instead of trusting the cache', async () => {
     // A daemon reconnect can leave a cached node's title/snippet stale (a
     // WatchNodes outage silently drops the update that would have kept it
     // current) — the preview must re-fetch, not just serve the cache hit.

@@ -1,5 +1,5 @@
 /**
- * pro-sync-pill component — fail-safe label mapping (#1674).
+ * pro-sync-pill component — fail-safe label mapping.
  *
  * The realtime axis reads 'connected' whenever the daemon's session is live,
  * which only proves sign-in — not that data syncs. The pill must never claim
@@ -58,7 +58,7 @@ function renderPill(state: SyncState) {
   return render(ProSyncPill);
 }
 
-describe('ProSyncPill — fail-safe sync_enabled cross-check (#1674)', () => {
+describe('ProSyncPill — fail-safe sync_enabled cross-check', () => {
   beforeEach(() => {
     mockInvoke.mockReset();
     SharedNodeStore.resetInstance();

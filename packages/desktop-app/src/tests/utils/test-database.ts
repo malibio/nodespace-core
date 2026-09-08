@@ -55,7 +55,7 @@ export async function initializeTestDatabase(
 ): Promise<string> {
   throw new Error(
     '[DEPRECATED] initializeTestDatabase is no longer functional. ' +
-    'HTTP dev server testing was removed in Issue #558. ' +
+    'HTTP dev server testing was removed. ' +
     'Use in-memory tests or Tauri-based integration tests instead.'
   );
 }

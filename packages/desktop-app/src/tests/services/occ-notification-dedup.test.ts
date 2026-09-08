@@ -1,6 +1,6 @@
 /**
  * OCC/subtree-access-denied errors lose their shape before reaching the
- * outer `handle.promise.catch()` (#2080).
+ * outer `handle.promise.catch()`.
  *
  * The real command errors crossing the Tauri/gRPC boundary (VERSION_CONFLICT,
  * SUBTREE_ACCESS_DENIED — see `isVersionConflict`/`isSubtreeAccessDenied` in
@@ -51,7 +51,7 @@ import { conflictNotifications } from '../../lib/stores/conflict-notifications.s
 import type { Node } from '../../lib/types';
 import type { UpdateSource } from '../../lib/types/update-protocol';
 
-describe('SharedNodeStore — OCC notification dedup (#2080)', () => {
+describe('SharedNodeStore — OCC notification dedup preserves error shape', () => {
   let store: SharedNodeStore;
 
   const viewerSource: UpdateSource = { type: 'viewer', viewerId: 'viewer-1' };

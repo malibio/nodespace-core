@@ -1332,7 +1332,7 @@ impl NodeService {
         Ok(())
     }
 
-    /// ADR-037 / core#2388: resolve the seeded local-user PersonNode — the
+    /// ADR-037: resolve the seeded local-user PersonNode — the
     /// person with an outgoing `has_role` edge carrying `role: "owner"` to
     /// the DatabaseSettingsNode singleton (the owner edge
     /// `seed_database_settings_if_needed` seeds). The DatabaseSettingsNode
@@ -1404,18 +1404,19 @@ impl NodeService {
             .next())
     }
 
-    /// ADR-037 / core#2388: write the local user's name/email into the
-    /// SEEDED PersonNode resolved by [`Self::get_local_person`] — never a
-    /// newly created one. `content` is kept in sync with `name` (matching
-    /// how every other person edit path in the app stores the display name;
-    /// see `PersonSchemaForm.updateField` on the frontend), alongside
-    /// `properties.person.email`. Trims whitespace; an empty value clears
-    /// the corresponding field rather than erroring, so "name only" or
-    /// "email only" are both legal — this mirrors the wizard's skippable,
-    /// non-blocking design (a user may fill in just one field and move on).
+    /// ADR-037: write the local user's first/last name and email
+    /// into the SEEDED PersonNode resolved by [`Self::get_local_person`] —
+    /// never a newly created one. Display identity is composed by the
+    /// person schema's `title_template`, so `content` is left untouched here
+    /// (unlike the single-`name` version this replaced, which synced it). Trims
+    /// whitespace; an empty value clears the corresponding field rather than
+    /// erroring, so any subset of fields may be filled and the rest left
+    /// blank — this mirrors the wizard's skippable, non-blocking design (a
+    /// user may fill in just one field and move on).
     pub async fn set_local_person_identity(
         &self,
-        name: &str,
+        first_name: &str,
+        last_name: &str,
         email: &str,
     ) -> Result<Node, NodeServiceError> {
         let person = self.get_local_person().await?.ok_or_else(|| {
@@ -1424,7 +1425,8 @@ impl NodeService {
             )
         })?;
 
-        let name = name.trim();
+        let first_name = first_name.trim();
+        let last_name = last_name.trim();
         let email = email.trim();
 
         let mut person_props = person
@@ -1434,8 +1436,12 @@ impl NodeService {
             .cloned()
             .unwrap_or_default();
         person_props.insert(
-            "name".to_string(),
-            serde_json::Value::String(name.to_string()),
+            "first_name".to_string(),
+            serde_json::Value::String(first_name.to_string()),
+        );
+        person_props.insert(
+            "last_name".to_string(),
+            serde_json::Value::String(last_name.to_string()),
         );
         person_props.insert(
             "email".to_string(),
@@ -1455,9 +1461,7 @@ impl NodeService {
             }
         }
 
-        let update = NodeUpdate::new()
-            .with_content(name.to_string())
-            .with_properties(properties);
+        let update = NodeUpdate::new().with_properties(properties);
 
         self.update_node(&person.id, person.version, update).await
     }
@@ -2832,7 +2836,7 @@ mod tests {
         }
     }
 
-    /// The batched edge-sweep primitive (#345) reproduces the sender's sibling order
+    /// The batched edge-sweep primitive reproduces the sender's sibling order
     /// and is idempotent — it never re-parents a child that already has a parent.
     #[tokio::test]
     async fn bulk_create_has_child_edges_reproduces_order_and_is_idempotent() {
@@ -5453,7 +5457,7 @@ mod tests {
         assert_eq!(settings.len(), 1);
     }
 
-    // --- get_local_person / set_local_person_identity (ADR-037, core#2388) ---
+    // --- get_local_person / set_local_person_identity (ADR-037) ---
 
     #[tokio::test]
     async fn test_get_local_person_resolves_the_seeded_owner() {
@@ -5706,7 +5710,7 @@ mod tests {
         let seeded_id = people[0].id.clone();
 
         let updated = service
-            .set_local_person_identity("Alice Example", "alice@example.com")
+            .set_local_person_identity("Alice", "Example", "alice@example.com")
             .await
             .unwrap();
 
@@ -5714,8 +5718,8 @@ mod tests {
             updated.id, seeded_id,
             "the write must land on the seeded node, never create a new person"
         );
-        assert_eq!(updated.content, "Alice Example");
-        assert_eq!(updated.properties["person"]["name"], "Alice Example");
+        assert_eq!(updated.properties["person"]["first_name"], "Alice");
+        assert_eq!(updated.properties["person"]["last_name"], "Example");
         assert_eq!(updated.properties["person"]["email"], "alice@example.com");
 
         // Still exactly one person — no duplicate was created.
@@ -5728,14 +5732,14 @@ mod tests {
         let (service, _temp) = create_test_service().await;
 
         let first = service
-            .set_local_person_identity("  Bob  ", "  bob@example.com  ")
+            .set_local_person_identity("  Bob  ", "  Example  ", "  bob@example.com  ")
             .await
             .unwrap();
         assert_eq!(
-            first.content, "Bob",
-            "leading/trailing whitespace on name must be trimmed"
+            first.properties["person"]["first_name"], "Bob",
+            "leading/trailing whitespace on first_name must be trimmed"
         );
-        assert_eq!(first.properties["person"]["name"], "Bob");
+        assert_eq!(first.properties["person"]["last_name"], "Example");
         assert_eq!(
             first.properties["person"]["email"], "bob@example.com",
             "leading/trailing whitespace on email must be trimmed"
@@ -5745,10 +5749,13 @@ mod tests {
         // the previous value in place — this is a full-value write, not a
         // sparse patch, matching the "email-only clears name" symmetric case
         // the wizard's skippable design relies on.
-        let updated = service.set_local_person_identity("Bob", "").await.unwrap();
+        let updated = service
+            .set_local_person_identity("Bob", "Example", "")
+            .await
+            .unwrap();
 
-        assert_eq!(updated.content, "Bob");
-        assert_eq!(updated.properties["person"]["name"], "Bob");
+        assert_eq!(updated.properties["person"]["first_name"], "Bob");
+        assert_eq!(updated.properties["person"]["last_name"], "Example");
         assert_eq!(updated.properties["person"]["email"], "");
     }
 
@@ -5887,7 +5894,7 @@ mod tests {
     async fn test_get_node_relationships_emits_empty_declared_groups() {
         // A declared relationship must surface even with zero edges — on BOTH
         // sides — so the viewer can add the first edge and the visibility gate
-        // (#2007) can tell "declared but unlinked" from "no relationship at all".
+        // can tell "declared but unlinked" from "no relationship at all".
         // Regression for the inbound branch, which previously skipped empties
         // while the outbound branch emitted them.
         let (service, _temp) = create_test_service().await;
@@ -5981,7 +5988,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_node_relationships_inbound_multiple_sources_not_duplicated() {
-        // Regression (#1918): the inbound query keys only on relationship_type,
+        // Regression: the inbound query keys only on relationship_type,
         // so two schemas declaring the SAME relationship name targeting the same
         // type must land in SEPARATE groups, each restricted to its own source
         // type — never doubled or cross-attributed.
@@ -6765,11 +6772,11 @@ mod tests {
     /// #2006 content-only guard would leave it stale.
     #[tokio::test]
     async fn update_task_node_property_only_recomputes_templated_title() {
-        use crate::models::TaskNodeUpdate;
+        use crate::models::{TaskNodeUpdate, TaskPriority};
         use crate::services::{CreateNodeParams, InsertPositionOwned};
 
         let (service, _temp) = create_test_service().await;
-        set_task_title_template(&service, "Owner: {assignee}").await;
+        set_task_title_template(&service, "Priority: {priority}").await;
 
         let id = service
             .create_node_with_parent(CreateNodeParams {
@@ -6786,8 +6793,8 @@ mod tests {
 
         let created = service.get_node(&id).await.unwrap().unwrap();
 
-        // Assignee-only update (no content) — the template now depends on it.
-        let update = TaskNodeUpdate::new().with_assignee(Some("alice".to_string()));
+        // Priority-only update (no content) — the template now depends on it.
+        let update = TaskNodeUpdate::new().with_priority(Some(TaskPriority::High));
         service
             .update_task_node(&id, created.version, update)
             .await
@@ -6796,7 +6803,7 @@ mod tests {
         let refetched = service.get_node(&id).await.unwrap().unwrap();
         assert_eq!(
             refetched.title.as_deref(),
-            Some("Owner: alice"),
+            Some("Priority: High"),
             "a property-only update must recompute a title_template-driven title"
         );
     }
@@ -6806,11 +6813,11 @@ mod tests {
     /// must be the new property, not the pre-update one (one write behind).
     #[tokio::test]
     async fn update_task_node_combined_update_uses_post_merge_properties() {
-        use crate::models::TaskNodeUpdate;
+        use crate::models::{TaskNodeUpdate, TaskPriority};
         use crate::services::{CreateNodeParams, InsertPositionOwned};
 
         let (service, _temp) = create_test_service().await;
-        set_task_title_template(&service, "Owner: {assignee}").await;
+        set_task_title_template(&service, "Priority: {priority}").await;
 
         let id = service
             .create_node_with_parent(CreateNodeParams {
@@ -6825,22 +6832,22 @@ mod tests {
             .await
             .unwrap();
 
-        // Seed a prior assignee so a stale read would produce a visibly wrong title.
+        // Seed a prior priority so a stale read would produce a visibly wrong title.
         let created = service.get_node(&id).await.unwrap().unwrap();
         service
             .update_task_node(
                 &id,
                 created.version,
-                TaskNodeUpdate::new().with_assignee(Some("bob".to_string())),
+                TaskNodeUpdate::new().with_priority(Some(TaskPriority::Low)),
             )
             .await
             .unwrap();
 
-        // One call updating BOTH content and assignee.
+        // One call updating BOTH content and priority.
         let seeded = service.get_node(&id).await.unwrap().unwrap();
         let update = TaskNodeUpdate::new()
             .with_content("Ship the spec".to_string())
-            .with_assignee(Some("carol".to_string()));
+            .with_priority(Some(TaskPriority::High));
         service
             .update_task_node(&id, seeded.version, update)
             .await
@@ -6853,8 +6860,8 @@ mod tests {
         );
         assert_eq!(
             refetched.title.as_deref(),
-            Some("Owner: carol"),
-            "combined update must compute title from the new (post-merge) assignee, not the stale one"
+            Some("Priority: High"),
+            "combined update must compute title from the new (post-merge) priority, not the stale one"
         );
     }
 
@@ -7261,6 +7268,101 @@ mod tests {
             .await
             .expect_err("a numeric enum value must be rejected");
         assert!(err.to_string().contains("must be a string"), "got: {err}");
+    }
+
+    /// End-to-end coverage for the person→task `assignee` relationship:
+    /// assignment and clearing both work through the generic
+    /// relationship API, with no task-specific or assignee-specific code path.
+    /// Person declares `tasks` (Out/Many); task's `assignee` (reverse, One) is
+    /// derived, never declared directly — mirrors project's `tasks`/`project`
+    /// pair (`core_schemas.rs`).
+    #[tokio::test]
+    async fn person_task_assignee_relationship_assigns_and_clears_end_to_end() {
+        use crate::services::{CreateNodeParams, InsertPositionOwned};
+
+        let (service, _temp) = create_test_service().await;
+        let service = std::sync::Arc::new(service);
+
+        let person_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "person".to_string(),
+                content: String::new(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: serde_json::json!({}),
+                lifecycle_status: None,
+            })
+            .await
+            .unwrap();
+        let task_id = service
+            .create_node_with_parent(CreateNodeParams {
+                id: None,
+                node_type: "task".to_string(),
+                content: "Ship the feature".to_string(),
+                parent_id: None,
+                position: InsertPositionOwned::End,
+                properties: serde_json::json!({}),
+                lifecycle_status: None,
+            })
+            .await
+            .unwrap();
+
+        // Assign: person -[tasks]-> task, using the name declared on person's
+        // schema (mirrors project's declaration; task has no entry of its own).
+        service
+            .create_relationship(&person_id, "tasks", &task_id, serde_json::json!({}))
+            .await
+            .expect("assigning a task to a person must succeed");
+
+        // Person's outbound side.
+        let outbound = crate::ops::rel_ops::get_node_relationships(&service, &person_id)
+            .await
+            .unwrap();
+        let out_group = outbound
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "tasks" && g.direction == "out")
+            .expect("person must show the outbound tasks relationship");
+        assert_eq!(out_group.count, 1);
+        assert_eq!(out_group.related[0].id, task_id);
+
+        // Task's derived inverse: the reverse_name "assignee" surfaces via the
+        // inbound side, not a declaration on task's own schema.
+        let inbound = crate::ops::rel_ops::get_node_relationships(&service, &task_id)
+            .await
+            .unwrap();
+        let in_group = inbound
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "tasks" && g.direction == "in")
+            .expect("task must show the inbound (assignee) side of the relationship");
+        assert_eq!(in_group.count, 1);
+        assert_eq!(in_group.related[0].id, person_id);
+        assert_eq!(
+            in_group.reverse_name, "assignee",
+            "the inbound group's reverse_name is what actually encodes \"assignee\" \
+             as a concept at runtime — must match the schema declaration"
+        );
+
+        // Clear: deleting the edge removes assignment on both sides.
+        service
+            .delete_relationship(&person_id, "tasks", &task_id)
+            .await
+            .expect("clearing an assignment must succeed");
+
+        let outbound_after = crate::ops::rel_ops::get_node_relationships(&service, &person_id)
+            .await
+            .unwrap();
+        let out_group_after = outbound_after
+            .groups
+            .iter()
+            .find(|g| g.relationship_name == "tasks" && g.direction == "out")
+            .expect("the relationship group still exists (declared), now empty");
+        assert_eq!(
+            out_group_after.count, 0,
+            "cleared assignment must not persist"
+        );
     }
 
     /// The in-place edit path is validated too — otherwise an edge created with

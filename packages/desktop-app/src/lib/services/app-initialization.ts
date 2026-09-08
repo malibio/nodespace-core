@@ -164,7 +164,7 @@ export function registerShutdownHandlers(): void {
  * pending operations before allowing the window to actually close.
  *
  * `destroy()` MUST run unconditionally at the end, not just on the
- * has-pending-writes path (core#2347). Tauri's own manager calls
+ * has-pending-writes path. Tauri's own manager calls
  * `prevent_close()` on every `CloseRequested` whenever a JS listener is
  * registered for it -- which this one always is -- before this callback
  * even runs, and holds the window open regardless of what the callback

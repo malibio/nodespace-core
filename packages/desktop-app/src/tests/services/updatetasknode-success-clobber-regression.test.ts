@@ -48,7 +48,6 @@ type TaskLikeNode = Node & {
   status: string;
   priority?: string;
   dueDate?: string | null;
-  assignee?: string | null;
   startedAt?: string | null;
   completedAt?: string | null;
 };
@@ -118,7 +117,6 @@ describe('updateTaskNode success-path clobber — queued-write regression', () =
               status: 'open',
               priority: 'high',
               dueDate: undefined,
-              assignee: undefined,
               startedAt: undefined,
               completedAt: undefined
             };
@@ -191,7 +189,6 @@ describe('updateTaskNode success-path clobber — queued-write regression', () =
               status: 'open',
               priority: 'high',
               dueDate: undefined,
-              assignee: undefined,
               startedAt: undefined,
               completedAt: undefined
             };
@@ -209,7 +206,6 @@ describe('updateTaskNode success-path clobber — queued-write regression', () =
             status: updateArg.status ?? 'open',
             priority: 'high',
             dueDate: undefined,
-            assignee: undefined,
             startedAt: undefined,
             completedAt: undefined
           };

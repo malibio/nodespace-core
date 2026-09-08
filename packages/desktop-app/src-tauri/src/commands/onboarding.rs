@@ -31,7 +31,7 @@ struct NodespaceConfig {
     onboarding_completed: bool,
     #[serde(default)]
     integrations: IntegrationsConfig,
-    /// core#2388: set once the user has explicitly saved or skipped the
+    /// Set once the user has explicitly saved or skipped the
     /// identity backfill prompt (the nudge shown to an already-onboarded
     /// install whose seeded local person is still blank), so it surfaces at
     /// most once rather than nagging on every launch. The identity itself
@@ -260,7 +260,7 @@ pub async fn get_integrations_status() -> Result<OnboardingStatus, String> {
 }
 
 /// Remove the NodeSpace skill files from every installed-into agent's skill
-/// directory (Claude Code, Codex, Gemini CLI, OpenCode -- whichever the
+/// directory (Claude Code, Codex, Antigravity CLI, OpenCode -- whichever the
 /// installer's `AGENTS` config currently lists), by delegating to
 /// `install.ts`'s own `uninstall` command. Resets both setup.json
 /// (authoritative for get_skill_setup_status) and config.json.
@@ -296,16 +296,17 @@ pub async fn complete_onboarding(
     write_config(&cfg).await
 }
 
-// ── local identity (ADR-037, core#2388) ─────────────────────────────────────
+// ── local identity (ADR-037) ─────────────────────────────────────────────────
 
 /// The seeded local-user PersonNode's identity, as shown to the frontend.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalIdentity {
     pub node_id: String,
-    pub name: String,
+    pub first_name: String,
+    pub last_name: String,
     pub email: String,
-    /// True when neither content/name nor email has ever been filled in —
+    /// True when neither name field nor email has ever been filled in —
     /// drives both the onboarding wizard's identity step (shown only when
     /// blank) and the backfill nudge for already-onboarded installs.
     pub is_blank: bool,
@@ -313,12 +314,20 @@ pub struct LocalIdentity {
 
 fn local_identity_from_node_data(data: NodeData) -> LocalIdentity {
     let props: serde_json::Value = serde_json::from_str(&data.properties).unwrap_or_default();
-    let person_name = props
+    let first_name = props
         .get("person")
-        .and_then(|p| p.get("name"))
+        .and_then(|p| p.get("first_name"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .trim();
+        .trim()
+        .to_string();
+    let last_name = props
+        .get("person")
+        .and_then(|p| p.get("last_name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let email = props
         .get("person")
         .and_then(|p| p.get("email"))
@@ -326,19 +335,11 @@ fn local_identity_from_node_data(data: NodeData) -> LocalIdentity {
         .unwrap_or("")
         .trim()
         .to_string();
-    let content = data.content.trim();
-    let is_blank = content.is_empty() && person_name.is_empty() && email.is_empty();
-    // `content` is the display name in every other person-editing surface
-    // (see PersonSchemaForm); prefer it, falling back to properties.person.name
-    // for a node that predates that convention or was written some other way.
-    let name = if !content.is_empty() {
-        content.to_string()
-    } else {
-        person_name.to_string()
-    };
+    let is_blank = first_name.is_empty() && last_name.is_empty() && email.is_empty();
     LocalIdentity {
         node_id: data.id,
-        name,
+        first_name,
+        last_name,
         email,
         is_blank,
     }
@@ -362,18 +363,24 @@ pub async fn get_local_identity(
         .map(local_identity_from_node_data))
 }
 
-/// Write name/email into the seeded local-user PersonNode (never a newly
-/// created one — see core#2388 and `NodeService::set_local_person_identity`).
-/// Both fields are written together; an empty value clears that field.
+/// Write first_name/last_name/email into the seeded local-user PersonNode
+/// (never a newly created one — see
+/// `NodeService::set_local_person_identity`). All fields are written
+/// together; an empty value clears that field.
 #[tauri::command]
 pub async fn set_local_identity(
     client: State<'_, GrpcClient>,
-    name: String,
+    first_name: String,
+    last_name: String,
     email: String,
 ) -> Result<LocalIdentity, String> {
     let mut c = client.client().await;
     let resp = c
-        .set_local_person_identity(Request::new(SetLocalPersonIdentityRequest { name, email }))
+        .set_local_person_identity(Request::new(SetLocalPersonIdentityRequest {
+            first_name,
+            last_name,
+            email,
+        }))
         .await
         .map_err(|e| e.to_string())?
         .into_inner();
@@ -386,7 +393,7 @@ pub async fn set_local_identity(
 /// Best-effort suggestion for the identity prompt, sourced from `git config`
 /// (both fields), falling back to the OS account's full name for `name`
 /// alone. Never written anywhere on its own — the caller shows this for
-/// confirmation only (core#2388's "prefill, do not auto-commit" criterion).
+/// confirmation only ("prefill, do not auto-commit").
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityPrefill {

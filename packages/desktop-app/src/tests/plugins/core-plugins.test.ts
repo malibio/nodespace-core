@@ -424,7 +424,7 @@ describe('Core Plugins Integration', () => {
     });
   });
 
-  describe('Task Node extractMetadata (Issue #838)', () => {
+  describe('Task Node extractMetadata', () => {
     it('should extract status from top-level field (TaskNode format)', () => {
       // TaskNode format: status is at top level (from typed APIs like updateTaskNode)
       const node = {
@@ -518,7 +518,6 @@ describe('Core Plugins Integration', () => {
         priority: 'medium',
         properties: {
           dueDate: '2025-12-31',
-          assignee: 'user-123',
           customField: 'custom-value'
         }
       };
@@ -529,7 +528,6 @@ describe('Core Plugins Integration', () => {
       expect(metadata.status).toBe('open');
       expect(metadata.priority).toBe('medium');
       expect(metadata.dueDate).toBe('2025-12-31');
-      expect(metadata.assignee).toBe('user-123');
       expect(metadata.customField).toBe('custom-value');
     });
   });

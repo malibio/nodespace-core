@@ -220,7 +220,7 @@ const GEMMA_4_26B_A4B: CatalogEntry = CatalogEntry {
 };
 
 /// Gemma 4 12B -- Google's mid-tier dense model. Parked, not exposed: the
-/// agent-matrix eval (issue #1956) found it repeatedly emits malformed
+/// agent-matrix eval found it repeatedly emits malformed
 /// tool-call JSON (escaped underscores, garbled/truncated nested structures)
 /// on complex payloads like `create_schema`, across both this ggml-org GGUF
 /// and the Unsloth re-upload below -- confirmed identical template/tokenizer
@@ -229,9 +229,9 @@ const GEMMA_4_26B_A4B: CatalogEntry = CatalogEntry {
 /// is a model-capability property of dense 12B at this quantization, not a
 /// GGUF-source defect. See `GEMMA_4_26B_A4B` for a Gemma 4 tier that avoids
 /// this failure mode. `min_memory_gb: 24` (not the 16 an earlier revision
-/// claimed) reflects repeated hard GPU OOM on a 16GB machine documented in
-/// issue #1348 -- the Q8_0 KV-cache quantization here reduces but does not
-/// eliminate that headroom problem.
+/// claimed) reflects repeated hard GPU OOM on a 16GB machine -- the Q8_0
+/// KV-cache quantization here reduces but does not eliminate that headroom
+/// problem.
 const GEMMA_4_12B: CatalogEntry = CatalogEntry {
     id: "gemma-4-12b-q4km",
     family: ModelFamily::Gemma4,
@@ -252,13 +252,13 @@ const GEMMA_4_12B: CatalogEntry = CatalogEntry {
 
 /// Gemma 4 12B (Unsloth) -- April 11 re-upload. Parked, not exposed: fails
 /// identically to `GEMMA_4_12B` above (same malformed-JSON failure on
-/// `create_schema`, confirmed via the agent-matrix eval for issue #1956).
+/// `create_schema`, confirmed via the agent-matrix eval).
 /// The two GGUF sources have byte-for-byte identical embedded chat template
 /// and tokenizer EOG metadata (verified against both files directly), so
 /// there is no template-level difference between them -- whatever Unsloth's
 /// re-upload changes, if anything, is not visible at this metadata layer.
-/// `min_memory_gb: 24` for the same reason as `GEMMA_4_12B` (issue #1348's
-/// repeated 16GB OOM reproductions apply equally to this file).
+/// `min_memory_gb: 24` for the same reason as `GEMMA_4_12B` (the repeated
+/// 16GB OOM reproductions apply equally to this file).
 const GEMMA_4_12B_UNSLOTH: CatalogEntry = CatalogEntry {
     id: "gemma-4-12b-unsloth-q4km",
     family: ModelFamily::Gemma4,
@@ -293,7 +293,7 @@ const CATALOG: &[&CatalogEntry] = &[
 /// (Ministral 8B) is selected instead of the small one (Ministral 3B).
 /// Matches `MINISTRAL_8B.min_memory_gb`. NOT used for Gemma4's medium tier --
 /// see [`RAM_THRESHOLD_GEMMA4_MEDIUM`], which tracks a different value
-/// (`GEMMA_4_12B.min_memory_gb`, corrected to 24GB per issue #1348's OOM
+/// (`GEMMA_4_12B.min_memory_gb`, corrected to 24GB per measured OOM
 /// evidence) and would silently drift from that catalog value again if the
 /// two families shared one constant.
 const RAM_THRESHOLD_MEDIUM: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
@@ -412,10 +412,10 @@ impl GgufModelManager {
     /// Unlike [`Self::recommended_model_id_for`]'s general three-tier Gemma4
     /// behavior, this always recommends E4B regardless of RAM: the mid tier
     /// of that ladder is 12B, which remains parked per ADR-046 (unresolved
-    /// tool-call defects, reconfirmed via issue #1956's re-evaluation) and
-    /// must not become the default recommendation on higher-RAM machines.
-    /// (The large tier, 26B-A4B, is not parked -- it was validated and
-    /// exposed by issue #1956 -- but the ladder is still bypassed here
+    /// tool-call defects, reconfirmed via the agent-matrix eval's
+    /// re-evaluation) and must not become the default recommendation on
+    /// higher-RAM machines. (The large tier, 26B-A4B, is not parked -- it was
+    /// validated and exposed by that same eval -- but the ladder is still bypassed here
     /// wholesale rather than partially, since this function's contract is a
     /// single fixed default, not a RAM-tiered one.) Callers that want the
     /// full RAM-tiered within-family recommendation should use
@@ -435,7 +435,7 @@ impl GgufModelManager {
     /// - `Gemma4`:    three-tier — 26B-A4B at or above [`RAM_THRESHOLD_LARGE`],
     ///   12B at or above [`RAM_THRESHOLD_GEMMA4_MEDIUM`] (24 GB), otherwise E4B.
     ///   Recommends 26B-A4B rather than 31B at the large tier: 31B is parked
-    ///   (unevaluated by issue #1956) while 26B-A4B is the tier this project
+    ///   (unevaluated by the agent-matrix eval) while 26B-A4B is the tier this project
     ///   actually validated and exposed. Neither 12B tier is recommended by
     ///   this function's Gemma4 branch reaching production, though -- see
     ///   [`Self::recommended_model_id`], which pins the real default to E4B
@@ -1682,7 +1682,7 @@ mod tests {
         assert!(spec.type_k.is_none());
 
         // 12B uses Q8_0 KV compression to reduce (not eliminate) memory pressure
-        // from the ~7.4GB weights -- min_memory_gb is 24, not 16 (issue #1348).
+        // from the ~7.4GB weights -- min_memory_gb is 24, not 16.
         let spec = mgr.model_spec_for("gemma-4-12b-q4km").unwrap();
         assert_eq!(spec.model_id, "gemma-4-12b-q4km");
         assert_eq!(spec.family, ModelFamily::Gemma4);
@@ -1730,7 +1730,7 @@ mod tests {
     fn ram_thresholds_agree_with_the_catalog_entries_they_gate() {
         // recommended_model_id_for's RAM tiering constants must match the
         // min_memory_gb of the catalog entry each threshold gates -- a
-        // catalog correction (e.g. issue #1348's 12B min_memory_gb: 16 -> 24)
+        // catalog correction (e.g. the 12B min_memory_gb: 16 -> 24 fix)
         // that isn't mirrored here silently recommends a model to machines
         // that don't meet its own declared memory floor. Asserted directly
         // against the constants rather than by RAM-mocking

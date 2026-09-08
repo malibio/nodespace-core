@@ -75,7 +75,7 @@ export async function createAndFetchNode(
 export async function checkServerHealth(_adapter: HttpAdapter): Promise<void> {
   if (shouldUseDatabase()) {
     throw new Error(
-      '[DEPRECATED] HTTP dev server testing was removed in Issue #558.\n' +
+      '[DEPRECATED] HTTP dev server testing was removed.\n' +
       'Tests should use in-memory mode (default) or be rewritten for Tauri integration.'
     );
   }

@@ -832,7 +832,7 @@ pub fn run() {
             commands::onboarding::remove_skill,
             commands::onboarding::get_skill_setup_status,
             commands::onboarding::get_integrations_status,
-            // Local identity (ADR-037, core#2388)
+            // Local identity (ADR-037)
             commands::onboarding::get_local_identity,
             commands::onboarding::set_local_identity,
             commands::onboarding::get_identity_prefill,
@@ -978,7 +978,7 @@ fn persist_window_geometry<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, 
     });
 }
 
-/// Pins the fix for the outer-vs-inner size mismatch (#2204) at the call
+/// Pins the fix for the outer-vs-inner size mismatch at the call
 /// site itself, since it cannot be exercised behaviorally: `tauri::test::
 /// MockRuntime` — the only window-backed test double available in this
 /// workspace (no real display in CI/this environment) — stubs both
@@ -1016,12 +1016,12 @@ mod window_geometry_capture_tests {
             !function_source.contains("window.outer_size()"),
             "persist_window_geometry must NOT capture width/height via window.outer_size() — \
              saving the outer (decoration-inclusive) size while the restore path applies it as \
-             an inner size inflates the window by the decoration height on every restore (#2204)"
+             an inner size inflates the window by the decoration height on every restore"
         );
         // Position is the other half of the round trip and must stay outer on
         // both sides (set_position -> Window::set_outer_position) — pinned here
         // too so a well-intentioned future "fix" doesn't flip position to inner
-        // by the same mistaken symmetry reasoning that caused #2204.
+        // by the same mistaken symmetry reasoning that caused the width/height bug above.
         assert!(
             function_source.contains("window.outer_position()"),
             "persist_window_geometry must capture x/y via window.outer_position() — the \

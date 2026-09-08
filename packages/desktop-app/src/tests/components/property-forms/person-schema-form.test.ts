@@ -1,5 +1,5 @@
 /**
- * PersonSchemaForm — adopt-existing suggestion (core#1734 / ADR-065).
+ * PersonSchemaForm — adopt-existing suggestion (ADR-065).
  *
  * `person.email` carries a store-aware `unique` schema rule. This form is the
  * creation/edit surface where a collision must surface as a dismissible
@@ -24,8 +24,8 @@ vi.mock('$lib/services/navigation-service', () => ({
   getNavigationService: () => ({ navigateToNodeInOtherPane })
 }));
 
-// PersonSchemaForm's Relationships trigger is gated on this service (core#2132,
-// matching TypedFormShell's gate for Task/GenericSchemaForm). Stub it so the gate
+// PersonSchemaForm's Relationships trigger is gated on this service, matching
+// TypedFormShell's gate for Task/GenericSchemaForm. Stub it so the gate
 // never reaches a daemon and the other 19 tests below — none of which care about
 // Relationships — don't incidentally exercise its fail-open error path.
 const loadNodeRelationshipsView = vi.fn();
@@ -41,11 +41,12 @@ function personNode(overrides: Partial<Node> = {}): Node {
   return {
     id: 'person-1',
     nodeType: 'person',
-    content: 'Alice',
+    content: '',
+    title: 'Alice',
     createdAt: '2026-01-01T00:00:00Z',
     modifiedAt: '2026-01-01T00:00:00Z',
     version: 1,
-    properties: { person: { name: 'Alice', email: '' } },
+    properties: { person: { first_name: 'Alice', last_name: '', email: '' } },
     ...overrides
   } as Node;
 }
@@ -54,11 +55,12 @@ function existingMatch(overrides: Partial<Node> = {}): Node {
   return {
     id: 'person-existing',
     nodeType: 'person',
-    content: 'Bob Existing',
+    content: '',
+    title: 'Bob Existing',
     createdAt: '2026-01-01T00:00:00Z',
     modifiedAt: '2026-01-01T00:00:00Z',
     version: 1,
-    properties: { person: { name: 'Bob Existing', email: 'bob@example.com' } },
+    properties: { person: { first_name: 'Bob', last_name: 'Existing', email: 'bob@example.com' } },
     ...overrides
   } as Node;
 }
@@ -272,7 +274,7 @@ describe('PersonSchemaForm — adopt-existing suggestion', () => {
 });
 
 /**
- * Convergence duplicate indicator badge (ADR-065 §4, core#2116). Distinct
+ * Convergence duplicate indicator badge (ADR-065 §4). Distinct
  * from the blur-triggered suggestion above: this marker is stamped
  * out-of-band (offline write, sync convergence) rather than by anything this
  * form's own blur handler did — so it can be present on first render, before
@@ -292,7 +294,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -307,7 +309,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -335,7 +337,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -352,7 +354,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -374,7 +376,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -393,7 +395,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -419,7 +421,7 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
     vi.spyOn(sharedNodeStore, 'getNode').mockReturnValue(
       personNode({
         properties: {
-          person: { name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
+          person: { first_name: 'Alice', email: 'alice@example.com', _possible_duplicate: true }
         }
       })
     );
@@ -449,15 +451,15 @@ describe('PersonSchemaForm — convergence duplicate indicator badge', () => {
 });
 
 /**
- * Relationships trigger gating (core#2132). Before this PR, PersonSchemaForm
- * showed the Relationships button unconditionally, unlike GenericSchemaForm
+ * Relationships trigger gating. PersonSchemaForm used to show the
+ * Relationships button unconditionally, unlike GenericSchemaForm
  * (which already gated it) — and, once TaskSchemaForm started composing
  * through TypedFormShell, unlike Task too. This closes that remaining
  * inconsistency directly in PersonSchemaForm (which stays hardcoded, not
- * TypedFormShell-composed — see the issue's recorded decision), using the
- * exact same gate logic, copied verbatim.
+ * TypedFormShell-composed, by deliberate design), using the exact same gate
+ * logic, copied verbatim.
  */
-describe('PersonSchemaForm — Relationships trigger gate (core#2132)', () => {
+describe('PersonSchemaForm — Relationships trigger gate', () => {
   it('hides the Relationships entry point when the type has no typed relationships', async () => {
     loadNodeRelationshipsView.mockResolvedValue({ nodeType: 'person', groups: [] });
     render(PersonSchemaForm, { props: { nodeId: 'person-1' } });

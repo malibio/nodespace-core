@@ -80,16 +80,16 @@
 //! ## What the checked-in golden content represents
 //!
 //! **Day one, this reflects CURRENT production assembly output — not the
-//! tuned target from the `packages/agent/goldens/` corpus (core#2122).**
+//! tuned target from the `packages/agent/goldens/` corpus.**
 //! Those TOML case files are hand-authored, live-model-validated *content*
 //! for `golden_runner`'s tuning loop; the assertions here run the *actual*
 //! assembly code (`PromptAssembler`, `routing.rs`, `context_ops.rs`,
 //! `agent_guidance.rs`) against fixture inputs and pin whatever it currently
-//! emits. Per core#2119's own scope, this gate does not fix or judge any gap
-//! between the two — it only makes drift from THIS baseline visible.
-//! core#2120 is the follow-up that brings production's emitted text in line
-//! with the tuned corpus, updating these goldens (deliberately, per the
-//! workflow below) as it does.
+//! emits. This gate is deliberately scoped to only make drift from THIS
+//! baseline visible — it does not fix or judge any gap between the two.
+//! Bringing production's emitted text in line with the tuned corpus is
+//! separate follow-up work, updating these goldens (deliberately, per the
+//! workflow below) as it happens.
 //!
 //! ## Updating a golden
 //!
@@ -643,7 +643,7 @@ fn stage2_tool_surface_matches_golden() {
     let all_tools = model_facing_tool_definitions();
     let scoped = stage2_tools(&candidates, &all_tools);
     // `agent_loop.rs` calls this immediately after `stage2_tools`, gated on
-    // `!session.routing_disabled` (core#2120) — the fixture models the
+    // `!session.routing_disabled` — the fixture models the
     // routing-enabled path (the default, and the only one this fixture's
     // candidates give a meaningful answer for), so it is called
     // unconditionally here to keep this gate a faithful reproduction of what

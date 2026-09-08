@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { focusManager } from '$lib/services/focus-manager.svelte';
 
-describe('FocusManager - Cursor Positioning (Issue #281)', () => {
+describe('FocusManager - Cursor Positioning', () => {
   beforeEach(() => {
     // Clear state before each test
     focusManager.clearEditing();

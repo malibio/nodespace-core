@@ -1,6 +1,6 @@
 /**
  * isPossibleDuplicate — read-side accessor for the convergence "possible
- * duplicate" marker (ADR-065 §4, core#2116).
+ * duplicate" marker (ADR-065 §4).
  *
  * Mirrors NodeService::is_possible_duplicate (core) on the Rust side: both
  * read properties.<nodeType>._possible_duplicate. These tests prove the

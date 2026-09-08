@@ -1,8 +1,8 @@
 /**
  * Icon registry — built-in node type icon configs.
  *
- * `project` is a built-in core node type (backend core#134) and must resolve to
- * a registered icon config rather than falling back to the default text icon.
+ * `project` is a built-in core node type and must resolve to a registered
+ * icon config rather than falling back to the default text icon.
  */
 
 import { describe, it, expect } from 'vitest';

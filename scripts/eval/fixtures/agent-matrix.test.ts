@@ -911,14 +911,14 @@ describe("end-state fixture invariants", () => {
   // history, so no direct write can reach the right id. That is the condition
   // under which asserting a read-then-write subsequence is defensible, and
   // pinning it stops a future scenario from reviving `toolSequence` on a turn
-  // where a direct write is also correct — the mistake #2242 removed from
-  // scenario 6 and #2250 removed from 12d.
+  // where a direct write is also correct — the mistake previously removed
+  // from both scenario 6 and 12d.
   //
   // Note the limit of the claim, since overstating it is how the previous two
   // attempts went wrong: WHICH read is not forced. `resolve_query` reaches the
   // same node, and a model using it will show as a trajectory mismatch against
   // a passing outcome. That is tolerable only because `expect` is a diagnostic
-  // and not the score (#2243) — under trajectory scoring this assertion would
+  // and not the score — under trajectory scoring this assertion would
   // be wrong for the same reason the earlier two were.
   test("toolSequence is asserted only where the route is forced", () => {
     const seqIds = all

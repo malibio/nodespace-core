@@ -1435,7 +1435,7 @@ async fn test_create_schema_description_not_in_properties() {
     // properties.description must be absent
     assert!(
         node.properties.get("description").is_none(),
-        "description must not be written to properties (Issue #1351)"
+        "description must not be written to properties"
     );
 }
 
@@ -2710,7 +2710,7 @@ async fn test_create_schema_rejects_additional_constraints_as_unknown_field() {
 }
 
 // ============================================================================
-// relationship targetType existence validation (#1905)
+// relationship targetType existence validation
 // ============================================================================
 //
 // TARGET_TYPE_MUST_EXIST (skill_rules.rs) already tells the model this in

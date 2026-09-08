@@ -109,7 +109,7 @@ describe('UI-extension registry', () => {
       expect(isProSyncActive()).toBe(false);
     });
 
-    it('pro + live sign-in (userEmail) but settings node not hydrated → consent, not sign-in (#1685)', () => {
+    it('pro + live sign-in (userEmail) but settings node not hydrated → consent, not sign-in', () => {
       // A fresh Pro sign-in where the DatabaseSettingsNode has not hydrated its
       // auth_status yet: the live WatchSyncStatus signal (userEmail) must still
       // resolve `consent` so the enable-sync affordance appears — otherwise a new
@@ -120,7 +120,7 @@ describe('UI-extension registry', () => {
       expect(resolveProSyncVariant()).toBe('consent');
     });
 
-    it('pro + live sign-in (userEmail) overrides a stale auth_status:local → consent (#1685)', () => {
+    it('pro + live sign-in (userEmail) overrides a stale auth_status:local → consent', () => {
       proSync.tier = 'pro';
       proSync.userEmail = 'new-user@example.com';
       seedSettings({ sync_enabled: false, auth_status: 'local' });

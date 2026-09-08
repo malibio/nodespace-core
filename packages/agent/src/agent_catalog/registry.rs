@@ -45,13 +45,14 @@ pub const AGENT_CATALOG: &[AgentDefinition] = &[
         auth_env_vars: &["OPENAI_API_KEY"],
     },
     AgentDefinition {
-        agent_type: AgentType::GeminiCli,
-        name: "Gemini CLI",
-        binary: "gemini",
+        agent_type: AgentType::AntigravityCli,
+        name: "Antigravity CLI",
+        binary: "agy",
         context_file: ContextFile::AgentsMd,
-        // Gemini CLI uses checkpoint-based resumption with no single flag.
-        resume_flag: None,
-        auth_env_vars: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        // `agy -c` / `agy --continue` resumes the most recent conversation
+        // scoped to the current working directory.
+        resume_flag: Some("-c"),
+        auth_env_vars: &["GEMINI_API_KEY"],
     },
     AgentDefinition {
         agent_type: AgentType::Pi,
@@ -135,7 +136,7 @@ mod tests {
         let registry = SystemAgentRegistry::new();
         for agent_type in [
             AgentType::Codex,
-            AgentType::GeminiCli,
+            AgentType::AntigravityCli,
             AgentType::Pi,
             AgentType::OpenCode,
         ] {
@@ -154,7 +155,7 @@ mod tests {
     #[test]
     fn stateless_agents_have_no_resume_flag() {
         let registry = SystemAgentRegistry::new();
-        for agent_type in [AgentType::GeminiCli, AgentType::Pi, AgentType::OpenCode] {
+        for agent_type in [AgentType::Pi, AgentType::OpenCode] {
             let def = registry.get(agent_type).unwrap();
             assert!(
                 def.resume_flag.is_none(),
@@ -162,6 +163,13 @@ mod tests {
                 agent_type
             );
         }
+    }
+
+    #[test]
+    fn antigravity_cli_uses_continue_resume_flag() {
+        let registry = SystemAgentRegistry::new();
+        let def = registry.get(AgentType::AntigravityCli).unwrap();
+        assert_eq!(def.resume_flag, Some("-c"));
     }
 
     #[test]

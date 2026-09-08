@@ -73,7 +73,8 @@ pub const DATABASE_ID_HEADER: &str = "x-ns-database-id";
 /// the daemon, not the frontend, is the authority on "is this my own echo".
 ///
 /// Absent → writes emit no `source_client_id` and are never suppressed on any
-/// stream (unchanged pre-issue-1689 behavior). Each process that opens its own
+/// stream (unchanged original behavior, preserved for any caller that omits
+/// the header). Each process that opens its own
 /// long-lived connection to the daemon (one desktop-app window, one CLI
 /// invocation, one local-agent session) should generate its own stable id for
 /// the lifetime of that connection — never share one across processes, or a

@@ -569,7 +569,7 @@ describe('SharedNodeStore - Coverage Completion', () => {
       await expect(store.flushAllPending()).resolves.not.toThrow();
     }, 10000);
 
-    it('does not double-execute an already in-flight operation on flush (#1435)', async () => {
+    it('does not double-execute an already in-flight operation on flush', async () => {
       // A controllable in-flight persist: the backend call hangs until we
       // resolve it manually, so we can flush WHILE the op is still executing.
       let resolveUpdate!: (v: Node) => void;

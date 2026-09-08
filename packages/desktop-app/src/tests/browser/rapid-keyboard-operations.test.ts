@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 
-describe('Rapid Keyboard Operations - Browser Mode (Issue #870)', () => {
+describe('Rapid Keyboard Operations - Browser Mode', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -331,7 +331,7 @@ describe('Rapid Keyboard Operations - Browser Mode (Issue #870)', () => {
   });
 });
 
-describe('Stress Test - High Frequency Events (Issue #870)', () => {
+describe('Stress Test - High Frequency Events', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
   });

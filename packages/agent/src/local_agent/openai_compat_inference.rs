@@ -779,7 +779,7 @@ mod tests {
 
     #[test]
     fn replayed_assistant_tool_call_carries_tool_calls_on_the_wire() {
-        // Regression test for issue #2198: a replayed assistant turn that
+        // Regression test: a replayed assistant turn that
         // issued a tool call must serialize with a `tool_calls` array, or a
         // strict OpenAI-compatible server rejects the following `tool`
         // message with "must be a response to a preceding message with
@@ -813,7 +813,7 @@ mod tests {
 
     #[test]
     fn replayed_tool_result_carries_its_tool_name_on_the_wire() {
-        // Regression test for issue #2198: the OpenAI wire format expects a
+        // Regression test: the OpenAI wire format expects a
         // `name` field on `tool`-role messages; dropping it left the model
         // unable to see which tool a past result came from.
         let tool_result = ChatMessage::tool_result(r#"{"nodes":[]}"#, "call_abc", "search_nodes");
@@ -845,7 +845,7 @@ mod tests {
 
     #[test]
     fn response_tool_call_captures_thought_signature_as_provider_extra() {
-        // Regression test for issue #2255: Gemini 3's OpenAI-compat endpoint
+        // Regression test: Gemini 3's OpenAI-compat endpoint
         // nests thought_signature under a vendor extension --
         // tool_calls[i].extra_content.google.thought_signature -- not as a
         // bare sibling field. Its OpenAI-compat endpoint requires this
@@ -912,7 +912,7 @@ mod tests {
 
     #[test]
     fn replayed_tool_call_echoes_thought_signature_back_verbatim() {
-        // Regression test for issue #2255: a replayed assistant tool-call
+        // Regression test: a replayed assistant tool-call
         // turn must carry `extra_content.google.thought_signature` back at
         // the exact same path, or Gemini 3's OpenAI-compat endpoint 400s the
         // turn with "Function call is missing a thought_signature". Google's

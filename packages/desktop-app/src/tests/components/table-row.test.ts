@@ -1,5 +1,5 @@
 /**
- * TableRow — stale-title regression (issue #2012).
+ * TableRow — stale-title regression.
  *
  * See list-view.test.ts for the full root-cause explanation. The 'content' column used to
  * prefer `node.title` unconditionally, so a row for a node whose title went stale showed the

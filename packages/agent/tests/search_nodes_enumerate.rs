@@ -1,4 +1,4 @@
-//! Regression test for the `search_nodes` "enumerate a type" behavior (#1940).
+//! Regression test for the `search_nodes` "enumerate a type" behavior.
 //!
 //! Before the fix, `query: "*"` was treated as a literal 1-character title
 //! substring filter — silently matching nothing and returning `count: 0` even

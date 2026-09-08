@@ -432,6 +432,21 @@ jobs:
         with:
           workspaces: '. -> target'
 
+      # Bun is needed to compile the standalone `nodespace-skill-installer`
+      # sidecar below (`bun build --compile`) -- this job otherwise builds
+      # pure Rust. Skipped on Windows: the CLI itself isn't built there
+      # (Unix-socket-only transport), so there's no `nodespace` binary for
+      # the sidecar to sit beside.
+      - name: Setup Bun
+        if: steps.filter.outputs.skip != 'true' && matrix.os != 'windows-latest'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install frontend dependencies (for the skill installer compile)
+        if: steps.filter.outputs.skip != 'true' && matrix.os != 'windows-latest'
+        run: bun install --frozen-lockfile
+
       - name: Install Protobuf (macOS)
         if: steps.filter.outputs.skip != 'true' && matrix.os == 'macos-latest'
         run: |
@@ -494,6 +509,40 @@ jobs:
             cp "target/${{ matrix.target }}/release/nodespace" "nodespace-${{ matrix.target }}"
           fi
 
+      # Compiles the same standalone `nodespace-skill-installer` sidecar the
+      # Tauri desktop app bundles (see `scripts/build-skill.ts`), but for
+      # this job's headless targets instead of `build-skill.ts`'s
+      # macOS/Windows-only `hostTriple()` -- a CLI-only install (this
+      # matrix's whole purpose) has no Tauri app and needs its own copy.
+      # `nodespace skill install` (packages/cli/src/commands/skill.rs)
+      # resolves this sidecar by looking beside its own executable, so it
+      # is named and placed exactly like `nodespace`/`nodespaced` above.
+      #
+      # `bun build --compile` cross-compiles across OS but not always
+      # cleanly across libc/arch on the runner it's invoked from, so this
+      # compiles natively on each matrix leg's own runner, same as the Rust
+      # binaries above -- no `--target` cross-compile flag needed since
+      # each leg already runs on a machine of its own target OS/arch.
+      - name: Compile skill installer sidecar
+        if: steps.filter.outputs.skip != 'true' && matrix.os != 'windows-latest'
+        run: |
+          bun build --compile packages/skill/src/install.ts \
+            --outfile "nodespace-skill-installer-${{ matrix.target }}"
+          chmod +x "nodespace-skill-installer-${{ matrix.target }}"
+
+      # The sidecar reads SKILL.md/shims/references from --resource-root at
+      # runtime (see install.ts/installer.ts) rather than bundling them --
+      # same split as the Tauri build. Packaged as one tarball per target so
+      # install.sh/the CLI can fetch and unpack a single release asset
+      # instead of one per file.
+      - name: Package skill installer resources
+        if: steps.filter.outputs.skip != 'true' && matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          bun run --cwd packages/skill build
+          tar -czf "nodespace-skill-installer-resources-${{ matrix.target }}.tar.gz" \
+            -C packages/skill dist shims SKILL.md references package.json
+
       - name: Upload binaries to release
         if: steps.filter.outputs.skip != 'true' && github.event_name == 'release'
         shell: bash
@@ -506,6 +555,8 @@ jobs:
             gh release upload ${{ github.event.release.tag_name }} \
               "nodespaced-${{ matrix.target }}" \
               "nodespace-${{ matrix.target }}" \
+              "nodespace-skill-installer-${{ matrix.target }}" \
+              "nodespace-skill-installer-resources-${{ matrix.target }}.tar.gz" \
               --clobber
           fi
         env:

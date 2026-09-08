@@ -134,11 +134,6 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         .and_then(|v| v.as_str())
         .map(normalize_date_field);
 
-    let assignee = props
-        .get("assignee")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
     let started_at = props
         .get("startedAt")
         .or_else(|| props.get("started_at"))
@@ -166,7 +161,6 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         status,
         priority,
         due_date,
-        assignee,
         started_at,
         completed_at,
     };
@@ -548,7 +542,6 @@ mod promotion_proptests {
             status in task_status(),
             priority in task_priority(),
             due_date in date_string(),
-            assignee in "[a-zA-Z0-9_-]{1,20}",
             started_at in date_string(),
             completed_at in date_string(),
         ) {
@@ -560,7 +553,6 @@ mod promotion_proptests {
                         "status": status,
                         "priority": priority,
                         "dueDate": due_date,
-                        "assignee": assignee,
                         "startedAt": started_at,
                         "completedAt": completed_at,
                     }
@@ -573,7 +565,6 @@ mod promotion_proptests {
             prop_assert_eq!(&out["status"], &serde_json::json!(status));
             prop_assert_eq!(&out["priority"], &serde_json::json!(priority));
             prop_assert_eq!(&out["dueDate"], &serde_json::json!(due_date));
-            prop_assert_eq!(&out["assignee"], &serde_json::json!(assignee));
             prop_assert_eq!(&out["startedAt"], &serde_json::json!(started_at));
             prop_assert_eq!(&out["completedAt"], &serde_json::json!(completed_at));
             // Namespace flattened away, uri injected.

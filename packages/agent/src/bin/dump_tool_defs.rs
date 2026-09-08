@@ -1,6 +1,6 @@
 //! Dump the model-facing tool definitions as JSON.
 //!
-//! Investigation aid (core#2122 tool-surface fidelity). The golden
+//! Investigation aid for tool-surface fidelity. The golden
 //! corpus hand-authors 1-2 minimal tools per case while production Stage 2
 //! sends 9 with full parameter schemas, so every corpus measurement ran on a
 //! prompt missing ~15KB of declarations and never exercised tool *selection*.
@@ -8,8 +8,8 @@
 //! from them rather than transcribed by hand.
 //!
 //! Uses `model_facing_tool_definitions()` — the same accessor `agent_loop.rs`
-//! and the #2119 snapshot gate call — so what this prints is what production
-//! scopes from, not a parallel list that can drift.
+//! and the prompt-assembly snapshot gate call — so what this prints is what
+//! production scopes from, not a parallel list that can drift.
 //!
 //! ```text
 //! cargo run --release -p nodespace-agent --bin dump_tool_defs

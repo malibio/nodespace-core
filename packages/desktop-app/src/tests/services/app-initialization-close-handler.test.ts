@@ -1,5 +1,5 @@
 /**
- * Regression coverage for core#2347: `destroy()` was only called inside the
+ * `destroy()` was only called inside the
  * `hasPendingWrites()` branch of the Tauri close handler. Tauri's own
  * manager calls `prevent_close()` on every `CloseRequested` whenever a JS
  * listener is registered for it -- which this one always is -- before the

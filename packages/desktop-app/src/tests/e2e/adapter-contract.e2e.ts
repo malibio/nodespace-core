@@ -83,14 +83,13 @@ describe('Adapter contract: shape parity (no daemon required)', () => {
     const patch = buildTaskNodeUpdatePatch({
       status: 'done',
       dueDate: null,
-      assignee: 'alice',
+      priority: 'high',
     });
 
     expect(patch).toEqual({
       status: 'done',
-      priority: undefined,
+      priority: { clear: false, value: 'high' },
       dueDate: { clear: true },
-      assignee: { clear: false, value: 'alice' },
       startedAt: undefined,
       completedAt: undefined,
       content: undefined,
@@ -121,26 +120,26 @@ describe('Adapter contract: live round-trip (HttpAdapter → dev-proxy → daemo
     const created = await h.adapter.getNode(id);
     expect(created).not.toBeNull();
 
-    // dev-proxy must translate this into { clear:false, value:'alice' } for
-    // assignee via buildTaskNodeUpdatePatch, not a hand-rolled equivalent.
+    // dev-proxy must translate this into { clear:false, value:'high' } for
+    // priority via buildTaskNodeUpdatePatch, not a hand-rolled equivalent.
     // The raw dev-proxy response stores task fields flat under properties
     // (packages/core/src/models/task_node.rs) — client-side promotion to
     // top-level TaskNode fields is a separate concern (nodeToTaskNode), not
     // something this HTTP-shape contract test needs to exercise.
     const updated = (await h.adapter.updateTaskNode(id, created!.version, {
-      assignee: 'alice',
+      priority: 'high',
       status: 'in_progress',
-    })) as unknown as { properties: { assignee?: string; status?: string }; version: number };
+    })) as unknown as { properties: { priority?: string; status?: string }; version: number };
 
-    expect(updated.properties.assignee).toBe('alice');
+    expect(updated.properties.priority).toBe('high');
     expect(updated.properties.status).toBe('in_progress');
 
-    // Clearing assignee (null) must round-trip to "no assignee", not the
+    // Clearing priority (null) must round-trip to "no priority", not the
     // literal string "null" or an unset-vs-cleared ambiguity.
     const cleared = (await h.adapter.updateTaskNode(id, updated.version, {
-      assignee: null,
-    })) as unknown as { properties: { assignee?: string | null } };
-    expect(cleared.properties.assignee == null).toBe(true);
+      priority: null,
+    })) as unknown as { properties: { priority?: string | null } };
+    expect(cleared.properties.priority == null).toBe(true);
   });
 
   it('createNode honors an explicit InsertPosition the same way move/reorder do', async () => {

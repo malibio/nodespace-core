@@ -169,7 +169,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
     });
   });
 
-  describe('Relationship before Node Race Condition (Issue #811)', () => {
+  describe('Relationship before Node Race Condition', () => {
     it('should handle relationship created before referenced node exists', async () => {
       // Scenario: Backend creates node N1 with parent P1, but SSE delivers
       // relationship:created event before nodeCreated event
@@ -271,7 +271,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
     });
   });
 
-  describe('Node before Relationship Deletion Race Condition (Issue #811)', () => {
+  describe('Node before Relationship Deletion Race Condition', () => {
     it('should handle node deleted before relationship deleted', () => {
       // Scenario: Node is deleted, then its relationships should be deleted, but
       // relationship:deleted event might arrive before or after node:deleted
@@ -346,7 +346,7 @@ describe('BrowserSyncService - SSE Event Ordering', () => {
     });
   });
 
-  describe('Bulk Operations with Interleaved Events (Issue #811)', () => {
+  describe('Bulk Operations with Interleaved Events', () => {
     it('should handle bulk create of multiple nodes with relationships arriving interleaved', async () => {
       // Scenario: Creating a tree:
       //   P

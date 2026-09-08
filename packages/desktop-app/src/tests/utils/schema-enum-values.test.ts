@@ -1,5 +1,5 @@
 /**
- * Shared enum-field helpers (core#2132): merging coreValues/userValues, and
+ * Shared enum-field helpers: merging coreValues/userValues, and
  * resolving a stored value to its display label. Extracted out of
  * schema-field-leaf.svelte (the enum <Select> case) so TaskSchemaForm's
  * collapsed-header status badge can reuse the exact same lookup instead of
@@ -44,7 +44,7 @@ describe('getEnumValues', () => {
   });
 
   it('drops a userValue whose value collides with an existing coreValue, keeping the core label', () => {
-    // Matches the pre-#2132 TaskSchemaForm behavior (statusOptionsWithExtensions'
+    // Matches the original TaskSchemaForm behavior (statusOptionsWithExtensions'
     // `if (!coreValues.has(uv.value))` guard) — an extension adds choices, it
     // doesn't shadow one that already exists.
     const field = enumField({

@@ -1119,7 +1119,6 @@ impl GrpcNodeService for NodeServiceImpl {
             req.status,
             req.priority,
             req.due_date,
-            req.assignee,
             req.started_at,
             req.completed_at,
             req.content,
@@ -1174,7 +1173,7 @@ impl GrpcNodeService for NodeServiceImpl {
         }))
     }
 
-    // -- Local identity (ADR-037, core#2388) ---------------------------------
+    // -- Local identity (ADR-037) ---------------------------------
 
     async fn get_local_person(
         &self,
@@ -1211,7 +1210,7 @@ impl GrpcNodeService for NodeServiceImpl {
 
         let node = this
             .node_service
-            .set_local_person_identity(&req.name, &req.email)
+            .set_local_person_identity(&req.first_name, &req.last_name, &req.email)
             .await
             .map_err(service_error_to_status)?;
 
@@ -2174,7 +2173,6 @@ fn build_task_node_update(
     status: Option<String>,
     priority: Option<OptionalStringClear>,
     due_date: Option<OptionalTimestampClear>,
-    assignee: Option<OptionalStringClear>,
     started_at: Option<OptionalTimestampClear>,
     completed_at: Option<OptionalTimestampClear>,
     content: Option<String>,
@@ -2193,12 +2191,6 @@ fn build_task_node_update(
         Some(w) => Some(Some(parse_task_priority(&w.value)?)),
     };
 
-    let assignee = match assignee {
-        None => None,
-        Some(w) if w.clear => Some(None),
-        Some(w) => Some(Some(w.value)),
-    };
-
     let due_date = parse_optional_timestamp(due_date, "due_date")?;
     let started_at = parse_optional_timestamp(started_at, "started_at")?;
     let completed_at = parse_optional_timestamp(completed_at, "completed_at")?;
@@ -2207,7 +2199,6 @@ fn build_task_node_update(
         status,
         priority,
         due_date,
-        assignee,
         started_at,
         completed_at,
         content,
@@ -2300,7 +2291,7 @@ mod tests {
         assert!(Arc::ptr_eq(&svc.node_service(), &core_svc));
     }
 
-    /// The FindDuplicate RPC (core#1734) surfaces an existing node on a
+    /// The FindDuplicate RPC surfaces an existing node on a
     /// uniqueness-flagged match (case-folded), and returns an EMPTY response
     /// (empty node_id, no node_data) — never NotFound, never an error — when there
     /// is no duplicate. That empty-not-error convention is the suggest-don't-block
@@ -2318,7 +2309,7 @@ mod tests {
                 collections: Vec::new(),
                 collection_ids: Vec::new(),
                 lifecycle_status: None,
-                properties: r#"{"person":{"name":"Alice","email":"alice@example.com"}}"#
+                properties: r#"{"person":{"first_name":"Alice","email":"alice@example.com"}}"#
                     .to_string(),
                 position: None,
             }))
@@ -2390,7 +2381,8 @@ mod tests {
                 collections: Vec::new(),
                 collection_ids: Vec::new(),
                 lifecycle_status: None,
-                properties: r#"{"person":{"name":"Bob","email":"alice@example.com"}}"#.to_string(),
+                properties: r#"{"person":{"first_name":"Bob","email":"alice@example.com"}}"#
+                    .to_string(),
                 position: None,
             }))
             .await
@@ -2413,7 +2405,7 @@ mod tests {
         );
     }
 
-    /// ADR-037 / core#2388: the RPC wiring for `GetLocalPerson` resolves the
+    /// ADR-037: the RPC wiring for `GetLocalPerson` resolves the
     /// SAME seeded PersonNode a direct core query sees — proves the proto
     /// conversion (node_to_proto / OptionalNodeResponse) round-trips, not
     /// just the already-covered core logic.
@@ -2457,7 +2449,8 @@ mod tests {
 
         let resp = svc
             .set_local_person_identity(Request::new(SetLocalPersonIdentityRequest {
-                name: "Alice Example".to_string(),
+                first_name: "Alice".to_string(),
+                last_name: "Example".to_string(),
                 email: "alice@example.com".to_string(),
             }))
             .await
@@ -2469,8 +2462,9 @@ mod tests {
             "the write must land on the seeded node"
         );
         let data = resp.node_data.expect("update returns the updated node");
-        assert_eq!(data.content, "Alice Example");
         let props: serde_json::Value = serde_json::from_str(&data.properties).unwrap();
+        assert_eq!(props["person"]["first_name"], "Alice");
+        assert_eq!(props["person"]["last_name"], "Example");
         assert_eq!(props["person"]["email"], "alice@example.com");
 
         // Still exactly one person afterward — no duplicate node was created.
@@ -2903,12 +2897,12 @@ mod tests {
             status: Some("done".to_string()),
             priority: None,
             due_date: None,
-            assignee: None,
             started_at: None,
             completed_at: None,
             content: None,
             properties: None,
         });
+
         let err = svc
             .update_task_node(conflict_req)
             .await

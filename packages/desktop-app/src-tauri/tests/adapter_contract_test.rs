@@ -19,7 +19,7 @@
 use nodespace_app_lib::commands::nodes::{
     create_node, get_children, move_node, update_task_node, CreateNodeInput, InsertPositionInput,
 };
-use nodespace_app_lib::types::{TaskNodeUpdate, TaskStatus};
+use nodespace_app_lib::types::{TaskNodeUpdate, TaskPriority, TaskStatus};
 use nodespace_app_test_support::{SpawnedDaemon, TauriTestApp, DAEMON_CONNECT_TIMEOUT};
 use serde_json::json;
 
@@ -58,26 +58,26 @@ async fn task_tri_state_update_clear_set_no_change_matches_the_http_adapter_cont
         .await
         .expect("create task failed");
 
-    // Set: assignee -> "alice", status -> in_progress.
+    // Set: priority -> "high", status -> in_progress.
     let updated = update_task_node(
         state.clone(),
         id.clone(),
         1,
         TaskNodeUpdate {
-            assignee: Some(Some("alice".to_string())),
+            priority: Some(Some(TaskPriority::High)),
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         },
     )
     .await
     .expect("update_task_node (set) failed");
-    assert_eq!(updated["assignee"], json!("alice"));
+    assert_eq!(updated["priority"], json!("high"));
     assert_eq!(updated["status"], json!("in_progress"));
     let version_after_set = updated["version"]
         .as_i64()
         .expect("version must be a number");
 
-    // Clear: assignee -> None must round-trip to "no assignee", not the
+    // Clear: priority -> None must round-trip to "no priority", not the
     // literal string "null" or an unset-vs-cleared ambiguity — the exact
     // regression the tri-state encoding exists to prevent.
     let cleared = update_task_node(
@@ -85,18 +85,18 @@ async fn task_tri_state_update_clear_set_no_change_matches_the_http_adapter_cont
         id.clone(),
         version_after_set,
         TaskNodeUpdate {
-            assignee: Some(None),
+            priority: Some(None),
             ..Default::default()
         },
     )
     .await
     .expect("update_task_node (clear) failed");
     assert!(
-        cleared["assignee"].is_null(),
-        "cleared assignee must be null, got: {:?}",
-        cleared["assignee"]
+        cleared["priority"].is_null(),
+        "cleared priority must be null, got: {:?}",
+        cleared["priority"]
     );
-    // No-change: status must still be in_progress — clearing assignee must
+    // No-change: status must still be in_progress — clearing priority must
     // not have touched a field the update didn't mention.
     assert_eq!(cleared["status"], json!("in_progress"));
 }

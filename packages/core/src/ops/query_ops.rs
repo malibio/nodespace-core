@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(qf.property.as_deref(), Some("replacement_cost"));
     }
 
-    /// core#1957: a filter naming `property: "content"` with no explicit `type`
+    /// A filter naming `property: "content"` with no explicit `type`
     /// must infer the CONTENT category. Content lives in the top-level SQL `content`
     /// column, so routing it to the property path builds a `json_extract(properties,
     /// …)` that is structurally always NULL and silently returns zero results (an

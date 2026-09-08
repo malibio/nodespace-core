@@ -318,13 +318,13 @@ describe('optimistic collection creation', () => {
     expect(collectionsData.collectionsTree).toEqual([]);
   });
 
-  // core#2220: unlike every other cross-switch read in the codebase
+  // Unlike every other cross-switch read in the codebase
   // (loadChildrenForParent, doLoadChildrenTree, refreshDatabaseSettings,
   // createChat, createCollection), loadCollections committed its fetched array
   // into state without re-checking the store generation after the await — a
   // response issued against the previous database could land after a switch
   // and get committed as if it belonged to the new one.
-  describe('loadCollections stale-response guard across a database switch (core#2220)', () => {
+  describe('loadCollections stale-response guard across a database switch', () => {
     it('discards a load that resolves after forgetLocallyCreated, without writing into the list', async () => {
       let resolveLoad: (cols: CollectionInfo[]) => void = () => {};
       mockGetAllCollections.mockReturnValue(

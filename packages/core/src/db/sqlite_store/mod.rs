@@ -1895,7 +1895,7 @@ mod tests {
         Ok(())
     }
 
-    /// Regression for the concurrent-reorder race (#1561): many sibling reorders
+    /// Regression for the concurrent-reorder race: many sibling reorders
     /// running at once must all succeed and leave the parent with exactly N
     /// children carrying N distinct fractional-order keys. Without the store's
     /// write guard, the read → compute → write-back interleaves, so concurrent

@@ -1679,7 +1679,7 @@ impl LocalAgentServiceImpl {
                 .replace_engine_if_changed(model_id, engine.clone())
                 .await;
 
-            // Routing-reliability probe (Option C, issue #1830): the matrix in
+            // Routing-reliability probe (Option C): the matrix in
             // `tests/live_openai_compat_routing.rs` found Stage-2 candidate
             // injection suppresses tool-calling on some served models,
             // independent of the block's content, and that this is a
@@ -2260,8 +2260,8 @@ async fn load_chat_messages(node_service: &Arc<NodeService>, node_id: &str) -> V
 /// fields Y (type) and Z (type).") keeps later turns emitting well-formed
 /// tool calls; the model's own narrative reply to the same turn (paragraphs,
 /// numbered lists, a question back to the user) reproducibly does not, at
-/// matched token count — style is the measured driver, not raw size (see
-/// issue #1925's comment history). `canonical_args` already carries
+/// matched token count — style is the measured driver, not raw size.
+/// `canonical_args` already carries
 /// everything a fact needs — the schema's field list, an instance's property
 /// values — so this reads the structured write record rather than the
 /// model's own account of it, which is both cheaper and cannot drift from
@@ -2501,7 +2501,7 @@ async fn build_workspace_context(
     // before this injector ever runs. Budgeting off the post-append length let
     // that backstop silently zero out `remaining_slots` on any turn naming
     // several schemas by name, starving this injector even though it had never
-    // consumed a "slot" of its own — found in a post-merge audit (#2261).
+    // consumed a "slot" of its own — found in a post-merge audit.
     const MAX_SCHEMAS: usize = 5;
     if let Ok(all_schemas) = node_service.get_all_schemas().await {
         let cutoff = chrono::Utc::now() - chrono::Duration::minutes(5);
@@ -4297,7 +4297,7 @@ api_key = "sk-test"
         assert!(events.iter().all(|e| e.event_type != "error"));
     }
 
-    /// Regression for the gap flagged on issue #1830: a single-model server
+    /// Regression: a single-model server
     /// config (no `/models` discovery) resolves every load to the same bare
     /// `openai-compat:<uuid>` model id regardless of the config's `model`
     /// field, so `replace_engine_if_changed`'s "already loaded" check cannot
@@ -5236,7 +5236,7 @@ model = "model-b"
         }
     }
 
-    // -- OpenAI-compat discovery cache (issue #1807) ---------------------
+    // -- OpenAI-compat discovery cache ---------------------
 
     fn fake_discovered_model(label: &str) -> nodespace_agent::agent_types::ModelInfo {
         use nodespace_agent::local_agent::openai_compat_discovery::discovered_model_info;

@@ -43,7 +43,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('NodeCardInline on-mount fetch (#1566)', () => {
+describe('NodeCardInline on-mount fetch', () => {
   it('fetches a missing node exactly once on mount and stores the result', async () => {
     const fetched = { id: 'abc-123', nodeType: 'text', content: 'Hello', properties: {} };
     getNode.mockReturnValue(undefined); // not in store

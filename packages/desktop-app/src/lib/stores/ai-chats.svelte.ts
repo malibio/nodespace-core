@@ -35,7 +35,7 @@ const DISPLAY_LIMIT = 50;
 
 export interface AiChatListItem {
   id: string;
-  /** Raw node content. Empty until background titling (core#1698) fills it in. */
+  /** Raw node content. Empty until background titling fills it in. */
   content: string;
   modifiedAt: string;
 }

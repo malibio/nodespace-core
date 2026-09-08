@@ -199,7 +199,7 @@ describe('MembershipStore', () => {
 		expect(membership.get('c1').members).toEqual([]);
 	});
 
-	describe('invalidateForDatabaseSwitch (core#2218)', () => {
+	describe('invalidateForDatabaseSwitch', () => {
 		it('drops the per-collection roster cache but keeps the caller identity', async () => {
 			svc.listMembers.mockResolvedValue([{ personId: 'me', permission: 'admin' }]);
 			await membership.loadCollection('c1');

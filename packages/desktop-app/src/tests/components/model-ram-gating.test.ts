@@ -3,8 +3,8 @@
  *
  * Both model-manager.svelte and ai-chat-model-selector.svelte dim/disable a
  * model card or <option> when the system doesn't meet THAT model's own
- * min_memory_gb/minMemoryGb — not a single flat constant. Before issue #1956,
- * both components used one hardcoded MIN_RAM_GB = 16, which meant a machine
+ * min_memory_gb/minMemoryGb — not a single flat constant. Both components used
+ * to share one hardcoded MIN_RAM_GB = 16, which meant a machine
  * clearing E4B's 16GB floor would render every exposed model as enabled even
  * if a larger tier (e.g. Gemma 4 26B-A4B's 32GB floor) needed far more.
  *

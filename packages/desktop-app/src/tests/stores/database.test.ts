@@ -346,23 +346,23 @@ describe('Database Store', () => {
       expect(invalidateForDatabaseSwitch.mock.invocationCallOrder[0]).toBeLessThan(
         loadAiChats.mock.invocationCallOrder[0]
       );
-      // core#2220: same discipline for schemas — an in-flight loadSchemas must
+      // Same discipline for schemas — an in-flight loadSchemas must
       // be invalidated before the reload, so its result can't land in the
       // store representing the newly-active database.
       expect(schemasInvalidateForDatabaseSwitch).toHaveBeenCalledOnce();
       expect(schemasInvalidateForDatabaseSwitch.mock.invocationCallOrder[0]).toBeLessThan(
         loadSchemas.mock.invocationCallOrder[0]
       );
-      // core#2218: the per-collection member cache and the sub-panel selection
+      // The per-collection member cache and the sub-panel selection
       // are both keyed on a collection id that is name-derived and can collide
       // across databases — both must be dropped so a same-named collection in
       // the new database can't render the previous database's cached members.
       expect(invalidateAllMembers).toHaveBeenCalledOnce();
       expect(collectionsStateReset).toHaveBeenCalledOnce();
-      // core#2218: the Pro membership roster/invites/requests cache has the
+      // The Pro membership roster/invites/requests cache has the
       // same id-collision hazard (has_role edges are per-database, ADR-053).
       expect(membershipInvalidateForDatabaseSwitch).toHaveBeenCalledOnce();
-      // core#2219: the schema plugin registry (hasTitleTemplate/titleTemplate)
+      // The schema plugin registry (hasTitleTemplate/titleTemplate)
       // must re-sync against the newly-active database's schemas.
       expect(resyncSchemaPluginsForDatabaseSwitch).toHaveBeenCalledOnce();
       // switchTo wraps its whole body in a try/catch that only records the
@@ -454,7 +454,7 @@ describe('Database Store', () => {
       expect(databaseStore.activeDatabaseId).toBe('a');
     });
 
-    it('recognizes a database registered after boot instead of dropping the tray pick (#2203)', async () => {
+    it('recognizes a database registered after boot instead of dropping the tray pick', async () => {
       // The frontend's `databases` list is loaded once at boot; a database
       // registered later via another path (the shipped CLI, another window)
       // is legitimately switchable — the daemon tray's submenu already
@@ -482,7 +482,7 @@ describe('Database Store', () => {
       expect(clearAll).toHaveBeenCalledOnce();
     });
 
-    it('recognizes a tray pick arriving before the very first load() resolves, when databases is still empty (#2203)', async () => {
+    it('recognizes a tray pick arriving before the very first load() resolves, when databases is still empty', async () => {
       databaseStore.databases = [];
       databaseStore.activeDatabaseId = null;
       mockInvoke.mockImplementation((cmd: string) => {
@@ -538,7 +538,7 @@ describe('Database Store', () => {
     });
   });
 
-  describe('applyPendingTraySelection (#2202)', () => {
+  describe('applyPendingTraySelection', () => {
     beforeEach(() => {
       databaseStore.databases = [db('a'), db('b')];
       databaseStore.activeDatabaseId = 'a';
@@ -591,7 +591,7 @@ describe('Database Store', () => {
     });
   });
 
-  describe('refreshDatabaseSettings (#1674)', () => {
+  describe('refreshDatabaseSettings', () => {
     it('force-refetches the settings node via the adapter and lands it in the shared store', async () => {
       const node = settingsNode();
       mockGetNode.mockResolvedValueOnce(node);

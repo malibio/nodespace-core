@@ -124,8 +124,8 @@ const CANONICAL_ARGS_DIGEST_PREFIX: &str = "sha256:";
 /// any non-ASCII content) for a log/span preview. Returns the preview and
 /// whether truncation actually happened, so a caller can mark it — a
 /// preview that silently reads as the complete value has repeatedly cost
-/// real diagnosis time (see core#2173): the log line looks complete, and
-/// nothing says otherwise.
+/// real diagnosis time: the log line looks complete, and nothing says
+/// otherwise.
 fn char_preview(s: &str, max_chars: usize) -> (String, bool) {
     let mut chars = s.chars();
     let preview: String = chars.by_ref().take(max_chars).collect();
@@ -689,7 +689,7 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 /// Stability-motivated prefill ceiling, independent of the context-window
 /// budget above.
 ///
-/// core#2172 found a Metal command-buffer OOM during prefill on a 16 GB
+/// One measured run hit a Metal command-buffer OOM during prefill on a 16 GB
 /// machine at an 8,518-token **total** prompt (system prompt + history,
 /// 35.5 KB), with `n_ctx` granted at 32,768 — i.e. the context-window budget
 /// (`total_budget` in `maybe_summarize_history`, effectively ~30K tokens on
@@ -703,9 +703,9 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 /// comment), so a history-only comparison would never reflect what Metal
 /// actually decodes.
 ///
-/// core#2227 attempted to reproduce that OOM on matching 16 GB hardware to
+/// A later attempt to reproduce that OOM on matching 16 GB hardware to
 /// measure the actual failure threshold (with `powermetrics` GPU telemetry)
-/// and could not: three full eval-matrix runs, including prompts up to
+/// could not: three full eval-matrix runs, including prompts up to
 /// 9,469 tokens — larger than the original failure — decoded cleanly with no
 /// backend error. The original OOM's exact trigger (allocator fragmentation
 /// state, concurrent GPU clients, thermal state, or plain Metal
@@ -717,10 +717,10 @@ const SYSTEM_PROMPT_BUDGET: u32 = 4_000;
 /// alone, so a turn with little history does not spuriously trigger
 /// summarization every time), on the reasoning that giving up context-window
 /// headroom that mostly goes unused (the shared-chat-node pattern that
-/// triggered #2172 rarely needs more than a few thousand tokens of live
-/// history to function) is a cheap hedge against a failure mode whose
-/// recovery (#2226) is now loud but still costs a turn. Revise this once a
-/// real repro pins the actual Metal failure threshold — see #2227.
+/// triggered the original OOM rarely needs more than a few thousand tokens of
+/// live history to function) is a cheap hedge against a failure mode whose
+/// recovery is now loud but still costs a turn. Revise this once a real
+/// repro pins the actual Metal failure threshold.
 const PREFILL_STABILITY_CEILING: u32 = 8_000;
 
 /// Last-resort user-facing message when a turn produces nothing usable — no
@@ -798,12 +798,12 @@ fn stage1_query(session: &AgentSession, user_message: &str) -> String {
 /// When prior turns exist, the blended text is wrapped with an explicit
 /// PRIOR CONTEXT / CURRENT REQUEST boundary rather than handed to the model
 /// as one undifferentiated blob. `build_retrieval_query`'s raw
-/// `parts.join("\n")` output is tuned for embedding recall (#1817:
+/// `parts.join("\n")` output is tuned for embedding recall (measured:
 /// extraction/reformatting measurably hurts it), but Stage 1 is not an
 /// embedding call — it is a chat turn where the model decides `route_query`
 /// vs `route_multi` vs `route_clarify`, and an unlabeled multi-line blob
 /// reads to the model like several things to do, not one request in light of
-/// history. Confirmed live (#1909): `route_multi` fired on genuinely
+/// history. Confirmed live: `route_multi` fired on genuinely
 /// single-intent turns, fabricating a second "intent" out of blended prior
 /// content. The wrapper only changes what the Stage-1 *chat* message looks
 /// like; `build_retrieval_query`'s own output, used verbatim for schema
@@ -3308,7 +3308,7 @@ impl<E: ChatInferenceEngine + ?Sized, T: AgentToolExecutor + ?Sized> LocalAgentL
         // Gate 2 (`PREFILL_STABILITY_CEILING`): independent of the window
         // budget — see its doc comment. A large model on a spacious machine
         // can pass gate 1 by a wide margin while still submitting a prefill
-        // large enough to risk the backend failure core#2172 found. Compares
+        // large enough to risk the backend failure the measured OOM found. Compares
         // against the same total gate 1 does (the whole prompt actually
         // submitted for decode), not history alone.
         let total_prompt_tokens = history_tokens + system_tokens;
@@ -4773,7 +4773,7 @@ mod tests {
         );
     }
 
-    /// core#2172: a Metal backend OOM during prefill on a 16 GB machine with
+    /// Measured: a Metal backend OOM during prefill on a 16 GB machine with
     /// `n_ctx` granted at 32,768 — the context-window budget was nowhere
     /// near full (~8.5K tokens against a ~30K-token budget) when the
     /// *backend* failed. `PREFILL_STABILITY_CEILING` is a second, narrower
@@ -8369,7 +8369,7 @@ mod tests {
         );
     }
 
-    // -- Second create_schema-in-one-turn guard (#1905) ------------------
+    // -- Second create_schema-in-one-turn guard ------------------
 
     fn schema_executor() -> MockToolExecutor {
         MockToolExecutor::new().with_tool(
@@ -9782,7 +9782,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // `session.routing_disabled` (issue #1830 / Option C): the
+    // `session.routing_disabled` (Option C from ADR-038): the
     // routing-reliability matrix in `tests/live_openai_compat_routing.rs`
     // found Stage-2 candidate injection suppresses tool-calling outright on
     // some served models. A cached per-model probe verdict sets this flag;
@@ -10185,7 +10185,7 @@ mod tests {
         );
     }
 
-    /// core#2149 (review follow-up): the model can structurally batch a real
+    /// Review follow-up: the model can structurally batch a real
     /// write tool call alongside `route_clarify` in the SAME iteration —
     /// nothing prevents it beyond `route_clarify`'s own description
     /// ("do not call another tool in the same turn"), which is a soft prompt
@@ -10324,7 +10324,7 @@ mod tests {
         assert_eq!(clarify.question, "Which ticket did you mean?");
     }
 
-    /// core#2149: a Stage-2 skill whose whitelist includes `route_clarify`
+    /// A Stage-2 skill whose whitelist includes `route_clarify`
     /// calls it instead of guessing or answering in prose — this must end the
     /// turn the same way Stage 1's clarify does, without any further tool
     /// call or inference round.
@@ -10351,7 +10351,7 @@ mod tests {
             ],
             // Stage 2: the judged candidate whitelists route_clarify and the
             // model calls it — with the richer {id, label} option shape
-            // (core#2149; see tools::def_route_clarify).
+            // (see tools::def_route_clarify).
             vec![
                 StreamingChunk::ToolCallStart {
                     id: "t1".into(),

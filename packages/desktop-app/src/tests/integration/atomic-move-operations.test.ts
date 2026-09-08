@@ -53,7 +53,7 @@ function rebalance(count: number): number[] {
   return result;
 }
 
-describe('Atomic Move Node Operations - Fractional Ordering (Issue #552)', () => {
+describe('Atomic Move Node Operations - Fractional Ordering', () => {
   describe('Order calculation for insert positioning', () => {
     it('should calculate order when inserting at beginning (no siblings exist)', () => {
       // Inserting first child

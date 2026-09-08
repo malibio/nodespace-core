@@ -1,6 +1,6 @@
 /* global HTMLButtonElement */
 /**
- * ChatMessage Component Tests — route_clarify option chip rendering (#1930)
+ * ChatMessage Component Tests — route_clarify option chip rendering
  *
  * Verifies that a clarify turn's structured `options` render as clickable
  * choices distinct from ordinary markdown, that clicking one invokes
@@ -86,7 +86,7 @@ describe('ChatMessage clarify options', () => {
   });
 
   it('renders both chips distinctly when two options share the same label', () => {
-    // Stage-2 route_clarify (core#2149) disambiguates specific records, which
+    // Stage-2 route_clarify disambiguates specific records, which
     // can genuinely share a display label (e.g. two same-titled tickets) —
     // the id that would make them unique is intentionally not sent to the
     // frontend (matching Stage 1's existing label-only contract), so the

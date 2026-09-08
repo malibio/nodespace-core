@@ -23,7 +23,7 @@ describe('StatusBar', () => {
   it('carries the full message as a title attribute so a truncated line stays fully readable on hover', () => {
     const longMessage =
       'Neither `bun` nor `node` was found on $PATH. One of them is required to install ' +
-      "NodeSpace's AI-agent integrations (Claude Code, Codex, Gemini CLI, OpenCode). " +
+      "NodeSpace's AI-agent integrations (Claude Code, Codex, Antigravity CLI, OpenCode). " +
       'Install Node from https://nodejs.org (or Bun from https://bun.sh) and relaunch ' +
       "NodeSpace — or ignore this if you don't use one of those agents.";
     statusBar.error(longMessage);

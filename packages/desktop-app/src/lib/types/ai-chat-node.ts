@@ -69,7 +69,7 @@ export interface AiChatMessage {
    * (ADR-038) rather than an ordinary reply. `content` still carries the
    * flattened `"{opener}. {question}\n\n- opt1\n- opt2"` text; this plus
    * `options` is the same data unflattened, so the UI can render clickable
-   * options instead of parsing markdown bullets back out of prose (#1930).
+   * options instead of parsing markdown bullets back out of prose.
    */
   question?: string;
   /** Concrete options offered alongside `question`. */

@@ -154,9 +154,9 @@ describe('AiChatModelSelector — PTY agent list derivation', () => {
       available: true,
     },
     {
-      id: 'gemini-cli',
-      name: 'Gemini CLI',
-      binary: 'gemini',
+      id: 'antigravity-cli',
+      name: 'Antigravity CLI',
+      binary: 'agy',
       args: [],
       auth_method: { method: 'env_api_key', var_name: 'GEMINI_API_KEY' },
       available: false,
@@ -165,13 +165,13 @@ describe('AiChatModelSelector — PTY agent list derivation', () => {
 
   it('excludes local model agents from the PTY Agents section', () => {
     const result = ptyAgents(agents);
-    expect(result.map((a) => a.id)).toEqual(['claude-code', 'gemini-cli']);
+    expect(result.map((a) => a.id)).toEqual(['claude-code', 'antigravity-cli']);
   });
 
   it('keeps unavailable PTY agents in the list (rendered disabled, not hidden)', () => {
     const result = ptyAgents(agents);
-    const gemini = result.find((a) => a.id === 'gemini-cli');
-    expect(gemini?.available).toBe(false);
+    const antigravity = result.find((a) => a.id === 'antigravity-cli');
+    expect(antigravity?.available).toBe(false);
   });
 });
 
@@ -193,10 +193,10 @@ describe('AiChatNodeViewer — handleModelSelect PTY branch', () => {
   });
 
   it('defaults messages to [], turn_status to "idle", and session_status to "active" for a fresh node', () => {
-    const update = buildPtyUpdate(undefined, 'gemini-cli');
+    const update = buildPtyUpdate(undefined, 'antigravity-cli');
 
     expect(update.provider).toBe('pty');
-    expect(update.model).toBe('gemini-cli');
+    expect(update.model).toBe('antigravity-cli');
     expect(update.messages).toEqual([]);
     expect(update.turn_status).toBe('idle');
     expect(update.session_status).toBe('active');

@@ -199,7 +199,6 @@ export const taskNodePlugin: PluginDefinition = {
         update.status = changes.status as TaskNodeUpdate['status'];
       if ('priority' in changes) update.priority = changes.priority as TaskNodeUpdate['priority'];
       if ('dueDate' in changes) update.dueDate = changes.dueDate as TaskNodeUpdate['dueDate'];
-      if ('assignee' in changes) update.assignee = changes.assignee as TaskNodeUpdate['assignee'];
       if ('startedAt' in changes)
         update.startedAt = changes.startedAt as TaskNodeUpdate['startedAt'];
       if ('completedAt' in changes)
@@ -538,7 +537,7 @@ export const queryNodePlugin: PluginDefinition = {
   description: 'Saved query definition for filtering and searching nodes',
   version: '1.0.0',
   config: {
-    // No manual `/query` slash command (issue #1919): it created definition-less
+    // No manual `/query` slash command: it created definition-less
     // query nodes (no targetType/filters) that cannot render. Query nodes are now
     // materialized from a type's default view, or created by AI/MCP. The node,
     // viewer, and reference registrations below are intentionally retained so
@@ -674,6 +673,11 @@ export const personNodePlugin: PluginDefinition = {
     canHaveChildren: false,
     canBeChild: true
   },
+  // person is a static core plugin (not schema-plugin-loader-driven), so its
+  // title_template-derived flags are declared here rather than read off the
+  // stored schema — must match core_schemas.rs's person title_template.
+  hasTitleTemplate: true,
+  titleTemplate: '{first_name} {last_name}',
   node: {
     lazyLoad: () => import('../design/components/person-node.svelte'),
     priority: 1

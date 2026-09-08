@@ -150,9 +150,9 @@ class CollectionsDataStore {
    * no member nodes visible to the current user.
    */
   get collectionsTree(): CollectionItem[] {
-    // Resolve the workspace-root collection to hide from the tree. After
-    // sync#297 a fresh install mints a PER-INSTALL root (random uuid, "My
-    // Workspace") persisted as the active database's `bound_tenant_collection`,
+    // Resolve the workspace-root collection to hide from the tree. A fresh
+    // install mints a PER-INSTALL root (random uuid, "My Workspace") persisted
+    // as the active database's `bound_tenant_collection`,
     // so the hardcoded legacy id no longer matches and the root would wrongly
     // render as a top-level collection. Read it at runtime and fall back to the
     // well-known legacy id when unset — the public/legacy tenant has no
@@ -569,7 +569,7 @@ function pruneEmptyCollections(
  * "Default Collection". Sub-collections (member_of a non-root collection) still
  * nest normally.
  *
- * This constant is only the FALLBACK root. A fresh install (sync#297) mints a
+ * This constant is only the FALLBACK root. A fresh install mints a
  * per-install root with a random uuid, exposed as the active database's
  * `bound_tenant_collection`; `collectionsTree` resolves that dynamically and
  * passes it to `buildCollectionsTree`, using this constant only when no bound
@@ -589,7 +589,7 @@ export const ROOT_COLLECTION_ID = 'c0000000-0000-0000-0000-000000000001';
  * (every collection is `member_of` it for visibility, so it must not nest them):
  * a collection whose only parent is the root renders as a top-level peer. It
  * defaults to the legacy `ROOT_COLLECTION_ID`, but callers pass the active
- * database's per-install bound root (sync#297) so the dynamically-minted root is
+ * database's per-install bound root so the dynamically-minted root is
  * hidden too. Exported for unit testing of the pure tree logic.
  */
 export function buildCollectionsTree(

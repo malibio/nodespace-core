@@ -2,7 +2,7 @@
  * Agent Store - Manages agent availability and selection using Svelte 5 runes.
  *
  * Merges two agent sources into a unified dropdown:
- * 1. ACP agents (Claude Code, Gemini CLI, etc.) — external subprocesses
+ * 1. ACP agents (Claude Code, Antigravity CLI, etc.) — external subprocesses
  * 2. Local model agents (Gemma 4 E4B, etc.) — in-process llama.cpp inference
  *
  * Local model agents use IDs prefixed with "local:" (e.g., "local:gemma-4-e4b-q4km").
@@ -59,9 +59,9 @@ const MOCK_AGENTS: AcpAgentInfo[] = [
     version: '1.0.0',
   },
   {
-    id: 'gemini-cli',
-    name: 'Gemini CLI',
-    binary: 'gemini',
+    id: 'antigravity-cli',
+    name: 'Antigravity CLI',
+    binary: 'agy',
     args: [],
     auth_method: { method: 'env_api_key', var_name: 'GEMINI_API_KEY' },
     available: false,
@@ -91,7 +91,7 @@ function modelToAgent(model: ChatModelEntry): AcpAgentInfo {
 const PTY_AGENT_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
-  'gemini-cli': 'Gemini CLI',
+  'antigravity-cli': 'Antigravity CLI',
   pi: 'Pi',
   'open-code': 'Open Code',
 };

@@ -739,7 +739,6 @@ message UpdateTaskNodeRequest {
   optional string status = 3;            // TaskStatus serialized as string
   optional OptionalStringClear priority = 4;
   optional OptionalTimestampClear due_date = 5;
-  optional OptionalStringClear assignee = 6;
   optional OptionalTimestampClear started_at = 7;
   optional OptionalTimestampClear completed_at = 8;
   // Generic content/properties updates also accepted; mirrors the
@@ -750,12 +749,13 @@ message UpdateTaskNodeRequest {
   optional string properties = 10;
 }
 
-// Both fields are written together (whole-value replace, not a patch); pass
+// All fields are written together (whole-value replace, not a patch); pass
 // the current value for a field the caller doesn't mean to change. An empty
 // string clears that field.
 message SetLocalPersonIdentityRequest {
-  string name = 1;
-  string email = 2;
+  string first_name = 1;
+  string last_name = 2;
+  string email = 3;
 }
 
 // ---------------------------------------------------------------------------

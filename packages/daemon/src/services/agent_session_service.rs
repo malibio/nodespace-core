@@ -433,13 +433,13 @@ fn parse_session_id(raw: &str) -> Result<Uuid, String> {
 /// Convert the proto's `agent_type` string into the canonical [`AgentType`].
 ///
 /// The only accepted form is the kebab-case serde representation of
-/// [`AgentType`] (`"claude-code"`, `"codex"`, `"gemini-cli"`, `"pi"`,
+/// [`AgentType`] (`"claude-code"`, `"codex"`, `"antigravity-cli"`, `"pi"`,
 /// `"open-code"`). Snake-case is rejected — CLAUDE.md is explicit that
 /// greenfield code carries no backward-compat aliases.
 fn parse_agent_type(raw: &str) -> Result<AgentType, String> {
     serde_json::from_value::<AgentType>(serde_json::Value::String(raw.to_string())).map_err(|_| {
         format!(
-            "unknown agent_type '{raw}'; expected one of: claude-code, codex, gemini-cli, pi, open-code"
+            "unknown agent_type '{raw}'; expected one of: claude-code, codex, antigravity-cli, pi, open-code"
         )
     })
 }
@@ -493,8 +493,8 @@ mod tests {
         );
         assert_eq!(parse_agent_type("codex").unwrap(), AgentType::Codex);
         assert_eq!(
-            parse_agent_type("gemini-cli").unwrap(),
-            AgentType::GeminiCli
+            parse_agent_type("antigravity-cli").unwrap(),
+            AgentType::AntigravityCli
         );
         assert_eq!(parse_agent_type("pi").unwrap(), AgentType::Pi);
         assert_eq!(parse_agent_type("open-code").unwrap(), AgentType::OpenCode);
@@ -506,7 +506,7 @@ mod tests {
         // but was dropped in review per CLAUDE.md's no-backwards-
         // compat directive. Pin the rejection so a future refactor can't
         // silently restore the dual-accept path.
-        for snake in ["claude_code", "gemini_cli", "open_code"] {
+        for snake in ["claude_code", "antigravity_cli", "open_code"] {
             assert!(
                 parse_agent_type(snake).is_err(),
                 "snake_case agent_type '{snake}' must be rejected"
@@ -528,7 +528,7 @@ mod tests {
         for t in [
             AgentType::ClaudeCode,
             AgentType::Codex,
-            AgentType::GeminiCli,
+            AgentType::AntigravityCli,
             AgentType::Pi,
             AgentType::OpenCode,
         ] {

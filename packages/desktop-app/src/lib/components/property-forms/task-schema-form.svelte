@@ -9,8 +9,6 @@
     unchanged: SchemaFieldLeaf is a controlled, presentational component (value + onChange)
     that never touches the store itself, so swapping its markup in does not change how a
     core field is persisted (same optimistic-write/OCC/field-sequencing path as before).
-  - Assignee keeps its own bespoke combobox markup (unrelated to the enum/date-picker
-    duplication this form was extracted to remove — SchemaFieldLeaf has no combobox case).
   - Dynamic rendering for user-defined schema extensions: leaf fields render through the
     shared SchemaFieldLeaf, object/array fields render a summary trigger that opens the
     shared NestedPropertyModal.
@@ -26,7 +24,6 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import * as Popover from '$lib/components/ui/popover';
   import { backendAdapter } from '$lib/services/backend-adapter';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
   import { type SchemaNode, type SchemaField, isSchemaNode } from '$lib/types/schema-node';
@@ -83,18 +80,6 @@
     loadSchema();
   });
 
-  // Combobox state (assignee only — the one core field with no SchemaFieldLeaf
-  // equivalent; every other core field's popover-open state now lives inside its
-  // own SchemaFieldLeaf instance).
-  let assigneeOpen = $state(false);
-  let assigneeSearch = $state('');
-
-  /**
-   * Assignee options - currently empty placeholder
-   * TODO: Populate from UserService once implemented
-   */
-  const assigneeOptions: Array<{ value: string; label: string }> = [];
-
   // ============================================================================
   // Core Fields
   // ============================================================================
@@ -103,7 +88,7 @@
 
   // The real task schema's own field names (core_schemas.rs) — always snake_case,
   // matching what the backend actually returns from getSchema('task').
-  const CORE_FIELD_NAMES = ['status', 'priority', 'due_date', 'started_at', 'completed_at', 'assignee'];
+  const CORE_FIELD_NAMES = ['status', 'priority', 'due_date', 'started_at', 'completed_at'];
 
   // A schema field by name, or undefined while `schema` hasn't loaded yet (or, in the
   // unexpected case of a schema-fetch failure — see loadSchema's catch above — never).
@@ -127,16 +112,15 @@
 
   // Calculate field completion stats
   const fieldStats = $derived.by(() => {
-    if (!node) return { filled: 0, total: 6 };
+    if (!node) return { filled: 0, total: 5 };
 
     let filled = 0;
-    let total = 6; // Core fields: status, priority, dueDate, assignee, startedAt, completedAt
+    let total = 5; // Core fields: status, priority, dueDate, startedAt, completedAt
 
     // Core fields
     if (node.status) filled++;
     if (node.priority !== undefined && node.priority !== null) filled++;
     if (node.dueDate) filled++;
-    if (node.assignee) filled++;
     if (node.startedAt) filled++;
     if (node.completedAt) filled++;
 
@@ -232,15 +216,6 @@
     sharedNodeStore.updateTaskNode(
       nodeId,
       { dueDate },
-      { type: 'viewer', viewerId: 'task-schema-form' }
-    );
-  }
-
-  function updateAssignee(assignee: string | null) {
-    if (!node) return;
-    sharedNodeStore.updateTaskNode(
-      nodeId,
-      { assignee },
       { type: 'viewer', viewerId: 'task-schema-form' }
     );
   }
@@ -354,75 +329,6 @@
           {:else}
             {@render fieldUnavailable()}
           {/if}
-        </div>
-
-        <!-- Assignee Field (bespoke combobox — no SchemaFieldLeaf case duplicates this) -->
-        <div class="space-y-2">
-          <label for="task-assignee" class="text-sm font-medium">Assignee</label>
-          <Popover.Root bind:open={assigneeOpen}>
-            <Popover.Trigger
-              id="task-assignee"
-              class="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-            >
-              <span class={node.assignee ? '' : 'text-muted-foreground'}>
-                {node.assignee || 'Select assignee...'}
-              </span>
-              <svg class="h-4 w-4 opacity-50" viewBox="0 0 16 16" fill="none">
-                <path
-                  d="M4 6l4 4 4-4"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </Popover.Trigger>
-            <Popover.Content class="w-[200px] p-0" align="start">
-              <div class="flex flex-col">
-                <input
-                  type="text"
-                  placeholder="Search assignee..."
-                  value={assigneeSearch}
-                  oninput={(e) => (assigneeSearch = e.currentTarget.value)}
-                  class="flex h-10 w-full border-b border-input bg-background px-3 py-2 text-sm focus-visible:outline-none"
-                />
-                <div class="max-h-[200px] overflow-y-auto">
-                  {#if assigneeOptions.length === 0}
-                    <div class="px-3 py-2 text-sm text-muted-foreground">
-                      No assignees available
-                    </div>
-                  {:else}
-                    {#each assigneeOptions.filter((a) => a.label
-                        .toLowerCase()
-                        .includes(assigneeSearch.toLowerCase())) as assignee}
-                      <button
-                        type="button"
-                        class="relative flex w-full cursor-pointer select-none items-center rounded-sm px-3 py-2 text-sm outline-none hover:bg-muted"
-                        onclick={() => {
-                          updateAssignee(assignee.value);
-                          assigneeOpen = false;
-                          assigneeSearch = '';
-                        }}
-                      >
-                        {assignee.label}
-                        {#if node?.assignee === assignee.value}
-                          <svg class="ml-auto h-4 w-4" viewBox="0 0 16 16" fill="none">
-                            <path
-                              d="M3 8l4 4 6-8"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                            />
-                          </svg>
-                        {/if}
-                      </button>
-                    {/each}
-                  {/if}
-                </div>
-              </div>
-            </Popover.Content>
-          </Popover.Root>
         </div>
 
         <!-- Started At Field -->

@@ -24,7 +24,7 @@ export function extractNodeMetadata(node: {
 /**
  * Update a schema field value for a node.
  *
- * For task nodes, task-specific fields (status, priority, dueDate, assignee) route
+ * For task nodes, task-specific fields (status, priority, dueDate) route
  * through the type-safe task update path. All other fields — and all non-task
  * nodes — use the generic properties path.
  *
@@ -45,8 +45,8 @@ export function updateSchemaField(
   // Route task node property updates through type-safe path
   if (targetNode.nodeType === 'task') {
     // Map field names to TaskNodeUpdate structure
-    // The task-specific fields are: status, priority, dueDate, assignee
-    const taskFields = ['status', 'priority', 'due_date', 'dueDate', 'assignee'];
+    // The task-specific fields are: status, priority, dueDate
+    const taskFields = ['status', 'priority', 'due_date', 'dueDate'];
 
     if (taskFields.includes(fieldName)) {
       // Use type-safe task node update

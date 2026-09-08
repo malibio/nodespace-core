@@ -49,7 +49,7 @@ function emitDaemonStatus(payload: string) {
   daemonStatusHandler?.({ payload });
 }
 
-describe('daemon-status service (#1470)', () => {
+describe('daemon-status service', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();

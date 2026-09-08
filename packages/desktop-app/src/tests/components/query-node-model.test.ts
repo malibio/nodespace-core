@@ -2,7 +2,7 @@
  * Unit tests for the query-node viewer model helpers (query-node-model.ts) —
  * the default-vs-saved branch decision, definition/view-config parsing, the
  * materialize payload shape, and client-side query execution (filter/sort/limit)
- * behind query-node-viewer.svelte (issue #1919).
+ * behind query-node-viewer.svelte.
  *
  * Follows the project pattern of testing extracted logic functions directly
  * (not rendering Svelte components).
