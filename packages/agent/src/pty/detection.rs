@@ -11,7 +11,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use crate::acp::registry::AGENT_CATALOG;
+use crate::agent_catalog::registry::AGENT_CATALOG;
 use crate::agent_types::AgentType;
 
 // ---------------------------------------------------------------------------

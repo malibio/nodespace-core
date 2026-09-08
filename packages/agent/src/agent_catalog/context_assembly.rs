@@ -8,7 +8,7 @@
 //! context file, carries all tool/capability guidance for the PTY-spawned agent,
 //! since the agent drives NodeSpace exclusively through the `nodespace` CLI.
 
-use crate::acp::registry::SystemAgentRegistry;
+use crate::agent_catalog::registry::SystemAgentRegistry;
 use crate::agent_types::{AgentType, ContextError, ContextFile};
 use nodespace_core::models::Node;
 use nodespace_core::services::NodeEmbeddingService;

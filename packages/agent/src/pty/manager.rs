@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::acp::context_assembly::GraphContextAssembler;
+use crate::agent_catalog::context_assembly::GraphContextAssembler;
 use crate::agent_types::AgentType;
 use crate::pty::session::PtySession;
 

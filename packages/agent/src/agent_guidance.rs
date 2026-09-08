@@ -5,7 +5,7 @@
 //! to every code path that composes local-agent guidance — including the
 //! local agent, next time prompt nodes are reseeded.
 //!
-//! External PTY-spawned agent sessions ([`crate::acp::context_assembly`]) do
+//! External PTY-spawned agent sessions ([`crate::agent_catalog::context_assembly`]) do
 //! not use these constants — they get all tool/capability guidance from
 //! `packages/skill/SKILL.md`, the CLI-vocabulary companion doc, not from this
 //! module's tool-call-vocabulary prose.
