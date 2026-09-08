@@ -2305,20 +2305,30 @@ impl NodeBehavior for CustomNodeBehavior {
 pub struct PersonNodeBehavior;
 
 impl PersonNodeBehavior {
-    /// Returns a display name for the person, falling back gracefully when name is absent.
+    /// Returns a display name for the person, falling back gracefully when both
+    /// name fields are absent. Mirrors the person schema's
+    /// `title_template: "{first_name} {last_name}"` (the two must agree — see
+    /// the schema comment), which this doesn't reach: `get_embeddable_content`
+    /// needs a display string without a schema/template lookup in hand.
     pub fn compute_display_name(&self, node: &Node) -> String {
-        if let Some(name) = node
-            .properties
-            .get("person")
-            .and_then(|p| p.get("name"))
+        let person = node.properties.get("person");
+        let first = person
+            .and_then(|p| p.get("first_name"))
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            return name.to_string();
+            .filter(|s| !s.is_empty());
+        let last = person
+            .and_then(|p| p.get("last_name"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        let composed = [first, last]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !composed.is_empty() {
+            return composed;
         }
-        if let Some(email) = node
-            .properties
-            .get("person")
+        if let Some(email) = person
             .and_then(|p| p.get("email"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
@@ -2509,7 +2519,7 @@ impl NodeBehavior for DatabaseSettingsNodeBehavior {
 /// let person_node = Node::new(
 ///     "person".to_string(),
 ///     "Alice".to_string(),
-///     json!({"person": {"name": "Alice", "email": "alice@example.com"}}),
+///     json!({"person": {"first_name": "Alice", "last_name": "Example", "email": "alice@example.com"}}),
 /// );
 /// assert!(registry.validate_node(&person_node).is_ok());
 /// ```
@@ -5556,10 +5566,24 @@ mod tests {
     }
 
     #[test]
-    fn person_compute_display_name_with_name() {
+    fn person_compute_display_name_with_full_name() {
         let behavior = PersonNodeBehavior;
-        let node = person_node(json!({"person": {"name": "Alice"}}));
+        let node = person_node(json!({"person": {"first_name": "Alice", "last_name": "Example"}}));
+        assert_eq!(behavior.compute_display_name(&node), "Alice Example");
+    }
+
+    #[test]
+    fn person_compute_display_name_with_first_name_only() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"first_name": "Alice"}}));
         assert_eq!(behavior.compute_display_name(&node), "Alice");
+    }
+
+    #[test]
+    fn person_compute_display_name_with_last_name_only() {
+        let behavior = PersonNodeBehavior;
+        let node = person_node(json!({"person": {"last_name": "Example"}}));
+        assert_eq!(behavior.compute_display_name(&node), "Example");
     }
 
     #[test]
@@ -5584,7 +5608,7 @@ mod tests {
     #[test]
     fn person_embeddable_content_returns_display_name_when_known() {
         let behavior = PersonNodeBehavior;
-        let node = person_node(json!({"person": {"name": "Bob"}}));
+        let node = person_node(json!({"person": {"first_name": "Bob"}}));
         assert_eq!(
             behavior.get_embeddable_content(&node),
             Some("Bob".to_string())

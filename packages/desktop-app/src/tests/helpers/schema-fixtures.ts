@@ -36,9 +36,10 @@ export function schemaWith(id: string, isCore: boolean, fields: SchemaField[]): 
   };
 }
 
-/** `person` — 2 visible, 1 system (core_schemas.rs, the `person` SchemaNode). */
+/** `person` — 3 visible, 1 system (core_schemas.rs, the `person` SchemaNode). */
 export const PERSON_FIELDS: SchemaField[] = [
-  field({ name: 'name', friendlyName: 'Name', type: 'string', protection: 'core' }),
+  field({ name: 'first_name', friendlyName: 'First name', type: 'string', protection: 'core' }),
+  field({ name: 'last_name', friendlyName: 'Last name', type: 'string', protection: 'core' }),
   field({ name: 'email', friendlyName: 'Email', type: 'string', protection: 'core' }),
   field({
     name: '_possible_duplicate',
@@ -50,7 +51,7 @@ export const PERSON_FIELDS: SchemaField[] = [
 ];
 
 /** `person`'s field names that should survive a user-visibility filter. */
-export const PERSON_VISIBLE_NAMES = ['name', 'email'];
+export const PERSON_VISIBLE_NAMES = ['first_name', 'last_name', 'email'];
 
 /**
  * `ai-chat`'s top-level fields — 4 visible, 6 system (core_schemas.rs, the
