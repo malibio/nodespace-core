@@ -303,19 +303,31 @@ describe('Architecture Performance Benchmarks', () => {
       // overhead does not explain sub-linear timing, a warmup artifact does,
       // and that is now fixed above by the discarded warm-up call.
       //
-      // MAX catches genuine super-linear scaling, widened under coverage the
-      // same way every duration budget in this file is (a larger dataset's
-      // measurement is more likely to absorb a GC pause, which skews the
-      // ratio up under instrumentation). 1.5, not 2.0: pure O(n^2) scaling
-      // asymptotically converges this ratio to exactly 2.0 (time roughly
-      // quadruples per doubling, 4/2 = 2.0) — a 2.0 bound only reliably
-      // catches WORSE than quadratic. Verified empirically across 30 clean
-      // runs (plain and --coverage, this machine under real background
-      // load): the observed factor topped out at 1.10x, so 1.5 keeps ~35%
-      // margin over real noise while catching quadratic-dominant regressions
-      // a 2.0 bound would let through on the wrong side of its own noise.
+      // MAX catches genuine super-linear scaling. 1.5, not 2.0: pure O(n^2)
+      // scaling asymptotically converges this ratio to exactly 2.0 (time
+      // roughly quadruples per doubling, 4/2 = 2.0) — a 2.0 bound only
+      // reliably catches WORSE than quadratic, verified empirically (an
+      // aggressively quadratic-dominant mutation measured 1.99x-2.00x, right
+      // on that boundary).
+      //
+      // Widened under coverage, but NOT via the file's generic budget()
+      // (×2) — that multiplier is calibrated for absolute-ms duration
+      // thresholds, where instrumentation overhead is genuinely additive to
+      // the measured value. This is a RATIO: a uniform proportional slowdown
+      // across every sample cancels out of timeRatio/nodeRatio, so budget()
+      // would push MAX to 3.0 — looser than the 2.0 quadratic asymptote
+      // itself, meaning a textbook quadratic regression would pass under
+      // exactly the coverage mode the pre-push gate runs. Coverage's real
+      // effect here is on NOISE (a longer per-call instrumentation overhead
+      // makes a GC pause relatively more likely to land inside the
+      // measurement window), not a systematic ratio shift — confirmed
+      // empirically across 30 clean runs (mixed plain/--coverage, this
+      // machine under real background load): the observed factor topped out
+      // at 1.10x in both modes alike. 1.8 keeps that margin while staying
+      // under the 2.0 asymptote, so a genuine quadratic regression still
+      // fails even under coverage.
       const MIN_SCALING_FACTOR = 0.5;
-      const MAX_SCALING_FACTOR = budget(1.5);
+      const MAX_SCALING_FACTOR = UNDER_COVERAGE ? 1.8 : 1.5;
       expect(avgScalingFactor).toBeGreaterThan(MIN_SCALING_FACTOR);
       expect(avgScalingFactor).toBeLessThan(MAX_SCALING_FACTOR);
     });
