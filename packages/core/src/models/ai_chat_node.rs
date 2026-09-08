@@ -11,11 +11,21 @@
 //!
 //! # Status values
 //!
-//! `status` is intentionally a plain `String`, not an enum. Two orthogonal
-//! state machines currently share this one key: a turn state the daemon drives
-//! (`processing` while inference runs, `idle` once it completes) and a session
-//! lifecycle the PTY path uses (`active` / `archived`). The struct captures the
-//! value verbatim rather than forcing a lossy mapping over both axes.
+//! Two orthogonal state machines used to share one `status` key: a turn state
+//! the daemon drives (`processing` while inference runs, `idle` once it
+//! completes) and a session lifecycle the PTY path uses (`active` /
+//! `archived`). They are now two independent properties instead — `status`
+//! no longer exists on this struct:
+//!
+//! - [`AiChatNode::turn_status`] — daemon-owned, `"idle"` / `"processing"`.
+//! - [`AiChatNode::session_status`] — PTY-owned, `"active"` / `"archived"`.
+//!
+//! Each carries its own enum in the schema (`core_schemas.rs`), so a
+//! nonsensical combination like `session_status: "archived"` with
+//! `turn_status: "processing"` is representable and independently valid —
+//! archiving a session no longer requires forgetting what turn state it was
+//! in, and vice versa. Each is written by exactly one owner: the daemon never
+//! writes `session_status`, and the PTY path never writes `turn_status`.
 
 use crate::models::{Node, ValidationError};
 use chrono::{DateTime, Utc};
@@ -142,10 +152,15 @@ pub struct AiChatNode {
     /// Last modification timestamp.
     pub modified_at: DateTime<Utc>,
 
-    /// Conversation status (e.g. `"processing"`, `"idle"`). Plain string —
-    /// see the module docs for why this is not an enum.
+    /// Inference turn state (`"idle"` / `"processing"`), daemon-owned. See
+    /// the module docs for why this is split from `session_status`.
     #[serde(default)]
-    pub status: String,
+    pub turn_status: String,
+
+    /// Session lifecycle (`"active"` / `"archived"`), PTY-owned. See the
+    /// module docs for why this is split from `turn_status`.
+    #[serde(default)]
+    pub session_status: String,
 
     /// Inference provider (e.g. `"native"`, `"openai-compat"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,6 +183,23 @@ impl AiChatNode {
     /// `flatten_properties_for_api` has promoted them). Mirrors the dual
     /// nested/flat handling in [`TaskNode::from_node`](crate::models::TaskNode).
     ///
+    /// Reads ONLY the canonical snake_case schema names (`turn_status`,
+    /// `session_status`) — deliberately not dual-cased. An earlier version of
+    /// this function checked camelCase first as a defensive fallback for a
+    /// frontend write that (at the time) sent `turnStatus`/`sessionStatus`
+    /// verbatim. That turned out to be actively wrong, not just redundant:
+    /// updates here deep-merge onto the existing stored object rather than
+    /// replacing it, so a stray camelCase key, once written, is never
+    /// cleaned up — the daemon's own canonical-key rewrites land beside it,
+    /// not over it. Checking camelCase first then means a *stale* value
+    /// permanently shadows every subsequent *fresh* canonical write (this
+    /// broke `ai_chat_send_to_idle_test`: the turn completed and the daemon
+    /// correctly wrote `turn_status: "idle"`, but the stale `turnStatus:
+    /// "processing"` from the original send kept winning forever). The real
+    /// fix is at the write side: every writer — daemon and frontend alike —
+    /// must use this exact canonical key, so there is only ever one key to
+    /// read.
+    ///
     /// # Errors
     ///
     /// Returns [`ValidationError::InvalidNodeType`] when the node is not an
@@ -187,8 +219,14 @@ impl AiChatNode {
             .filter(|v| v.is_object())
             .unwrap_or(&node.properties);
 
-        let status = props
-            .get("status")
+        let turn_status = props
+            .get("turn_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let session_status = props
+            .get("session_status")
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
@@ -239,7 +277,8 @@ impl AiChatNode {
             version: node.version,
             created_at: node.created_at,
             modified_at: node.modified_at,
-            status,
+            turn_status,
+            session_status,
             provider,
             model,
             messages,
@@ -247,7 +286,8 @@ impl AiChatNode {
     }
 
     /// Serialize the ai-chat fields as the namespace value
-    /// (`{ "status": ..., "provider": ..., "model": ..., "messages": [...] }`).
+    /// (`{ "turn_status": ..., "session_status": ..., "provider": ...,
+    /// "model": ..., "messages": [...] }`).
     ///
     /// Use this to splice the typed fields back into an existing `properties`
     /// object without disturbing sibling namespaces — the read-modify-write
@@ -261,7 +301,14 @@ impl AiChatNode {
     /// outside `"ai-chat"` are untouched; only this namespace is rebuilt.)
     pub fn to_properties_value(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
-        map.insert("status".to_string(), serde_json::json!(self.status));
+        map.insert(
+            "turn_status".to_string(),
+            serde_json::json!(self.turn_status),
+        );
+        map.insert(
+            "session_status".to_string(),
+            serde_json::json!(self.session_status),
+        );
         if let Some(provider) = &self.provider {
             map.insert("provider".to_string(), serde_json::json!(provider));
         }

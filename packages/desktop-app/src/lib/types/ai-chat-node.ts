@@ -1,12 +1,26 @@
 import type { Node } from './node';
 
 /**
- * `idle` is what the daemon writes when a turn completes or is reset
- * (`append_assistant_message` / `write_ai_chat_status`); `active` is the
- * initial state of a node that has never run a turn. The viewer only ever
- * tests for `processing`, so any other member simply clears the indicator.
+ * Inference turn state, daemon-owned. `idle` is what the daemon writes when a
+ * turn completes or is reset (`append_assistant_message` /
+ * `write_ai_chat_turn_status`); the frontend writes `processing` to trigger a
+ * turn. The viewer only ever tests for `processing`, so any other member
+ * simply clears the typing indicator.
+ *
+ * Independent of {@link AiChatSessionStatus} — these used to share one
+ * `status` key, which made a session archived mid-turn unrepresentable.
  */
-export type AiChatStatus = 'active' | 'idle' | 'processing' | 'archived';
+export type AiChatTurnStatus = 'idle' | 'processing';
+
+/**
+ * Session lifecycle, PTY-owned. `active` is the initial state of a node that
+ * has never run a session; `archived` is set by capture backfill once a PTY
+ * session ends.
+ *
+ * Independent of {@link AiChatTurnStatus} — see that type's doc for why.
+ */
+export type AiChatSessionStatus = 'active' | 'archived';
+
 export type AiChatProvider = 'native' | 'openai' | 'openai-compat' | 'pty';
 
 export interface OpenAiCompatConfig {
@@ -79,7 +93,8 @@ export interface AiChatNode {
   createdAt: string;
   modifiedAt: string;
 
-  status: AiChatStatus;
+  turnStatus: AiChatTurnStatus;
+  sessionStatus: AiChatSessionStatus;
   provider?: AiChatProvider;
   model?: string;
   messages: AiChatMessage[];
@@ -108,7 +123,8 @@ export function nodeToAiChatNode(node: Node): AiChatNode {
     lifecycleStatus: chat.lifecycleStatus,
     createdAt: node.createdAt,
     modifiedAt: node.modifiedAt,
-    status: chat.status ?? 'active',
+    turnStatus: chat.turnStatus ?? 'idle',
+    sessionStatus: chat.sessionStatus ?? 'active',
     provider: chat.provider,
     model: chat.model,
     messages: Array.isArray(chat.messages) ? chat.messages : [],

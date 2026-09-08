@@ -517,15 +517,15 @@ describe('AiChatNodeViewer Logic', () => {
   // 4. Archived Conversation Read-Only
   // ---------------------------------------------------------------------------
   describe('Archived conversation read-only', () => {
-    it('disables input when status is archived', () => {
-      const status = 'archived';
-      const isArchived = status === 'archived';
+    it('disables input when sessionStatus is archived', () => {
+      const sessionStatus = 'archived';
+      const isArchived = sessionStatus === 'archived';
       expect(isArchived).toBe(true);
     });
 
-    it('shows input when status is active', () => {
-      const status = 'active';
-      expect(status).not.toBe('archived');
+    it('shows input when sessionStatus is active', () => {
+      const sessionStatus = 'active';
+      expect(sessionStatus).not.toBe('archived');
     });
 
     it('reads provider and model from node properties with defaults', () => {

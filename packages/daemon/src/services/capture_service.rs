@@ -56,10 +56,21 @@ pub struct CompletedSession {
 /// daemon.toml on every session end.
 ///
 /// Uses `update_node_unchecked`: capture is a single, additive, fire-and-forget
-/// writer (it only merges `capture:*` keys plus `status`/`last_active`), so the
-/// node's optimistic-concurrency version is not a concern here — and a spurious
-/// version conflict from a concurrent viewer edit must not silently drop the
-/// capture. The update deep-merges, so it never clobbers `provider`/`messages`.
+/// writer (it only merges `capture:*` keys plus `session_status`/`last_active`),
+/// so the node's optimistic-concurrency version is not a concern here — and a
+/// spurious version conflict from a concurrent viewer edit must not silently
+/// drop the capture. The update deep-merges at the property level, so a
+/// non-conflicting write never clobbers `provider`/`messages`, and this path
+/// only ever writes `session_status`, never `turn_status`. That does NOT make
+/// the two axes fully race-free under genuine concurrency, though:
+/// `update_node_unchecked` bypasses the version check entirely (no bump), so
+/// a concurrent daemon-authored `turn_status` write racing this one is a
+/// read-modify-write against the same row with no ordering guarantee between
+/// them — the loser's read predates the winner's write and its merge can
+/// still land a stale value. Acceptable today because capture fires once, at
+/// session end, when no turn is normally in flight; a real fix (e.g. routing
+/// through the checked update path, or a future transaction/unit-of-work
+/// seam once one exists) is a separate, larger change.
 pub async fn finalize_capture(
     session: &CompletedSession,
     capture: &SessionCapture,
@@ -107,6 +118,8 @@ pub async fn finalize_capture(
 /// Only capture-derived fields are emitted — the node's `provider`/`model`/
 /// `messages` were set at launch and are preserved by the deep merge. The
 /// session is marked `archived` (it has ended) and `last_active` refreshed.
+/// Only `session_status` is written here — `turn_status` is the daemon's
+/// inference-turn axis and is never touched by capture.
 ///
 /// Agent-session-specific fields use the "capture:" namespace to avoid
 /// conflicts with future core properties (per CLAUDE.md schema rules).
@@ -118,7 +131,7 @@ fn build_capture_properties(
     content_level: CaptureContentSetting,
 ) -> serde_json::Value {
     let mut properties = json!({
-        "status": "archived",
+        "session_status": "archived",
         "last_active": session.ended_at.to_rfc3339(),
         "capture:agent_type": session.agent_type,
         "capture:started_at": session.started_at.to_rfc3339(),
@@ -201,12 +214,27 @@ mod tests {
     }
 
     #[test]
-    fn status_field_is_archived() {
+    fn session_status_field_is_archived() {
         let session = make_session();
         let capture = SessionCapture::new();
         let props =
             build_capture_properties(&session, &capture, CaptureContentSetting::MetadataOnly);
-        assert_eq!(props["status"].as_str().unwrap(), "archived");
+        assert_eq!(props["session_status"].as_str().unwrap(), "archived");
+    }
+
+    /// Capture must never write `turn_status` — that axis belongs to the
+    /// daemon's inference loop, and a capture write clobbering it would erase
+    /// whatever turn state a concurrent inference turn left behind.
+    #[test]
+    fn turn_status_is_never_emitted_by_capture() {
+        let session = make_session();
+        let capture = SessionCapture::new();
+        let props =
+            build_capture_properties(&session, &capture, CaptureContentSetting::MetadataOnly);
+        assert!(
+            props.get("turn_status").is_none(),
+            "capture must not emit turn_status, got: {props}"
+        );
     }
 
     #[test]

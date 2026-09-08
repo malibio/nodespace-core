@@ -15,6 +15,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import PtyTerminal from '$lib/components/agent/pty-terminal.svelte';
   import { sharedNodeStore } from '$lib/services/shared-node-store.svelte';
+  import type { AiChatNode } from '$lib/types/ai-chat-node';
   import {
     getCaptureSettings,
     updateCaptureSettings,
@@ -53,11 +54,16 @@
   const node = $derived(sharedNodeStore.getNode(nodeId));
 
   // A previously-launched session id persisted on the node. While the session
-  // is live (status 'active') this lets the terminal re-attach on reopen (the
-  // daemon owns the PTY and supports multi-client streaming per ADR-032). Once
-  // the session has ended (status 'archived', set by capture backfill) the PTY
-  // is gone — re-attaching would just show a blank, silent terminal — so we
-  // render a read-only summary instead.
+  // is live (sessionStatus 'active') this lets the terminal re-attach on
+  // reopen (the daemon owns the PTY and supports multi-client streaming per
+  // ADR-032). Once the session has ended (sessionStatus 'archived', set by
+  // capture backfill) the PTY is gone — re-attaching would just show a blank,
+  // silent terminal — so we render a read-only summary instead.
+  //
+  // sessionStatus is read from the TOP-LEVEL promoted field, not
+  // `properties['ai-chat'].session_status` — the daemon flattens the
+  // namespace before this reaches the frontend, same contract
+  // `ai-chat-node-viewer.svelte` documents for turnStatus.
   const persistedSessionId = $derived(
     (node?.properties?.['capture:session_id'] as string | undefined) ?? null
   );
@@ -79,7 +85,8 @@
   // its exit this session.
   const isEnded = $derived(
     !configuring &&
-      (sessionEnded || (node?.properties?.status as string | undefined) === 'archived')
+      (sessionEnded ||
+        (node as unknown as AiChatNode | undefined)?.sessionStatus === 'archived')
   );
   // Only host a live terminal when the session is still running. A session this
   // viewer launched (activeSessionId) always wins; otherwise re-attach to the
@@ -226,7 +233,13 @@
             ...current?.properties,
             'capture:agent_type': selectedAgent,
             'capture:session_id': result.sessionId,
-            status: 'active',
+            // Canonical snake_case key, matching the schema's declared field
+            // name and what capture_service.rs's backfill writes — ai-chat
+            // has no dedicated typed write command, so whatever key this
+            // object uses reaches storage verbatim (see AiChatNode::
+            // from_node's doc comment for why a camelCase key here would be
+            // silently wrong, not just inconsistent).
+            session_status: 'active',
           },
         },
         { type: 'viewer', viewerId: 'ai-chat-pty-session' }

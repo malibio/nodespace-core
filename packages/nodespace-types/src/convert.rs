@@ -177,8 +177,18 @@ fn task_node_to_value(node: Node) -> Result<serde_json::Value, String> {
 fn ai_chat_node_to_value(node: Node) -> Result<serde_json::Value, String> {
     let props = &node.properties;
 
-    let status = props
-        .get("status")
+    // Canonical snake_case only — see `nodespace_core::models::AiChatNode::
+    // from_node`'s doc comment for why a camelCase fallback here would be
+    // actively wrong (a stale camelCase key permanently shadowing fresh
+    // canonical writes), not just redundant.
+    let turn_status = props
+        .get("turn_status")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let session_status = props
+        .get("session_status")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
@@ -218,7 +228,8 @@ fn ai_chat_node_to_value(node: Node) -> Result<serde_json::Value, String> {
         modified_at: node.modified_at,
         properties: node.properties,
         lifecycle_status,
-        status,
+        turn_status,
+        session_status,
         provider,
         model,
         messages,
@@ -266,7 +277,8 @@ mod wire_contract {
             "Chat".to_string(),
             serde_json::json!({
                 "ai-chat": {
-                    "status": "active",
+                    "turn_status": "idle",
+                    "session_status": "active",
                     "provider": "openai-compat",
                     "messages": [{ "role": "user", "content": "hi" }]
                 }
@@ -274,11 +286,72 @@ mod wire_contract {
         );
         let out = node_to_typed_value(node).unwrap();
 
-        assert_eq!(out["status"], "active");
+        assert_eq!(out["turnStatus"], "idle");
+        assert_eq!(out["sessionStatus"], "active");
         assert_eq!(out["provider"], "openai-compat");
         assert_eq!(out["messages"][0]["content"], "hi");
         assert!(out["properties"].get("ai-chat").is_none());
         assert!(out["uri"].as_str().unwrap().starts_with("nodespace://"));
+    }
+
+    /// The split's wire-level guarantee: archiving a session must not disturb
+    /// the promoted turn-state field, and vice versa — both are promoted
+    /// independently rather than through one shared `status` key.
+    #[test]
+    fn ai_chat_turn_status_and_session_status_promote_independently() {
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Chat".to_string(),
+            serde_json::json!({
+                "ai-chat": {
+                    "turn_status": "processing",
+                    "session_status": "archived",
+                    "messages": []
+                }
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        assert_eq!(
+            out["turnStatus"], "processing",
+            "turn_status must promote even while the session is archived"
+        );
+        assert_eq!(
+            out["sessionStatus"], "archived",
+            "session_status must promote even while a turn is processing"
+        );
+    }
+
+    /// Deliberately NOT recognized: see `nodespace_core::models::AiChatNode::
+    /// from_node`'s doc comment. Writes here deep-merge onto the existing
+    /// stored object rather than replacing it, so a camelCase key, once
+    /// written, is never cleaned up — recognizing it would let a stale value
+    /// permanently shadow every subsequent fresh canonical write. Every
+    /// writer must use the canonical snake_case name; this promotion must
+    /// stay blind to the camelCase form, not just deprioritize it.
+    #[test]
+    fn ai_chat_ignores_camel_case_turn_and_session_status() {
+        let node = Node::new(
+            "ai-chat".to_string(),
+            "Chat".to_string(),
+            serde_json::json!({
+                "ai-chat": {
+                    "turnStatus": "processing",
+                    "sessionStatus": "archived",
+                    "messages": []
+                }
+            }),
+        );
+        let out = node_to_typed_value(node).unwrap();
+
+        assert_eq!(
+            out["turnStatus"], "",
+            "camelCase must not promote the turn axis"
+        );
+        assert_eq!(
+            out["sessionStatus"], "",
+            "camelCase must not promote the session axis"
+        );
     }
 
     /// One unreadable message must not blank the whole conversation in the UI.
@@ -294,7 +367,8 @@ mod wire_contract {
             "Chat".to_string(),
             serde_json::json!({
                 "ai-chat": {
-                    "status": "active",
+                    "turn_status": "idle",
+                    "session_status": "active",
                     "messages": [
                         { "role": "user", "content": "hi" },
                         {
@@ -508,10 +582,14 @@ mod promotion_proptests {
         }
 
         /// Every ai-chat field stored under `properties.ai-chat` is promoted to a
-        /// top-level key, and the `nodespace://` uri is injected.
+        /// top-level key, and the `nodespace://` uri is injected. `turn_status`
+        /// and `session_status` promote independently — arbitrary, unrelated
+        /// generated values for each must both survive without either clobbering
+        /// the other.
         #[test]
         fn ai_chat_promotes_all_stored_fields(
-            status in "[a-z][a-z_]{0,15}",
+            turn_status in "[a-z][a-z_]{0,15}",
+            session_status in "[a-z][a-z_]{0,15}",
             provider in "[a-z][a-z0-9_-]{0,15}",
             model in "[a-zA-Z0-9._:-]{1,25}",
             message in "[ -~]{0,40}",
@@ -521,7 +599,8 @@ mod promotion_proptests {
                 "A chat".to_string(),
                 serde_json::json!({
                     "ai-chat": {
-                        "status": status,
+                        "turn_status": turn_status,
+                        "session_status": session_status,
                         "provider": provider,
                         "model": model,
                         "messages": [{ "role": "user", "content": message }],
@@ -531,7 +610,8 @@ mod promotion_proptests {
 
             let out = node_to_typed_value(node).unwrap();
 
-            prop_assert_eq!(&out["status"], &serde_json::json!(status));
+            prop_assert_eq!(&out["turnStatus"], &serde_json::json!(turn_status));
+            prop_assert_eq!(&out["sessionStatus"], &serde_json::json!(session_status));
             prop_assert_eq!(&out["provider"], &serde_json::json!(provider));
             prop_assert_eq!(&out["model"], &serde_json::json!(model));
             prop_assert_eq!(&out["messages"][0]["content"], &serde_json::json!(message));

@@ -5,7 +5,7 @@
 //! An out-of-date daemon still speaks the current gRPC surface, so every RPC in
 //! these tests succeeds and only the daemon's *behaviour* differs. That
 //! surfaced once as `ai_chat_send_to_idle_test` timing out after 300s with the
-//! chat node back at `status: "idle"` and no assistant reply — the pre-existing
+//! chat node back at `turnStatus: "idle"` and no assistant reply — the pre-existing
 //! silent-idle-on-inference-failure behaviour of an old daemon, indistinguishable
 //! from a regression in whatever change was being pushed. Nothing in the repo
 //! keeps either candidate binary (the hand-staged `src-tauri/binaries/` sidecar,

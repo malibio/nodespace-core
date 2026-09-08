@@ -668,17 +668,15 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     unique_case_insensitive: None,
                 },
                 SchemaField {
-                    name: "status".to_string(),
-                    friendly_name: "Conversation status".to_string(),
+                    name: "turn_status".to_string(),
+                    friendly_name: "Turn status".to_string(),
                     field_type: "enum".to_string(),
                     local_only: false,
                     protection: SchemaProtectionLevel::Core,
-                    // Two orthogonal state machines share this one key (see the
-                    // module docs on `AiChatNode`): the turn state the daemon
-                    // drives while inference runs, and the session lifecycle the
-                    // PTY path uses. Both sets must be declared here — a value
-                    // the runtime writes but the schema omits is rejected by
-                    // create/update schema validation.
+                    // Daemon-owned: the inference turn state, independent of the
+                    // PTY session lifecycle (`session_status` below). See the
+                    // module docs on `AiChatNode` for why these were split out
+                    // of one shared `status` key.
                     core_values: Some(vec![
                         EnumValue {
                             value: "idle".to_string(),
@@ -688,6 +686,30 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                             value: "processing".to_string(),
                             label: "Processing".to_string(),
                         },
+                    ]),
+                    user_values: Some(vec![]),
+                    indexed: true,
+                    required: Some(true),
+                    extensible: Some(false),
+                    default: Some(serde_json::json!("idle")),
+                    description: Some("Inference turn state, daemon-owned".to_string()),
+                    item_type: None,
+                    fields: None,
+                    item_fields: None,
+                    unique: None,
+                    unique_case_insensitive: None,
+                },
+                SchemaField {
+                    name: "session_status".to_string(),
+                    friendly_name: "Session status".to_string(),
+                    field_type: "enum".to_string(),
+                    local_only: false,
+                    protection: SchemaProtectionLevel::Core,
+                    // PTY-owned: the session lifecycle, independent of the
+                    // inference turn state (`turn_status` above). See the
+                    // module docs on `AiChatNode` for why these were split out
+                    // of one shared `status` key.
+                    core_values: Some(vec![
                         EnumValue {
                             value: "active".to_string(),
                             label: "Active".to_string(),
@@ -702,7 +724,7 @@ pub fn get_core_schemas() -> Vec<SchemaNode> {
                     required: Some(true),
                     extensible: Some(false),
                     default: Some(serde_json::json!("active")),
-                    description: Some("Conversation status".to_string()),
+                    description: Some("Session lifecycle, PTY-owned".to_string()),
                     item_type: None,
                     fields: None,
                     item_fields: None,
@@ -1682,10 +1704,11 @@ mod tests {
         let schemas = get_core_schemas();
         let ai_chat = schemas.iter().find(|s| s.id == "ai-chat").unwrap();
 
-        assert_eq!(ai_chat.fields.len(), 10);
+        assert_eq!(ai_chat.fields.len(), 11);
         assert!(ai_chat.get_field("provider").is_some());
         assert!(ai_chat.get_field("model").is_some());
-        assert!(ai_chat.get_field("status").is_some());
+        assert!(ai_chat.get_field("turn_status").is_some());
+        assert!(ai_chat.get_field("session_status").is_some());
         assert!(ai_chat.get_field("last_active").is_some());
         assert!(ai_chat.get_field("context_tokens").is_some());
         assert!(ai_chat.get_field("created_nodes").is_some());

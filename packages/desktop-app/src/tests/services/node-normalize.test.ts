@@ -99,12 +99,20 @@ describe('deepMergeProperties', () => {
 
 describe('promoteTypedFields', () => {
   it('promotes only fields present in a flat ai-chat write', () => {
-    const changes = { messages: [{ role: 'user', content: 'hi' }], status: 'processing' };
+    const changes = { messages: [{ role: 'user', content: 'hi' }], turnStatus: 'processing' };
     const promoted = promoteTypedFields('ai-chat', changes, changes);
-    // provider/model omitted → not promoted (guards against undefined-clobber)
-    expect(promoted).toEqual({ messages: changes.messages, status: 'processing' });
+    // provider/model/sessionStatus omitted → not promoted (guards against undefined-clobber)
+    expect(promoted).toEqual({ messages: changes.messages, turnStatus: 'processing' });
     expect('provider' in promoted).toBe(false);
     expect('model' in promoted).toBe(false);
+    expect('sessionStatus' in promoted).toBe(false);
+  });
+
+  it('promotes turnStatus and sessionStatus independently', () => {
+    const changes = { sessionStatus: 'archived' };
+    const promoted = promoteTypedFields('ai-chat', changes, changes);
+    expect(promoted).toEqual({ sessionStatus: 'archived' });
+    expect('turnStatus' in promoted).toBe(false);
   });
 
   it('promotes nested task fields from the type namespace', () => {
@@ -127,6 +135,12 @@ describe('promoteTypedFields', () => {
 
   it('map stays aligned with the documented promoted types', () => {
     expect(Object.keys(OPTIMISTIC_TYPED_FIELDS).sort()).toEqual(['ai-chat', 'task']);
-    expect(OPTIMISTIC_TYPED_FIELDS['ai-chat']).toEqual(['status', 'provider', 'model', 'messages']);
+    expect(OPTIMISTIC_TYPED_FIELDS['ai-chat']).toEqual([
+      'turnStatus',
+      'sessionStatus',
+      'provider',
+      'model',
+      'messages'
+    ]);
   });
 });

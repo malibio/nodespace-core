@@ -3,7 +3,7 @@
  * store holding the node's real final state, not a half-typed snapshot.
  *
  * The ai-chat viewer derives its typing indicator / Stop button from the
- * node's TOP-LEVEL `status`, and renders the reply from TOP-LEVEL `messages`
+ * node's TOP-LEVEL `turnStatus`, and renders the reply from TOP-LEVEL `messages`
  * (`AiChatNode` is the flat wire shape the daemon's `node_to_typed_value`
  * guarantees). The OCC conflict payload crosses the same sync boundary as a
  * daemon broadcast, so it has to arrive — and be hydrated — in that same flat
@@ -12,8 +12,9 @@
  * Before the fix the daemon serialized the raw storage `Node` into
  * `current_node`, leaving `status`/`messages` buried under
  * `properties['ai-chat']`. Hydrating that into the store gave the viewer a
- * node with no top-level `status` and no `messages`, which is what stranded
- * the UI on "processing" after the turn had already completed and persisted.
+ * node with no top-level `turnStatus` and no `messages`, which is what
+ * stranded the UI on "processing" after the turn had already completed and
+ * persisted.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -37,7 +38,8 @@ const makeChatNode = (overrides: Partial<AiChatNode> = {}): Node =>
     createdAt: '2024-01-01T00:00:00.000Z',
     modifiedAt: '2024-01-01T00:00:00.000Z',
     version: 3,
-    status: 'processing',
+    turnStatus: 'processing',
+    sessionStatus: 'active',
     provider: 'native',
     model: 'e4b',
     messages: [{ role: 'user', content: 'What is on my plate today?' }],
@@ -82,10 +84,10 @@ describe('ai-chat OCC conflict during an active turn', () => {
    */
   const completedTurn = makeChatNode({
     // `idle` is what the daemon actually writes on turn completion
-    // (`append_assistant_message` / `write_ai_chat_status`), so the fixture
-    // mirrors production rather than a value it never sends.
+    // (`append_assistant_message` / `write_ai_chat_turn_status`), so the
+    // fixture mirrors production rather than a value it never sends.
     version: 4,
-    status: 'idle',
+    turnStatus: 'idle',
     messages: [
       { role: 'user', content: 'What is on my plate today?' },
       { role: 'assistant', content: 'You have two tasks due today.' }
@@ -114,7 +116,7 @@ describe('ai-chat OCC conflict during an active turn', () => {
     // The viewer's optimistic write that loses the race with the daemon.
     store.updateNode(
       CHAT_ID,
-      { properties: { status: 'processing', messages: [{ role: 'user', content: 'ping' }] } },
+      { properties: { turnStatus: 'processing', messages: [{ role: 'user', content: 'ping' }] } },
       viewerSource
     );
 
@@ -122,11 +124,12 @@ describe('ai-chat OCC conflict during an active turn', () => {
 
     const chat = readChat(store);
 
-    // The exact bug: the viewer's `isProcessing` is `status === 'processing'`.
-    // Hydrating an unflattened payload left this undefined AND dropped the
-    // reply, so the indicator hung with nothing to show.
-    expect(chat?.status).toBe('idle');
-    expect(chat?.status).not.toBe('processing');
+    // The exact bug: the viewer's `isProcessing` is
+    // `turnStatus === 'processing'`. Hydrating an unflattened payload left
+    // this undefined AND dropped the reply, so the indicator hung with
+    // nothing to show.
+    expect(chat?.turnStatus).toBe('idle');
+    expect(chat?.turnStatus).not.toBe('processing');
 
     // The reply the daemon already persisted must be visible.
     expect(chat?.messages).toHaveLength(2);
@@ -144,7 +147,7 @@ describe('ai-chat OCC conflict during an active turn', () => {
 
     // Defense in depth: even if a conflict payload reaches the client in the
     // raw storage shape, hydration must not strand the viewer with an
-    // undefined top-level `status`.
+    // undefined top-level `turnStatus`.
     const nestedPayload = {
       id: CHAT_ID,
       nodeType: 'ai-chat',
@@ -154,7 +157,8 @@ describe('ai-chat OCC conflict during an active turn', () => {
       version: 4,
       properties: {
         'ai-chat': {
-          status: 'idle',
+          turn_status: 'idle',
+          session_status: 'active',
           messages: [
             { role: 'user', content: 'What is on my plate today?' },
             { role: 'assistant', content: 'You have two tasks due today.' }
@@ -169,7 +173,7 @@ describe('ai-chat OCC conflict during an active turn', () => {
 
     store.updateNode(
       CHAT_ID,
-      { properties: { status: 'processing' } },
+      { properties: { turnStatus: 'processing' } },
       viewerSource
     );
 
@@ -177,10 +181,10 @@ describe('ai-chat OCC conflict during an active turn', () => {
 
     const chat = readChat(store);
 
-    // `status` must be a real top-level value the viewer can read, never
-    // undefined — an undefined status is what left the Stop button wedged.
-    expect(chat?.status).toBeDefined();
-    expect(chat?.status).not.toBe('processing');
+    // `turnStatus` must be a real top-level value the viewer can read, never
+    // undefined — an undefined turnStatus is what left the Stop button wedged.
+    expect(chat?.turnStatus).toBeDefined();
+    expect(chat?.turnStatus).not.toBe('processing');
     expect(Array.isArray(chat?.messages)).toBe(true);
   }, 5000);
 
@@ -193,7 +197,7 @@ describe('ai-chat OCC conflict during an active turn', () => {
 
     const stalePayload = makeChatNode({
       version: 2,
-      status: 'processing',
+      turnStatus: 'processing',
       messages: [{ role: 'user', content: 'What is on my plate today?' }]
     });
 
@@ -204,13 +208,13 @@ describe('ai-chat OCC conflict during an active turn', () => {
     // re-introducing state and masking what this test is asserting.
     vi.spyOn(backendAdapter, 'getNode').mockResolvedValue(completedTurn);
 
-    store.updateNode(CHAT_ID, { properties: { status: 'processing' } }, viewerSource);
+    store.updateNode(CHAT_ID, { properties: { turnStatus: 'processing' } }, viewerSource);
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     const chat = readChat(store);
     expect(chat?.version).toBe(4);
-    expect(chat?.status).not.toBe('processing');
+    expect(chat?.turnStatus).not.toBe('processing');
     expect(chat?.messages).toHaveLength(2);
   }, 5000);
 
@@ -225,7 +229,7 @@ describe('ai-chat OCC conflict during an active turn', () => {
 
     store.updateNode(
       CHAT_ID,
-      { properties: { status: 'processing' } },
+      { properties: { turnStatus: 'processing' } },
       viewerSource
     );
 

@@ -33,7 +33,7 @@ export function normalizeNodeData(nodeData: Node): Node {
  * with convert.rs when the promoted field set changes.
  */
 export const OPTIMISTIC_TYPED_FIELDS: Record<string, readonly string[]> = {
-  'ai-chat': ['status', 'provider', 'model', 'messages'],
+  'ai-chat': ['turnStatus', 'sessionStatus', 'provider', 'model', 'messages'],
   task: ['status', 'priority', 'dueDate', 'assignee', 'startedAt', 'completedAt']
 };
 
