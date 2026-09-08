@@ -656,7 +656,7 @@ fn describe_missing_reverse_fields(relationships: &Value) -> Result<(), Markdown
 }
 
 /// Name of a JSON value's type, for error messages.
-fn json_type_name(v: &Value) -> &'static str {
+pub(crate) fn json_type_name(v: &Value) -> &'static str {
     match v {
         Value::Null => "null",
         Value::Bool(_) => "a boolean",
